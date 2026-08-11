@@ -35,7 +35,10 @@ qurish kerakligini ko'rsatadi — asosiy qiymat shunda.
 
 ---
 
-## 2. Tavsiya etilayotgan tech stack
+## 2. Tech stack
+
+> ✅ **Qaror qabul qilindi (2026-08-11): Python + FastAPI.** Rasmiy qayd: [`adr/ADR-0001-tech-stack.md`](adr/ADR-0001-tech-stack.md).
+> Quyidagi jadvallar shu qarorning asosini tushuntiradi.
 
 Har bir tanlov uchun: **nima · nega · muqobili · nega muqobil emas.**
 

@@ -16,6 +16,13 @@ Hozirgi holat: **P0 — Repository Audit yakunlandi.** Kod hali yozilmagan.
 | [`docs/02-MASTER-PLAN.md`](docs/02-MASTER-PLAN.md) | 12 bo'lim / 18 faza, har birining natijasi va DoD'i |
 | [`docs/03-SECTION-1.md`](docs/03-SECTION-1.md) | **Bo'lim 1** — 18 ta task, har biri 7 maydon bilan (nima, fayllar, dependency, test, acceptance, risk, vaqt) |
 
+## Qabul qilingan qarorlar (ADR)
+
+| ADR | Qaror |
+|---|---|
+| [`0001`](docs/adr/ADR-0001-tech-stack.md) | Tech stack: **Python 3.12 + FastAPI + Postgres/pgvector + Redis** |
+| [`0005`](docs/adr/ADR-0005-design-tokens.md) | Brend: **ko'k/cyan palitra** (mockup bo'yicha), design token'lar |
+
 ## Rivojlanish prinsipi
 
 Hammasini birdan qurma. Har bir bo'lim oxirida 4 ta artefakt majburiy:

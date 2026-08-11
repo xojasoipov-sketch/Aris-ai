@@ -170,7 +170,7 @@ Lekin bu shuni ham anglatadiki, **vision'ning 100% i bajarilmagan** (3-bo'limga 
 | ID | Topilma | Jiddiylik | Yechim |
 |---|---|---|---|
 | F-01 | Yozma texnik arxitektura hujjati yo'q | 🔴 Yuqori | Bo'lim 1, Z1.17 |
-| F-02 | Brend rangida ziddiyat (teal vs ko'k) | 🟡 O'rta | Bo'lim 1, Z1.0 (design token qarori) |
+| F-02 | Brend rangida ziddiyat (teal vs ko'k) | 🟡 O'rta | ✅ **Yopildi** — `ADR-0005`: ko'k/cyan (mockup) tanlandi |
 | F-03 | Repo nomi (`Aris-ai`) loyiha nomiga (`ZET`) mos emas | 🟡 O'rta | Repo rename yoki README da rasmiylashtirish |
 | F-04 | `main` branch himoyalanmagan | 🟡 O'rta | Bo'lim 1, Z1.16 (CI + branch protection) |
 | F-05 | Rejadagi "JARVIS" nomi mahsulot nomi bilan ziddiyatda | 🟢 Past | Barcha hujjat/koda **ZET / Z** ga o'tildi |

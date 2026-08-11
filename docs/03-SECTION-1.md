@@ -52,8 +52,9 @@ Monorepo strukturasi yaratiladi (`apps/core`, `apps/web`, `infra`, `docs`).
 Loyiha `ZET`, package `zet`, CLI `z` deb rasmiylashtiriladi (F-03, F-05).
 `.gitignore`, `LICENSE` (proprietary/private), `README.md`, `CONTRIBUTING.md`,
 `CODEOWNERS`, PR/issue shablonlari qo'shiladi.
-**F-02 hal qilinadi:** brend rang palitrasi bitta qilib qaror qilinadi va
-`docs/adr/ADR-0005-design-tokens.md` da qayd etiladi.
+**F-02 allaqachon hal qilingan:** brend palitrasi — ko'k/cyan (mockup bo'yicha),
+`docs/adr/ADR-0005-design-tokens.md`. Bu taskda faqat token'lar frontend skeletiga
+`apps/web/tokens.css` sifatida ko'chiriladi (Bo'lim 10 gacha ishlatilmaydi).
 
 **2. Fayllar**
 `README.md` (yangilash) · `.gitignore` · `LICENSE` · `CONTRIBUTING.md` ·
@@ -642,13 +643,13 @@ kontekst diagrammasi, komponentlar, ma'lumot oqimi, DB sxemasi (ER),
 holat mashinasi diagrammasi, xavfsizlik modeli, kengaytirish nuqtalari.
 Va 5 ta ADR:
 
-| ADR | Qaror |
-|---|---|
-| 0001 | Tech stack (Python/FastAPI/Postgres/Redis) |
-| 0002 | Framework emas, o'z orkestratori |
-| 0003 | Agent = ma'lumot, kod emas (**A-02**) |
-| 0004 | Untrusted input chegarasi (**A-05**) |
-| 0005 | Design token'lar / brend rang (**F-02**) |
+| ADR | Qaror | Holat |
+|---|---|---|
+| 0001 | Tech stack (Python/FastAPI/Postgres/Redis) | ✅ yozilgan |
+| 0002 | Framework emas, o'z orkestratori | ⏳ Z1.17 |
+| 0003 | Agent = ma'lumot, kod emas (**A-02**) | ⏳ Z1.9 |
+| 0004 | Untrusted input chegarasi (**A-05**) | ⏳ Z1.12 |
+| 0005 | Design token'lar / brend rang (**F-02**) | ✅ yozilgan |
 
 Shuningdek `SECURITY.md`, `RUNBOOK.md` (emergency stop, restore),
 `docs/PHASE-1-REPORT.md`.
