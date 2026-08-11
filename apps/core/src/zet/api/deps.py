@@ -82,6 +82,10 @@ def get_tool_registry() -> ToolRegistry:
     return build_default_registry(
         notes_dir=settings.vault_dir,
         enable_shell=settings.enable_shell,
+        # web.read hech qanday kalit talab qilmaydi (faqat tarmoq) va
+        # SSRF-himoyalangan (bloklangan host/ichki IP) — gap-analysis #12
+        # topgan "default stub=True" muammosini yopish uchun doim real.
+        web_reader_stub=False,
         github_token=(settings.github_token.get_secret_value() if settings.github_token else None),
         web_search_api_key=(
             settings.web_search_api_key.get_secret_value() if settings.web_search_api_key else None
