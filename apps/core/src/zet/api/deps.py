@@ -21,9 +21,12 @@ from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.router import ModelRouter
 from zet.memory.store import MemoryStore
+from zet.monitoring.alerts import AlertManager
+from zet.monitoring.notify_bridge import AlertNotificationBridge
 from zet.security.approvals import ApprovalService
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
+from zet.telegram.notifier import Notifier, StubNotifier
 from zet.tools.builtin import build_default_registry
 from zet.tools.registry import ToolRegistry
 
@@ -106,6 +109,33 @@ def get_run_store() -> RunStore:
 def get_daily_schedule_manager() -> DailyScheduleManager:
     """Global kunlik jadval (singleton) — V-35."""
     return DailyScheduleManager()
+
+
+# ── Monitoring / Alerts ───────────────────────────────────────────
+
+
+@lru_cache(maxsize=1)
+def get_notifier() -> Notifier:
+    """Global bildirishnoma yuboruvchi (singleton).
+
+    Hozircha `StubNotifier` — real Telegram transport ulanguncha
+    (`ZetBot`/aiogram) xabarlar faqat xotirada saqlanadi va log qilinadi.
+    """
+    return StubNotifier()
+
+
+@lru_cache(maxsize=1)
+def get_alert_manager() -> AlertManager:
+    """Global ogohlantirish qoidalari va tarixi (singleton)."""
+    return AlertManager()
+
+
+def get_alert_bridge(
+    alerts: AlertManager = Depends(get_alert_manager),
+    notifier: Notifier = Depends(get_notifier),
+) -> AlertNotificationBridge:
+    """AlertManager'ni Notifier'ga ulaydigan ko'prik."""
+    return AlertNotificationBridge(alerts=alerts, notifier=notifier)
 
 
 # ── Ma'lumotlar bazasi ────────────────────────────────────────────

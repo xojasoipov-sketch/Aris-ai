@@ -5,6 +5,7 @@ Komponentlar:
     - MetricsCollector: tizim metrikalari yig'ish
     - AlertRule: ogohlantirish qoidalari
     - AlertManager: ogohlantirishlarni boshqarish
+    - AlertNotificationBridge: AlertManager'ni Notifier'ga ulaydi (yuborish)
 
 Bog'liq qarorlar:
     Bo'lim 10 — monitoring va observability
@@ -15,9 +16,11 @@ Bog'liq qarorlar:
 from zet.monitoring.alerts import AlertManager, AlertRule, AlertSeverity
 from zet.monitoring.health import ComponentStatus, HealthChecker, HealthReport
 from zet.monitoring.metrics import MetricsCollector, MetricSnapshot
+from zet.monitoring.notify_bridge import AlertNotificationBridge
 
 __all__ = [
     "AlertManager",
+    "AlertNotificationBridge",
     "AlertRule",
     "AlertSeverity",
     "ComponentStatus",

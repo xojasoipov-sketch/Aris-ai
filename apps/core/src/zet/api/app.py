@@ -37,7 +37,17 @@ from zet.api.deps import (
     get_tool_registry,
 )
 from zet.api.middleware import TraceMiddleware
-from zet.api.routes import agent, approvals, health, killswitch, memory, run, state, telegram
+from zet.api.routes import (
+    agent,
+    alerts,
+    approvals,
+    health,
+    killswitch,
+    memory,
+    run,
+    state,
+    telegram,
+)
 from zet.config import get_settings
 from zet.observability.logging import configure_logging
 
@@ -109,6 +119,7 @@ def create_app() -> FastAPI:
     app.include_router(approvals.router, prefix="/api/v1")
     app.include_router(killswitch.router, prefix="/api/v1", tags=["killswitch"])
     app.include_router(state.router, prefix="/api/v1", tags=["state"])
+    app.include_router(alerts.router, prefix="/api/v1")
     app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
     app.include_router(agent.router, prefix="/api/v1", tags=["agents"])
     app.include_router(telegram.router, prefix="/api/v1", tags=["telegram"])

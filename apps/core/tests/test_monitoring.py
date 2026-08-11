@@ -684,6 +684,7 @@ class TestMonitoringExports:
 
         expected = {
             "AlertManager",
+            "AlertNotificationBridge",
             "AlertRule",
             "AlertSeverity",
             "ComponentStatus",
