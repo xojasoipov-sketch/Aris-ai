@@ -16,6 +16,7 @@ from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.state import CoreState
 from zet.db.session import create_engine, create_session_factory, session_scope
+from zet.deploy.schedule import DailyScheduleManager
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.router import ModelRouter
@@ -99,6 +100,12 @@ def get_approval_service() -> ApprovalService:
 def get_run_store() -> RunStore:
     """Global run holatlari do'koni (singleton)."""
     return RunStore()
+
+
+@lru_cache(maxsize=1)
+def get_daily_schedule_manager() -> DailyScheduleManager:
+    """Global kunlik jadval (singleton) — V-35."""
+    return DailyScheduleManager()
 
 
 # ── Ma'lumotlar bazasi ────────────────────────────────────────────

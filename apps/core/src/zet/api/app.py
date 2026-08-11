@@ -18,13 +18,24 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
 
-from zet.api.deps import get_agent_registry, get_engine, get_llm_providers
+from zet.api.deps import (
+    get_agent_registry,
+    get_core_state,
+    get_daily_schedule_manager,
+    get_engine,
+    get_killswitch,
+    get_llm_providers,
+    get_permission_policy,
+    get_tool_registry,
+)
 from zet.api.middleware import TraceMiddleware
 from zet.api.routes import agent, approvals, health, killswitch, memory, run, state, telegram
 from zet.config import get_settings
@@ -33,26 +44,12 @@ from zet.observability.logging import configure_logging
 log = structlog.get_logger(__name__)
 
 
-def _bootstrap_agents() -> None:
-    """12 ta builtin agentni registry'ga (mavjud bo'lmasa) ACTIVE holatda qo'shadi.
-
-    Ilgari `GET /api/v1/agents` startup'dan keyin bo'sh ro'yxat qaytarardi —
-    hech kim builtin AgentSpec'larni registry'ga qo'ymas edi.
-    """
-    import zet.agents.builtin as builtin_module
-    from zet.domain.enums import AgentStatus
-
-    registry = get_agent_registry()
-    for spec_name in builtin_module.__all__:
-        spec = getattr(builtin_module, spec_name)
-        if not registry.has(spec.name):
-            registry.register(spec, status=AgentStatus.ACTIVE)
-    log.info("zet.agents_bootstrapped", count=len(builtin_module.__all__))
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Ilova boshlanganda va tugaganda bajariladigan kod."""
+    from zet.deploy.bootstrap import bootstrap_agents
+    from zet.deploy.daemon import DailyScheduleDaemon
+
     settings = get_settings()
     configure_logging(
         json_output=settings.is_prod,
@@ -64,9 +61,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         budget_daily=settings.budget_daily_usd,
         budget_monthly=settings.budget_monthly_usd,
     )
-    _bootstrap_agents()
+    bootstrap_agents()
+
+    daemon = DailyScheduleDaemon(
+        schedule=get_daily_schedule_manager(),
+        agent_registry=get_agent_registry(),
+        tool_registry=get_tool_registry(),
+        permission_policy=get_permission_policy(),
+        core_state=get_core_state(),
+        killswitch=get_killswitch(),
+        timezone=settings.timezone,
+    )
+    daemon_task = asyncio.create_task(daemon.run_forever())
+
     yield
+
     log.info("zet.shutdown")
+    daemon.stop()
+    daemon_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await daemon_task
     providers = get_llm_providers()
     for provider in providers.values():
         await provider.aclose()

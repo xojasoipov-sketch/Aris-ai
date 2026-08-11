@@ -703,6 +703,60 @@ def telegram_test(
         out.print("[red]Bot javob bermadi[/red]")
 
 
+# ── z daemon ──────────────────────────────────────────────────────
+
+
+@app.command()
+def daemon() -> None:
+    """Kunlik jadval daemon'ini fon rejimida ishga tushirish (V-35).
+
+    Doimiy jarayon — Ctrl+C bilan to'xtatiladi. ADR-0007 bo'yicha
+    native service sifatida (launchd/systemd) shu komanda chaqiriladi.
+    """
+    import asyncio
+
+    _setup()
+    settings = get_settings()
+
+    from zet.api.deps import (
+        get_agent_registry,
+        get_core_state,
+        get_daily_schedule_manager,
+        get_killswitch,
+        get_permission_policy,
+        get_tool_registry,
+    )
+    from zet.deploy.bootstrap import bootstrap_agents
+    from zet.deploy.daemon import DailyScheduleDaemon
+
+    bootstrap_agents()
+
+    d = DailyScheduleDaemon(
+        schedule=get_daily_schedule_manager(),
+        agent_registry=get_agent_registry(),
+        tool_registry=get_tool_registry(),
+        permission_policy=get_permission_policy(),
+        core_state=get_core_state(),
+        killswitch=get_killswitch(),
+        timezone=settings.timezone,
+    )
+
+    out.print(
+        Panel(
+            f"Vaqt mintaqasi: {settings.timezone}\n"
+            f"Vazifalar: {get_daily_schedule_manager().stats['enabled']} yoqilgan",
+            title="[bold]ZET Daemon[/bold]",
+            border_style="cyan",
+        )
+    )
+    out.print("  [dim]Ctrl+C bilan to'xtating[/dim]")
+
+    try:
+        asyncio.run(d.run_forever())
+    except KeyboardInterrupt:
+        out.print("\n  [yellow]Daemon to'xtatildi[/yellow]")
+
+
 # ── z budget ──────────────────────────────────────────────────────
 
 
