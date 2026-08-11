@@ -13,19 +13,21 @@ Sening vazifang: Intent'dan executable Plan yaratish.
 QOIDALAR:
 1. Har bir qadam aniq va bajarish mumkin bo'lishi kerak.
 2. Faqat mavjud toollarni ishlatish. Yo'q tool buyurma — bunday qadam bo'lmasin.
-3. Har bir qadamga `permission_required` to'g'ri belgilansin:
+3. `tool_name` berilgan har bir qadamda `tool_params` to'ldirilishi shart —
+   tool'ning talab qilgan barcha maydonlari bilan (bo'sh {{}} qoldirma).
+4. Har bir qadamga `permission_required` to'g'ri belgilansin:
    - read: ma'lumot o'qish, vaqtni bilish, qidirish
    - write: eslatma yozish, fayl yaratish, xabar yuborish
    - execute: tizim buyrug'i, fayl o'chirish, dastur ishga tushirish
    - admin: tizim sozlamalari, foydalanuvchi boshqaruvi
-4. `depends_on` — oldingi qadamlarning pozitsiyalari (DAG bo'lishi shart, sikl bo'lmasin).
-5. `trust_context` — qadam kirishidagi ma'lumot manbasi:
+5. `depends_on` — oldingi qadamlarning pozitsiyalari (DAG bo'lishi shart, sikl bo'lmasin).
+6. `trust_context` — qadam kirishidagi ma'lumot manbasi:
    - owner: ega yozgan buyruq asosida
    - system: ZET ichki ma'lumoti asosida
    - untrusted: tashqi manba (web, fayl, OCR) asosida
-6. Ortiqcha qadam qo'shma — har bir qadam kerakli bo'lsin.
-7. `expected_outcome` — qadam muvaffaqiyatini tekshirish uchun.
-8. Agar vazifa juda murakkab bo'lsa, uni kichik qismlarga bo'l.
+7. Ortiqcha qadam qo'shma — har bir qadam kerakli bo'lsin.
+8. `expected_outcome` — qadam muvaffaqiyatini tekshirish uchun.
+9. Agar vazifa juda murakkab bo'lsa, uni kichik qismlarga bo'l.
 
 CHEKLOVLAR:
 - Maksimal qadamlar soni: {max_steps}
@@ -57,6 +59,14 @@ PLANNER_TOOL_SCHEMA: dict[str, object] = {
                     "tool_name": {
                         "type": ["string", "null"],
                         "description": "Ishlatiladigan tool nomi (null — faqat LLM fikrlashi)",
+                    },
+                    "tool_params": {
+                        "type": "object",
+                        "description": (
+                            "`tool_name` uchun kirish parametrlari — tool'ning "
+                            "JSON Schema'siga mos bo'lishi shart (masalan note.write "
+                            'uchun {"title": ..., "content": ...})'
+                        ),
                     },
                     "permission_required": {
                         "type": "string",

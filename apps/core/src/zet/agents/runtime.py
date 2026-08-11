@@ -27,6 +27,7 @@ import structlog
 from zet.domain.agent import AgentRunResult, AgentSpec
 from zet.domain.tool import ToolResult
 from zet.llm.base import ChatMessage, LLMProvider, LLMResponse, ToolSpec, ToolUse
+from zet.security.permissions import PermissionPolicy
 from zet.tools.base import ToolError
 from zet.tools.registry import ToolNotFoundError, ToolRegistry
 
@@ -62,10 +63,12 @@ class AgentRuntime:
         provider: LLMProvider,
         tool_registry: ToolRegistry,
         model: str = "fake",
+        permission_policy: PermissionPolicy | None = None,
     ) -> None:
         self._provider = provider
         self._tool_registry = tool_registry
         self._model = model
+        self._permission_policy = permission_policy or PermissionPolicy()
 
     async def run(
         self,
@@ -266,6 +269,34 @@ class AgentRuntime:
                 success=False,
                 error=f"Tool '{tool_use.name}' agent '{spec.name}' uchun ruxsat etilmagan",
             )
+
+        # Ruxsat siyosati (V-31/V-32): yuqori xavfli yoki tasdiq talab
+        # qiladigan toollar avtonom agent tomonidan bajarilmaydi — fail-closed.
+        # Agent Runtime hozircha to'xtab-kutuvchi tasdiq oqimini
+        # qo'llab-quvvatlamaydi (Orchestrator'dagidek), shuning uchun
+        # tasdiq kerak bo'lsa — rad etiladi, avtomatik bajarilmaydi.
+        if self._tool_registry.has(tool_use.name):
+            tool = self._tool_registry.get(tool_use.name)
+            decision = self._permission_policy.check(
+                tool.permission_level,
+                spec.trust_level,
+                tool_name=tool_use.name,
+            )
+            if decision.needs_approval:
+                log.warning(
+                    "agent.tool.approval_required",
+                    agent=spec.name,
+                    tool=tool_use.name,
+                    reason=decision.reason,
+                )
+                return ToolResult(
+                    tool_name=tool_use.name,
+                    success=False,
+                    error=(
+                        f"Tool '{tool_use.name}' tasdiq talab qiladi ({decision.reason}) — "
+                        "avtonom agent runtime hozircha tasdiqni qo'llab-quvvatlamaydi"
+                    ),
+                )
 
         try:
             result = await self._tool_registry.execute(

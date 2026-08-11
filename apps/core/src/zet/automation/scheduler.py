@@ -27,7 +27,9 @@ from pydantic import BaseModel, Field
 log = structlog.get_logger(__name__)
 
 # Oddiy cron field validatsiyasi (5-field: min hour dom month dow)
-_CRON_FIELD = r"(\*(/[0-9]{1,2})?|[0-9]{1,2}(-[0-9]{1,2})?(,[0-9]{1,2}(-[0-9]{1,2})?)*(/[0-9]{1,2})?)"
+_CRON_FIELD = (
+    r"(\*(/[0-9]{1,2})?|[0-9]{1,2}(-[0-9]{1,2})?(,[0-9]{1,2}(-[0-9]{1,2})?)*(/[0-9]{1,2})?)"
+)
 _CRON_PATTERN = re.compile(
     rf"^{_CRON_FIELD}\s+{_CRON_FIELD}\s+{_CRON_FIELD}\s+{_CRON_FIELD}\s+{_CRON_FIELD}$"
 )

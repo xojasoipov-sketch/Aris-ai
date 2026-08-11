@@ -246,7 +246,7 @@ class Executor:
         for attempt in range(_MAX_RETRIES + 1):
             tool_result = await self._registry.execute(
                 step.tool_name,
-                {},  # Parametrlar hozircha bo'sh — Z1.11 to'liq versiyada qo'shiladi
+                step.tool_params,
                 caller_permission=caller_perm,
                 dry_run=dry_run,
             )

@@ -61,11 +61,9 @@ def run(
     message: str = typer.Argument(..., help="Buyruq matni"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Haqiqiy ish bajarmaslik"),
 ) -> None:
-    """Yangi run boshlash.
+    """Yangi run boshlash — to'liq pipeline: intent → reja → bajarish → tekshirish."""
+    import asyncio
 
-    Bo'lim 1 lean versiya — faqat intent aniqlash.
-    To'liq pipeline keyingi bo'limlarda.
-    """
     _setup()
 
     from zet.observability.trace import bind_trace, unbind_trace
@@ -81,12 +79,61 @@ def run(
                 border_style="cyan",
             )
         )
-
-        # Bo'lim 1: faqat qabul qilish
         out.print(f"  [green]✓[/green] Qabul qilindi — trace_id: [dim]{trace_id}[/dim]")
-        out.print("  [yellow]⚠[/yellow] To'liq pipeline hali ulangan emas (Bo'lim 2)")
+
+        try:
+            record = asyncio.run(_run_pipeline(message, dry_run=dry_run))
+        except Exception as exc:
+            out.print(f"  [red]✗ Pipeline xatosi:[/red] {exc}")
+            return
+
+        if record.status.value == "awaiting_approval":
+            out.print(
+                f"  [yellow]⏸ Tasdiq kerak[/yellow] — approval_id: "
+                f"[dim]{record.pending_approval_id}[/dim]"
+            )
+            out.print(
+                f"  Tasdiqlash uchun: POST /api/v1/approvals/{record.pending_approval_id}/approve"
+            )
+        elif record.status.value == "done":
+            out.print(f"  [green]✓[/green] {record.result_summary}")
+            out.print(f"  [dim]xarajat: ${record.spent_usd:.4f}[/dim]")
+        else:
+            out.print(f"  [red]✗[/red] {record.status.value}: {record.error}")
     finally:
         unbind_trace()
+
+
+async def _run_pipeline(message: str, *, dry_run: bool):
+    """`z run` uchun Orchestrator'ni qurib, buyruqni bajaradi."""
+    from zet.api.deps import (
+        get_approval_service,
+        get_killswitch,
+        get_llm_providers,
+        get_permission_policy,
+        get_run_store,
+        get_session_factory,
+        get_tool_registry,
+    )
+    from zet.core.orchestrator import Orchestrator
+    from zet.db.session import session_scope
+    from zet.domain.command import Command
+    from zet.llm.router import ModelRouter
+
+    settings = get_settings()
+    async with session_scope(get_session_factory()) as session:
+        router = ModelRouter(get_llm_providers(), session, settings)
+        orchestrator = Orchestrator(
+            router=router,
+            tool_registry=get_tool_registry(),
+            permission_policy=get_permission_policy(),
+            approval_service=get_approval_service(),
+            killswitch=get_killswitch(),
+            run_store=get_run_store(),
+            budget_usd=settings.run_max_usd,
+            max_steps=settings.run_max_steps,
+        )
+        return await orchestrator.start(Command(text=message, channel="cli"), dry_run=dry_run)
 
 
 # ── z status ───────────────────────────────────────────────────────

@@ -35,6 +35,9 @@ class PlanStep(BaseModel, frozen=True):
     tool_name: str | None = None
     """Ishlatiladigan tool (None — faqat LLM fikrlashi)."""
 
+    tool_params: dict[str, Any] = Field(default_factory=dict)
+    """`tool_name` uchun kirish parametrlari (tool'ning JSON Schema'siga mos)."""
+
     agent_name: str | None = None
     """Sub-agent nomi (agar qadam boshqa agentga topshirilsa)."""
 

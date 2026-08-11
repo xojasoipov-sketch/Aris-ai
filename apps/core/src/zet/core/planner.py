@@ -222,11 +222,15 @@ class Planner:
             except ValueError:
                 trust = TrustLevel.OWNER
 
+            raw_params = raw_step.get("tool_params")
+            tool_params = raw_params if isinstance(raw_params, dict) else {}
+
             steps.append(
                 PlanStep(
                     position=int(raw_step.get("position", i)),
                     description=str(raw_step.get("description", f"Qadam {i}")),
                     tool_name=raw_step.get("tool_name"),
+                    tool_params=tool_params,
                     permission_required=permission,
                     trust_context=trust,
                     expected_outcome=raw_step.get("expected_outcome"),

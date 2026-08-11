@@ -28,9 +28,10 @@ from zet.agents.registry import (
     AgentRegistry,
 )
 from zet.agents.runtime import AgentRuntime
-from zet.api.deps import get_agent_registry
+from zet.api.deps import get_agent_registry, get_permission_policy, get_tool_registry
 from zet.domain.enums import AgentStatus, ModelTier, PermissionLevel, TrustLevel
 from zet.llm.fake import FakeProvider
+from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
 log = structlog.get_logger(__name__)
@@ -335,11 +336,14 @@ async def run_agent(
     name: str,
     request: AgentRunRequest,
     registry: AgentRegistry = Depends(get_agent_registry),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+    permission_policy: PermissionPolicy = Depends(get_permission_policy),
 ) -> AgentRunResponse:
     """Agentni ishga tushirish.
 
     Faqat ACTIVE agentlar ishga tushirilishi mumkin (V-11).
-    Bo'lim 3 lean: FakeProvider bilan.
+    LLM hali FakeProvider bilan — real ModelRouter integratsiyasi
+    (agent.model_policy → tier tanlash) keyingi bosqichda.
     """
     try:
         state = registry.get_active(name)
@@ -348,10 +352,12 @@ async def run_agent(
     except AgentNotActiveError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    # Lean: FakeProvider bilan run (real provider Bo'lim 5-7 da)
     provider = FakeProvider()
-    tool_registry = ToolRegistry()
-    runtime = AgentRuntime(provider=provider, tool_registry=tool_registry)
+    runtime = AgentRuntime(
+        provider=provider,
+        tool_registry=tool_registry,
+        permission_policy=permission_policy,
+    )
 
     result = await runtime.run(state.spec, request.task)
 
