@@ -70,7 +70,10 @@ class EvalResult(BaseModel, frozen=True):
 TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "time.now": PermissionLevel.READ,
     "web.search": PermissionLevel.READ,
+    "web.read": PermissionLevel.READ,
     "note.write": PermissionLevel.WRITE,
+    "github.read": PermissionLevel.READ,
+    "github.write": PermissionLevel.WRITE,
     "shell.exec": PermissionLevel.EXECUTE,
 }
 
