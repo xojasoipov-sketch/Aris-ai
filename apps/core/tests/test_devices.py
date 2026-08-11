@@ -549,10 +549,10 @@ class TestDevicesInit:
 
 
 class TestBuiltinExports:
-    def test_nine_specs_exported(self) -> None:
+    def test_twelve_specs_exported(self) -> None:
         from zet.agents.builtin import __all__
 
-        assert len(__all__) == 9
+        assert len(__all__) == 12
 
     def test_vision_in_exports(self) -> None:
         from zet.agents.builtin import __all__
