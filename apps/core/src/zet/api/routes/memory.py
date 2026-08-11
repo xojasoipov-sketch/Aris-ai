@@ -8,18 +8,31 @@ Xotira CRUD va qidirish:
     POST   /api/v1/memory/search    — qidirish
     GET    /api/v1/memory/layer/{layer} — qatlam bo'yicha ro'yxat
     POST   /api/v1/memory/cleanup   — eskirganlarni tozalash
+
+`store` — `PgMemoryStore` (DB-backed, async) yoki test'larda `MemoryStore`
+(in-memory, sync) bo'lishi mumkin. `_maybe_await()` ikkalasini ham
+qo'llab-quvvatlaydi — endpoint kodi bittasiga qattiq bog'lanmaydi.
 """
 
 from __future__ import annotations
 
+import inspect
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from zet.api.deps import get_memory_store
+from zet.api.deps import MemoryStoreLike, get_memory_store
 from zet.domain.memory import MemoryEntry, MemoryLayer, MemoryQuery
-from zet.memory.store import MemoryStore
 
 router = APIRouter(prefix="/memory", tags=["memory"])
+
+
+async def _maybe_await[T](value: T | Any) -> T:
+    """`PgMemoryStore` (async) va `MemoryStore` (sync) natijalarini bir xil ko'rinishga keltiradi."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 # ── Request / Response modellari ──────────────────────────────────
@@ -109,16 +122,18 @@ def _entry_to_response(entry: MemoryEntry) -> MemoryEntryResponse:
 @router.post("", response_model=MemoryEntryResponse, status_code=201)
 async def add_memory(
     request: MemoryAddRequest,
-    store: MemoryStore = Depends(get_memory_store),
+    store: MemoryStoreLike = Depends(get_memory_store),
 ) -> MemoryEntryResponse:
     """Yangi xotira yozuvi qo'shish."""
-    entry = store.add(
-        layer=request.layer,
-        content=request.content,
-        summary=request.summary,
-        tags=request.tags,
-        source=request.source,
-        trust_level=request.trust_level,
+    entry = await _maybe_await(
+        store.add(
+            layer=request.layer,
+            content=request.content,
+            summary=request.summary,
+            tags=request.tags,
+            source=request.source,
+            trust_level=request.trust_level,
+        )
     )
     return _entry_to_response(entry)
 
@@ -126,10 +141,10 @@ async def add_memory(
 @router.get("/{entry_id}", response_model=MemoryEntryResponse)
 async def get_memory(
     entry_id: str,
-    store: MemoryStore = Depends(get_memory_store),
+    store: MemoryStoreLike = Depends(get_memory_store),
 ) -> MemoryEntryResponse:
     """Yozuvni ID bo'yicha olish."""
-    entry = store.get(entry_id)
+    entry = await _maybe_await(store.get(entry_id))
     if entry is None:
         raise HTTPException(status_code=404, detail="Yozuv topilmadi")
     return _entry_to_response(entry)
@@ -139,14 +154,16 @@ async def get_memory(
 async def update_memory(
     entry_id: str,
     request: MemoryUpdateRequest,
-    store: MemoryStore = Depends(get_memory_store),
+    store: MemoryStoreLike = Depends(get_memory_store),
 ) -> MemoryEntryResponse:
     """Yozuvni yangilash (versiya oshadi)."""
-    updated = store.update(
-        entry_id,
-        content=request.content,
-        summary=request.summary,
-        tags=request.tags,
+    updated = await _maybe_await(
+        store.update(
+            entry_id,
+            content=request.content,
+            summary=request.summary,
+            tags=request.tags,
+        )
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Yozuv topilmadi")
@@ -156,17 +173,17 @@ async def update_memory(
 @router.delete("/{entry_id}", status_code=204)
 async def delete_memory(
     entry_id: str,
-    store: MemoryStore = Depends(get_memory_store),
+    store: MemoryStoreLike = Depends(get_memory_store),
 ) -> None:
     """Yozuvni o'chirish (soft delete)."""
-    if not store.delete(entry_id):
+    if not await _maybe_await(store.delete(entry_id)):
         raise HTTPException(status_code=404, detail="Yozuv topilmadi")
 
 
 @router.post("/search", response_model=list[MemorySearchResultResponse])
 async def search_memory(
     request: MemorySearchRequest,
-    store: MemoryStore = Depends(get_memory_store),
+    store: MemoryStoreLike = Depends(get_memory_store),
 ) -> list[MemorySearchResultResponse]:
     """Xotiradan qidirish."""
     query = MemoryQuery(
@@ -177,7 +194,7 @@ async def search_memory(
         min_similarity=request.min_similarity,
         include_expired=request.include_expired,
     )
-    results = store.search(query)
+    results = await _maybe_await(store.search(query))
     return [
         MemorySearchResultResponse(
             entry=_entry_to_response(r.entry),
@@ -192,17 +209,17 @@ async def search_memory(
 async def list_by_layer(
     layer: MemoryLayer,
     limit: int = 50,
-    store: MemoryStore = Depends(get_memory_store),
+    store: MemoryStoreLike = Depends(get_memory_store),
 ) -> list[MemoryEntryResponse]:
     """Qatlam bo'yicha yozuvlar ro'yxati."""
-    entries = store.list_by_layer(layer, limit=limit)
+    entries = await _maybe_await(store.list_by_layer(layer, limit=limit))
     return [_entry_to_response(e) for e in entries]
 
 
 @router.post("/cleanup", response_model=CleanupResponse)
 async def cleanup_expired(
-    store: MemoryStore = Depends(get_memory_store),
+    store: MemoryStoreLike = Depends(get_memory_store),
 ) -> CleanupResponse:
     """Eskirgan yozuvlarni tozalash."""
-    count = store.cleanup_expired()
+    count = await _maybe_await(store.cleanup_expired())
     return CleanupResponse(removed=count)

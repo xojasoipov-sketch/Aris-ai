@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -15,12 +16,13 @@ from zet.agents.registry import AgentRegistry
 from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.state import CoreState
+from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.router import ModelRouter
-from zet.memory.store import MemoryStore
+from zet.memory.pg_store import PgMemoryStore
 from zet.monitoring.alerts import AlertManager
 from zet.monitoring.notify_bridge import AlertNotificationBridge
 from zet.security.approvals import ApprovalService
@@ -29,6 +31,15 @@ from zet.security.permissions import PermissionPolicy
 from zet.telegram.notifier import Notifier, StubNotifier
 from zet.tools.builtin import build_default_registry
 from zet.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from zet.memory.store import MemoryStore
+
+    MemoryStoreLike = MemoryStore | PgMemoryStore
+else:
+    MemoryStoreLike = object
+"""`MemoryStore` (in-memory, testlarda) yoki `PgMemoryStore` (DB-backed,
+produksiyada) — ikkalasi ham `api/routes/memory.py`da qo'llab-quvvatlanadi."""
 
 
 @lru_cache(maxsize=1)
@@ -41,15 +52,6 @@ def get_killswitch() -> KillSwitchState:
 def get_core_state() -> CoreState:
     """Global AI Core rejimi — Sleep/Active (singleton)."""
     return CoreState()
-
-
-@lru_cache(maxsize=1)
-def get_memory_store() -> MemoryStore:
-    """Global in-memory xotira do'koni (singleton).
-
-    Produksiyada PgMemoryStore bilan almashtiriladi.
-    """
-    return MemoryStore()
 
 
 @lru_cache(maxsize=1)
@@ -157,6 +159,28 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
     """So'rov chegarasidagi DB sessiyasi — muvaffaqiyatda commit, xatoda rollback."""
     async with session_scope(get_session_factory()) as session:
         yield session
+
+
+# ── Xotira ────────────────────────────────────────────────────────
+
+
+async def get_memory_store(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_config),
+) -> PgMemoryStore:
+    """So'rov chegarasidagi DB-backed xotira do'koni.
+
+    Ilgari bu funksiya doim in-memory `MemoryStore()` qaytarardi —
+    ma'lumotlar restart'da yo'qolardi (gap-analysis #5). Endi har bir
+    so'rov `PgMemoryStore` orqali haqiqiy jadvalga yozadi/o'qiydi;
+    ma'lumotlar restart'dan keyin ham saqlanadi.
+
+    Testlarda `app.dependency_overrides[get_memory_store]` orqali
+    sinxron `MemoryStore()` bilan almashtirilishi mumkin — routerlar
+    ikkalasini ham qo'llab-quvvatlaydi (`_maybe_await`).
+    """
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+    return PgMemoryStore(session, owner_id=owner.id)
 
 
 # ── LLM ────────────────────────────────────────────────────────────

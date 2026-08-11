@@ -13,10 +13,11 @@ Tekshiriladi:
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.testclient import TestClient
 
 from zet.api.app import create_app
-from zet.api.deps import get_memory_store
+from zet.api.deps import get_db_session, get_memory_store
 from zet.memory.store import MemoryStore
 
 
@@ -182,3 +183,46 @@ class TestMemoryAPI:
             json={"layer": "invalid", "content": "test"},
         )
         assert resp.status_code == 422
+
+
+class TestMemoryAPIPersistence:
+    """Default `get_memory_store` (PgMemoryStore) — real DB'ga yozadi.
+
+    Ilgari `MemoryStore` doim in-memory edi (gap-analysis #5) — bu test
+    default dependency zanjirini (session→owner→PgMemoryStore) `get_memory_store`
+    override qilmasdan, faqat DB sessiyasini almashtirib tekshiradi.
+    """
+
+    @pytest.fixture()
+    def pg_client(self, session: AsyncSession) -> TestClient:
+        app = create_app()
+
+        async def _session_override():
+            yield session
+
+        app.dependency_overrides[get_db_session] = _session_override
+        return TestClient(app)
+
+    async def test_write_then_read_via_pg_store(self, pg_client: TestClient) -> None:
+        add_resp = pg_client.post(
+            "/api/v1/memory",
+            json={"layer": "knowledge", "content": "DB'ga yozilgan"},
+        )
+        assert add_resp.status_code == 201
+        entry_id = add_resp.json()["id"]
+
+        get_resp = pg_client.get(f"/api/v1/memory/{entry_id}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["content"] == "DB'ga yozilgan"
+
+    async def test_search_via_pg_store(self, pg_client: TestClient) -> None:
+        pg_client.post(
+            "/api/v1/memory",
+            json={"layer": "knowledge", "content": "Postgres persistensiya"},
+        )
+        resp = pg_client.post(
+            "/api/v1/memory/search",
+            json={"text": "Postgres", "min_similarity": 0.5},
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1

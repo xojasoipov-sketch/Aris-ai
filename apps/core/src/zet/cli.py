@@ -286,6 +286,34 @@ memory_app = typer.Typer(
 app.add_typer(memory_app, name="memory")
 
 
+async def _with_memory_store(fn):
+    """DB sessiyasi + PgMemoryStore ochib, `fn(store)`ni bajaradi va commit qiladi.
+
+    CLI va API bir xil ma'lumotni ko'rishi uchun (ikkalasi ham DB'ga
+    yozadi) — `z run`dagi bilan bir xil naqsh.
+    """
+    from zet.api.deps import get_or_create_owner, get_session_factory
+    from zet.db.session import session_scope
+    from zet.memory.pg_store import PgMemoryStore
+
+    settings = get_settings()
+    async with session_scope(get_session_factory()) as session:
+        owner = await get_or_create_owner(session, external_id=settings.owner_id)
+        store = PgMemoryStore(session, owner_id=owner.id)
+        return await fn(store)
+
+
+def _run_memory_op(fn):
+    """`_with_memory_store` chaqiruvini bajarib, DB xatosini chiroyli ko'rsatadi."""
+    import asyncio
+
+    try:
+        return asyncio.run(_with_memory_store(fn))
+    except Exception as exc:
+        out.print(f"[red]✗ Xotira xatosi:[/red] {exc}")
+        raise SystemExit(1) from None
+
+
 @memory_app.command("add")
 def mem_add(
     content: str = typer.Argument(..., help="Yozuv matni"),
@@ -294,10 +322,8 @@ def mem_add(
 ) -> None:
     """Yangi xotira yozuvi qo'shish."""
     _setup()
-    from zet.api.deps import get_memory_store
     from zet.domain.memory import MemoryLayer
 
-    store = get_memory_store()
     try:
         mem_layer = MemoryLayer(layer)
     except ValueError:
@@ -305,7 +331,7 @@ def mem_add(
         out.print(f"Mumkin: {', '.join(m.value for m in MemoryLayer)}")
         raise SystemExit(1) from None
 
-    entry = store.add(layer=mem_layer, content=content, tags=tags)
+    entry = _run_memory_op(lambda store: store.add(layer=mem_layer, content=content, tags=tags))
     out.print(f"[green]✓[/green] Yozuv qo'shildi: [dim]{entry.id}[/dim]")
     out.print(f"  Qatlam: [cyan]{entry.layer.value}[/cyan], versiya: {entry.version}")
     if entry.expires_at:
@@ -320,10 +346,8 @@ def mem_search(
 ) -> None:
     """Xotiradan qidirish."""
     _setup()
-    from zet.api.deps import get_memory_store
     from zet.domain.memory import MemoryLayer, MemoryQuery
 
-    store = get_memory_store()
     layers = None
     if layer:
         try:
@@ -333,7 +357,7 @@ def mem_search(
             raise SystemExit(1) from None
 
     query = MemoryQuery(text=text, layers=layers, limit=limit, min_similarity=0.0)
-    results = store.search(query)
+    results = _run_memory_op(lambda store: store.search(query))
 
     if not results:
         out.print("[yellow]Natija topilmadi[/yellow]")
@@ -366,10 +390,8 @@ def mem_list(
 ) -> None:
     """Qatlam bo'yicha yozuvlar ro'yxati."""
     _setup()
-    from zet.api.deps import get_memory_store
     from zet.domain.memory import MemoryLayer
 
-    store = get_memory_store()
     try:
         mem_layer = MemoryLayer(layer)
     except ValueError:
@@ -377,7 +399,7 @@ def mem_list(
         out.print(f"Mumkin: {', '.join(m.value for m in MemoryLayer)}")
         raise SystemExit(1) from None
 
-    entries = store.list_by_layer(mem_layer, limit=limit)
+    entries = _run_memory_op(lambda store: store.list_by_layer(mem_layer, limit=limit))
     if not entries:
         out.print(f"[yellow]{mem_layer.value} qatlamida yozuv yo'q[/yellow]")
         return
@@ -404,10 +426,9 @@ def mem_list(
 def mem_stats() -> None:
     """Xotira statistikasi."""
     _setup()
-    from zet.api.deps import get_memory_store
 
-    store = get_memory_store()
-    out.print(f"[bold cyan]Xotira[/bold cyan]: {store.count} faol yozuv")
+    count = _run_memory_op(lambda store: store.count())
+    out.print(f"[bold cyan]Xotira[/bold cyan]: {count} faol yozuv")
 
 
 # ── z agent ──────────────────────────────────────────────────────
