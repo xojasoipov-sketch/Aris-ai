@@ -1,4 +1,45 @@
-"""ZET xavfsizlik moduli — Z1.12.
+"""ZET xavfsizlik moduli — Bo'lim 1, 7, 11.
 
-Ruxsat siyosati, tasdiq darvozasi va favqulodda to'xtash.
+Komponentlar:
+    - PermissionPolicy: ruxsat siyosati (V-31, V-32)
+    - ApprovalService: tasdiq darvozasi (V-32)
+    - KillSwitchState: favqulodda to'xtash (V-33)
+    - InjectionScanner: injection himoyasi (A-05, Bo'lim 7)
+    - RateLimiter: so'rov chastotasi cheklash (Bo'lim 11)
+    - AuditLog: o'zgarmas xavfsizlik jurnali (Bo'lim 11)
+    - SecretManager: maxfiy kalitlar boshqaruvi (Bo'lim 11)
+
+Bog'liq qarorlar:
+    V-31 — ruxsat darajalari
+    V-32 — majburiy tasdiq
+    V-33 — xavfsizlik
+    A-05 — trust level chegaralari
+    Bo'lim 11 — xavfsizlik + testlash
 """
+
+from zet.security.audit import AuditCategory, AuditEntry, AuditLog
+from zet.security.injection import InjectionType, ScanResult, is_safe, scan_text
+from zet.security.killswitch import KillSwitchEngagedError, KillSwitchState
+from zet.security.permissions import PermissionDecision, PermissionPolicy
+from zet.security.ratelimit import RateLimiter, RateLimitResult, RateLimitTier
+from zet.security.secrets import SecretManager, SecretMetadata, SecretStatus
+
+__all__ = [
+    "AuditCategory",
+    "AuditEntry",
+    "AuditLog",
+    "InjectionType",
+    "KillSwitchEngagedError",
+    "KillSwitchState",
+    "PermissionDecision",
+    "PermissionPolicy",
+    "RateLimitResult",
+    "RateLimitTier",
+    "RateLimiter",
+    "ScanResult",
+    "SecretManager",
+    "SecretMetadata",
+    "SecretStatus",
+    "is_safe",
+    "scan_text",
+]
