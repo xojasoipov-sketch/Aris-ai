@@ -34,3 +34,22 @@ Hozirgi holat: **P0 — Repository Audit yakunlandi.** Kod hali yozilmagan.
 
 Hammasini birdan qurma. Har bir bo'lim oxirida 4 ta artefakt majburiy:
 **Implementation · Tests · Verification · Documentation.**
+
+## Holat
+
+| Task | Nima | Status |
+|---|---|---|
+| Z1.0 | Repo skeleti, ZET nomlash, LICENSE, Makefile | ✅ |
+| Z1.1 | uv · ruff · mypy --strict · pytest · pre-commit | ✅ |
+| Z1.2 | Konfiguratsiya + sirlar (`SecretStr`) | ✅ |
+| Z1.3 | Docker dev muhiti (Postgres+pgvector, Redis) | ✅ |
+| Z1.4 | DB poydevori: 12 jadval, migratsiya, append-only audit | ✅ |
+| Z1.5 | LLM 4 tier + Model Router + QuotaManager | ⏳ keyingi |
+| Z1.6–Z1.17 | Core pipeline, xavfsizlik, CLI, API | ⏳ |
+
+```bash
+make install   # dependency'lar
+make up        # Postgres + Redis
+make migrate   # sxemani qo'llash
+make check     # lint + type + test
+```

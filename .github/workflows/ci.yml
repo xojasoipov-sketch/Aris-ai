@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_CACHE_DIR: /tmp/.uv-cache
+
+jobs:
+  quality:
+    name: Lint · Type · Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: uv o'rnatish
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/core/uv.lock
+
+      - name: Python 3.12
+        run: uv python install 3.12
+
+      - name: Dependency'lar
+        run: uv sync --all-extras --frozen
+
+      - name: Ruff (lint)
+        run: uv run ruff check src tests
+
+      - name: Ruff (format)
+        run: uv run ruff format --check src tests
+
+      - name: mypy --strict
+        run: uv run mypy src
+
+      - name: Testlar + qamrov
+        run: uv run pytest -m "not live" --cov=zet --cov-report=term-missing --cov-report=xml
+
+      - name: Qamrov chegarasi
+        run: uv run coverage report --fail-under=70
+
+  secrets:
+    name: Sir skanerlash
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose konfiguratsiyasi
+        run: docker compose -f infra/docker-compose.yml config --quiet
+      - name: Core image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/core
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

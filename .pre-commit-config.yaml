@@ -1,0 +1,48 @@
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^apps/core/
+      - id: ruff-format
+        files: ^apps/core/
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.22.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy --strict
+        entry: bash -c 'cd apps/core && uv run mypy src'
+        language: system
+        pass_filenames: false
+        files: ^apps/core/src/
+        stages: [pre-push]
+
+      - id: pytest
+        name: pytest
+        entry: bash -c 'cd apps/core && uv run pytest -m "not live"'
+        language: system
+        pass_filenames: false
+        files: ^apps/core/
+        stages: [pre-push]

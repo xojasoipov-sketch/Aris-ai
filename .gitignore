@@ -1,0 +1,56 @@
+# ── Sirlar (HECH QACHON commit qilinmaydi) ─────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+secrets/
+*.sops.yaml
+
+# ── Python ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+ENV/
+
+# ── Test / sifat ───────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+
+# ── Node / frontend (Bo'lim 12) ────────────────────────────────────
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# ── ZET runtime ma'lumotlari ───────────────────────────────────────
+data/
+vault/
+logs/
+*.db
+*.sqlite3
+models/
+.ollama/
+
+# ── IDE / OS ───────────────────────────────────────────────────────
+.idea/
+.vscode/
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.swp
