@@ -229,6 +229,53 @@ def ks_status() -> None:
         out.print("[green]✓ Emergency stop o'chirilgan[/green]")
 
 
+# ── z state (Sleep/Active) ────────────────────────────────────────
+
+state_app = typer.Typer(
+    name="state",
+    help="AI Core rejimi — Sleep/Active",
+    no_args_is_help=True,
+)
+app.add_typer(state_app, name="state")
+
+
+@state_app.command("sleep")
+def state_sleep(
+    reason: str = typer.Option("Manual CLI sleep", "--reason", "-r", help="Sabab"),
+) -> None:
+    """Proaktiv ishlarni pauza qilish (kunlik jadval to'xtaydi)."""
+    _setup()
+    from zet.api.deps import get_core_state
+
+    get_core_state().sleep(reason=reason, by="cli")
+    out.print(f"[yellow bold]💤 SLEEPING[/yellow bold]: {reason}")
+
+
+@state_app.command("wake")
+def state_wake(
+    reason: str = typer.Option("Manual CLI wake", "--reason", "-r", help="Sabab"),
+) -> None:
+    """ACTIVE rejimiga qaytish."""
+    _setup()
+    from zet.api.deps import get_core_state
+
+    get_core_state().wake(reason=reason, by="cli")
+    out.print("[green bold]✓ ACTIVE[/green bold]")
+
+
+@state_app.command("status")
+def state_status() -> None:
+    """Joriy rejim."""
+    _setup()
+    from zet.api.deps import get_core_state
+
+    data = get_core_state().to_dict()
+    if data["mode"] == "sleeping":
+        out.print(f"[yellow]💤 SLEEPING[/yellow]: {data['reason']}")
+    else:
+        out.print("[green]✓ ACTIVE[/green]")
+
+
 # ── z memory ─────────────────────────────────────────────────────
 
 memory_app = typer.Typer(

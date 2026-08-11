@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from zet.agents.registry import AgentRegistry
 from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
+from zet.core.state import CoreState
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
@@ -30,6 +31,12 @@ from zet.tools.registry import ToolRegistry
 def get_killswitch() -> KillSwitchState:
     """Global killswitch holati (singleton)."""
     return KillSwitchState()
+
+
+@lru_cache(maxsize=1)
+def get_core_state() -> CoreState:
+    """Global AI Core rejimi — Sleep/Active (singleton)."""
+    return CoreState()
 
 
 @lru_cache(maxsize=1)

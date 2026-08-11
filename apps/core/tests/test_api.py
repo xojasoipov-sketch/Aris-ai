@@ -197,6 +197,29 @@ class TestHealth:
         assert resp.json()["status"] == "killswitch_engaged"
 
 
+# ── Core State (Sleep/Active) ─────────────────────────────────────
+
+
+class TestCoreStateAPI:
+    def test_default_active(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/state")
+        assert resp.status_code == 200
+        assert resp.json()["state"]["mode"] == "active"
+
+    def test_sleep_and_wake(self, client: TestClient) -> None:
+        sleep_resp = client.post("/api/v1/state/sleep", json={"reason": "Ta'til"})
+        assert sleep_resp.status_code == 200
+        assert sleep_resp.json()["status"] == "sleeping"
+        assert sleep_resp.json()["state"]["reason"] == "Ta'til"
+
+        status_resp = client.get("/api/v1/state")
+        assert status_resp.json()["state"]["mode"] == "sleeping"
+
+        wake_resp = client.post("/api/v1/state/wake", json={})
+        assert wake_resp.status_code == 200
+        assert wake_resp.json()["status"] == "active"
+
+
 # ── Run (to'liq pipeline) ─────────────────────────────────────────
 
 
