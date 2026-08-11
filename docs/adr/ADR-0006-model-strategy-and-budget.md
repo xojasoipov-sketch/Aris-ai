@@ -39,13 +39,25 @@ optimizatsiya emas, arxitekturaning birinchi kunidagi qarori.
 | Tier | Provayder | Ishlatilishi | Narx |
 |---|---|---|---|
 | **T0 — Local** | Ollama (Qwen3 / Llama) | `simple`, klassifikatsiya, summarization, embeddings | **$0** (egasining kompyuterida) |
-| **T1 — Free tier** | Google AI Studio (Gemini Flash), Groq, OpenRouter `:free` modellari | `normal`, `vision`, tool loop'ning ko'p qismi | **$0** (kvota chegarasida) |
+| **T1 — Free tier** | Google AI Studio (Gemini Flash), Groq, **Mistral** | `normal`, `vision`, tool loop'ning ko'p qismi | **$0** (kvota chegarasida) |
 | **T2 — Arzon to'lovli** | Claude Haiku 4.5 | T0/T1 sifat bermagan `normal` vazifalar | ~$0.04/run |
 | **T3 — Kuchli to'lovli** | Claude Sonnet 5 / Opus 5 | Faqat `complex` planner va murakkab kod | Qattiq kunlik cheklov ostida |
 
 Marshrutlash tartibi: **T0 → T1 → T2 → T3.** Har bir tier faqat quyidagi hollarda
 yuqoriga eskalatsiya qiladi: kvota tugagan · model sifat chegarasidan o'tmagan ·
 vazifa aniq `complex` deb belgilangan.
+
+**Aniqlashtirish (implementatsiyada).** T0 va T1 ikkalasi ham bepul, shuning uchun
+ular orasidagi tartib **narx bo'yicha emas, sifat bo'yicha** tanlanadi:
+
+| Vazifa sinfi | Birinchi nomzod | Nega |
+|---|---|---|
+| `simple` | T0 (lokal `qwen3:8b`) | Klassifikatsiya/xulosa uchun yetarli, tarmoq ham kerak emas |
+| `normal` | T1 (Gemini Flash) | Bulutli free tier lokal 8B dan sezilarli kuchli, narxi bir xil — $0 |
+| `complex` / `coding` | T3 (Sonnet) | **Ataylab qilingan istisno**: planner sifati butun run natijasini belgilaydi. Kunlik 5 chaqiruv chegarasi va bepul zaxira bilan himoyalangan |
+
+Buzilmaydigan invariant (test bilan majburlangan):
+**bepul modeldan oldin pullik model turishi mumkin emas** — `complex`/`coding` dan tashqari.
 
 ### 2. `simple`/`normal` uchun ovoz va embedding — lokal
 
