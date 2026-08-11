@@ -83,6 +83,9 @@ def get_tool_registry() -> ToolRegistry:
         notes_dir=settings.vault_dir,
         enable_shell=settings.enable_shell,
         github_token=(settings.github_token.get_secret_value() if settings.github_token else None),
+        web_search_api_key=(
+            settings.web_search_api_key.get_secret_value() if settings.web_search_api_key else None
+        ),
     )
 
 

@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     """GitHub Personal Access Token. Bo'lsa — `github.read`/`github.write`
     haqiqiy API'ga chiqadi; bo'lmasa — stub rejimda ishlaydi."""
 
+    # ── Web qidiruv (Bo'lim 7) ────────────────────────────────────────
+    web_search_api_key: SecretStr | None = None
+    """Brave Search API kaliti (bepul qatlam: 2000 so'rov/oy). Bo'lsa —
+    `web.search` haqiqiy qidiradi; bo'lmasa — stub rejimda ishlaydi."""
+
     # ── Xavfsizlik ─────────────────────────────────────────────────
     owner_id: str = "owner"
     api_token: SecretStr | None = None

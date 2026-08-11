@@ -30,6 +30,7 @@ def build_default_registry(
     enable_shell: bool = False,
     web_reader_stub: bool = True,
     github_token: str | None = None,
+    web_search_api_key: str | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
 
@@ -42,6 +43,8 @@ def build_default_registry(
             Haqiqiy tarmoq chaqiruvi uchun `False` bering.
         github_token: berilsa — `github.read`/`github.write` haqiqiy API'ga
             chiqadi; bo'lmasa (default) — stub rejim.
+        web_search_api_key: berilsa — `web.search` haqiqiy qidiradi (Brave
+            Search API); bo'lmasa (default) — stub rejim.
 
     Returns:
         Ro'yxatga olingan `ToolRegistry`.
@@ -49,7 +52,7 @@ def build_default_registry(
     registry = ToolRegistry()
     registry.register(TimeNowTool())
     registry.register(NoteWriteTool(notes_dir=notes_dir))
-    registry.register(WebSearchTool())
+    registry.register(WebSearchTool(api_key=web_search_api_key))
     registry.register(WebReaderTool(stub=web_reader_stub))
     registry.register(GitHubReadTool(token=github_token))
     registry.register(GitHubWriteTool(token=github_token))
