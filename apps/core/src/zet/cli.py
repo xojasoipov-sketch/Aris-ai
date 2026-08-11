@@ -182,6 +182,140 @@ def ks_status() -> None:
         out.print("[green]✓ Emergency stop o'chirilgan[/green]")
 
 
+# ── z memory ─────────────────────────────────────────────────────
+
+memory_app = typer.Typer(
+    name="memory",
+    help="Xotira boshqaruvi (Bo'lim 2)",
+    no_args_is_help=True,
+)
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("add")
+def mem_add(
+    content: str = typer.Argument(..., help="Yozuv matni"),
+    layer: str = typer.Option("knowledge", "--layer", "-l", help="Qatlam nomi"),
+    tags: list[str] = typer.Option([], "--tag", "-t", help="Teglar"),
+) -> None:
+    """Yangi xotira yozuvi qo'shish."""
+    _setup()
+    from zet.api.deps import get_memory_store
+    from zet.domain.memory import MemoryLayer
+
+    store = get_memory_store()
+    try:
+        mem_layer = MemoryLayer(layer)
+    except ValueError:
+        out.print(f"[red]Noto'g'ri qatlam: {layer}[/red]")
+        out.print(f"Mumkin: {', '.join(m.value for m in MemoryLayer)}")
+        raise SystemExit(1) from None
+
+    entry = store.add(layer=mem_layer, content=content, tags=tags)
+    out.print(f"[green]✓[/green] Yozuv qo'shildi: [dim]{entry.id}[/dim]")
+    out.print(f"  Qatlam: [cyan]{entry.layer.value}[/cyan], versiya: {entry.version}")
+    if entry.expires_at:
+        out.print(f"  Muddati: {entry.expires_at.isoformat()}")
+
+
+@memory_app.command("search")
+def mem_search(
+    text: str = typer.Argument(..., help="Qidiruv matni"),
+    layer: str | None = typer.Option(None, "--layer", "-l", help="Qatlam filtri"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Maksimal natijalar"),
+) -> None:
+    """Xotiradan qidirish."""
+    _setup()
+    from zet.api.deps import get_memory_store
+    from zet.domain.memory import MemoryLayer, MemoryQuery
+
+    store = get_memory_store()
+    layers = None
+    if layer:
+        try:
+            layers = [MemoryLayer(layer)]
+        except ValueError:
+            out.print(f"[red]Noto'g'ri qatlam: {layer}[/red]")
+            raise SystemExit(1) from None
+
+    query = MemoryQuery(text=text, layers=layers, limit=limit, min_similarity=0.0)
+    results = store.search(query)
+
+    if not results:
+        out.print("[yellow]Natija topilmadi[/yellow]")
+        return
+
+    table = Table(title=f"Qidiruv: '{text}'", border_style="cyan")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Qatlam", style="cyan", width=14)
+    table.add_column("Matn", max_width=60)
+    table.add_column("Ball", justify="right", width=6)
+
+    for r in results:
+        content_preview = (
+            r.entry.content[:57] + "..." if len(r.entry.content) > 60 else r.entry.content
+        )
+        table.add_row(
+            str(r.rank),
+            r.entry.layer.value if isinstance(r.entry.layer, MemoryLayer) else str(r.entry.layer),
+            content_preview,
+            f"{r.similarity:.2f}",
+        )
+
+    out.print(table)
+
+
+@memory_app.command("list")
+def mem_list(
+    layer: str = typer.Argument(..., help="Qatlam nomi"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maksimal natijalar"),
+) -> None:
+    """Qatlam bo'yicha yozuvlar ro'yxati."""
+    _setup()
+    from zet.api.deps import get_memory_store
+    from zet.domain.memory import MemoryLayer
+
+    store = get_memory_store()
+    try:
+        mem_layer = MemoryLayer(layer)
+    except ValueError:
+        out.print(f"[red]Noto'g'ri qatlam: {layer}[/red]")
+        out.print(f"Mumkin: {', '.join(m.value for m in MemoryLayer)}")
+        raise SystemExit(1) from None
+
+    entries = store.list_by_layer(mem_layer, limit=limit)
+    if not entries:
+        out.print(f"[yellow]{mem_layer.value} qatlamida yozuv yo'q[/yellow]")
+        return
+
+    table = Table(title=f"Qatlam: {mem_layer.value}", border_style="cyan")
+    table.add_column("ID", style="dim", width=10)
+    table.add_column("Matn", max_width=50)
+    table.add_column("Ver", justify="right", width=4)
+    table.add_column("Teglar", style="cyan")
+
+    for e in entries:
+        content_preview = e.content[:47] + "..." if len(e.content) > 50 else e.content
+        table.add_row(
+            (e.id or "")[:10],
+            content_preview,
+            str(e.version),
+            ", ".join(e.tags) if e.tags else "-",
+        )
+
+    out.print(table)
+
+
+@memory_app.command("stats")
+def mem_stats() -> None:
+    """Xotira statistikasi."""
+    _setup()
+    from zet.api.deps import get_memory_store
+
+    store = get_memory_store()
+    out.print(f"[bold cyan]Xotira[/bold cyan]: {store.count} faol yozuv")
+
+
 # ── z budget ──────────────────────────────────────────────────────
 
 
