@@ -25,7 +25,7 @@ import structlog
 from fastapi import FastAPI
 
 from zet.api.middleware import TraceMiddleware
-from zet.api.routes import agent, health, killswitch, memory, run
+from zet.api.routes import agent, health, killswitch, memory, run, telegram
 from zet.config import get_settings
 from zet.observability.logging import configure_logging
 
@@ -72,5 +72,6 @@ def create_app() -> FastAPI:
     app.include_router(killswitch.router, prefix="/api/v1", tags=["killswitch"])
     app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
     app.include_router(agent.router, prefix="/api/v1", tags=["agents"])
+    app.include_router(telegram.router, prefix="/api/v1", tags=["telegram"])
 
     return app

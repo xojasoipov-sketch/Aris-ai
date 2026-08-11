@@ -538,6 +538,77 @@ def agent_status(
         raise SystemExit(1) from None
 
 
+# ── z telegram ────────────────────────────────────────────────────
+
+telegram_app = typer.Typer(
+    name="telegram",
+    help="Telegram bot boshqaruvi (Bo'lim 5)",
+    no_args_is_help=True,
+)
+app.add_typer(telegram_app, name="telegram")
+
+
+@telegram_app.command("status")
+def telegram_status() -> None:
+    """Telegram bot holati."""
+    _setup()
+    settings = get_settings()
+
+    has_token = settings.telegram_bot_token is not None
+    owner_ids = settings.telegram_owner_id_set
+
+    table = Table(title="Telegram Bot", border_style="cyan")
+    table.add_column("Parametr", style="bold")
+    table.add_column("Qiymat")
+
+    table.add_row("Token", "[green]✓ Sozlangan[/green]" if has_token else "[red]✗ Yo'q[/red]")
+    table.add_row("Owner ID lar", str(owner_ids) if owner_ids else "[yellow]Bo'sh[/yellow]")
+    table.add_row("Owner soni", str(len(owner_ids)))
+
+    out.print(table)
+
+    if not has_token:
+        out.print("\n[yellow]⚠ ZET_TELEGRAM_BOT_TOKEN .env faylida sozlang[/yellow]")
+    if not owner_ids:
+        out.print("[yellow]⚠ ZET_TELEGRAM_OWNER_IDS .env faylida sozlang[/yellow]")
+
+
+@telegram_app.command("test")
+def telegram_test(
+    message: str = typer.Argument("Salom, ZET!", help="Test xabar matni"),
+) -> None:
+    """Bot handlerini test qilish (Telegram ulanmasdan).
+
+    Misol: z telegram test "Havo qanday?"
+    """
+    _setup()
+    import asyncio
+
+    from zet.telegram.bot import ZetBot
+    from zet.voice.stt import StubSTT
+
+    bot = ZetBot(
+        owner_ids={0},  # Test user_id
+        stt=StubSTT(),
+    )
+
+    result = asyncio.run(
+        bot.process_message(
+            user_id=0,
+            chat_id=0,
+            text=message,
+        )
+    )
+
+    if result:
+        # HTML teglarini tozalash (terminal uchun)
+        clean_text = result.text.replace("<b>", "[bold]").replace("</b>", "[/bold]")
+        clean_text = clean_text.replace("<code>", "[dim]").replace("</code>", "[/dim]")
+        out.print(Panel(clean_text, title="Bot javobi", border_style="cyan"))
+    else:
+        out.print("[red]Bot javob bermadi[/red]")
+
+
 # ── z budget ──────────────────────────────────────────────────────
 
 

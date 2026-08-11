@@ -40,3 +40,22 @@ def get_agent_registry() -> AgentRegistry:
 def get_config() -> Settings:
     """Konfiguratsiya."""
     return get_settings()
+
+
+@lru_cache(maxsize=1)
+def get_telegram_bot() -> object:
+    """Global Telegram bot (singleton).
+
+    ZetBot qaytaradi — turini `object` qilish tsiklik importdan saqlanish uchun.
+    """
+    from zet.telegram.bot import ZetBot
+    from zet.voice.stt import StubSTT
+
+    settings = get_settings()
+    token = settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else ""
+
+    return ZetBot(
+        token=token,
+        owner_ids=settings.telegram_owner_id_set,
+        stt=StubSTT(),
+    )

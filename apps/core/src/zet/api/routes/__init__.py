@@ -1,3 +1,3 @@
 """API route'lari."""
 
-from zet.api.routes import agent  # noqa: F401
+from zet.api.routes import agent, telegram  # noqa: F401

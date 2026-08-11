@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     run_max_depth: int = Field(default=3, ge=1)
     run_timeout_s: int = Field(default=600, ge=1)
 
+    # ── Telegram (Bo'lim 5, V-17) ───────────────────────────────────
+    telegram_bot_token: SecretStr | None = None
+    """Telegram bot token. `.env` faylida saqlang — hech qachon kodda emas."""
+
+    telegram_owner_ids: str = ""
+    """Vergul bilan ajratilgan Telegram user ID lar (owner allowlist, R-04).
+
+    Misol: "123456789,987654321"
+    Bo'sh bo'lsa — hech kimga ruxsat yo'q (fail-closed).
+    """
+
     # ── Xavfsizlik ─────────────────────────────────────────────────
     owner_id: str = "owner"
     api_token: SecretStr | None = None
@@ -140,6 +151,18 @@ class Settings(BaseSettings):
     @property
     def is_prod(self) -> bool:
         return self.env is Env.PROD
+
+    @property
+    def telegram_owner_id_set(self) -> set[int]:
+        """Telegram owner ID larni set ga o'girish."""
+        if not self.telegram_owner_ids.strip():
+            return set()
+        result: set[int] = set()
+        for part in self.telegram_owner_ids.split(","):
+            part = part.strip()
+            if part.isdigit():
+                result.add(int(part))
+        return result
 
     @property
     def autonomous_daily_budget_usd(self) -> float:
