@@ -44,10 +44,10 @@ Hammasini birdan qurma. Har bir bo'lim oxirida 4 ta artefakt majburiy:
 | Z1.2 | Konfiguratsiya + sirlar (`SecretStr`) | ✅ |
 | Z1.3 | Docker dev muhiti (Postgres+pgvector, Redis) | ✅ |
 | Z1.4 | DB poydevori: 12 jadval, migratsiya, append-only audit | ✅ |
-| Z1.5 | LLM abstraksiya, katalog, kvota, budjet, Model Router | 🔶 mantiq tayyor; HTTP provayderlar qoldi |
+| Z1.5 | LLM 4 tier, katalog, kvota, budjet, Model Router, provayderlar | ✅ |
 | Z1.6–Z1.17 | Core pipeline, xavfsizlik, CLI, API | ⏳ |
 
-**112 test · 94% qamrov · `ruff` + `mypy --strict` yashil**
+**132 test · 92% qamrov · `ruff` + `mypy --strict` yashil**
 
 ```bash
 make install   # dependency'lar

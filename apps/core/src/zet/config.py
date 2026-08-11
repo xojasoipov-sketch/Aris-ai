@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     # T1 — free tier
     google_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    mistral_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
     # T2 / T3 — to'lovli
     anthropic_api_key: SecretStr | None = None
@@ -128,6 +129,7 @@ class Settings(BaseSettings):
             [
                 self.google_api_key,
                 self.groq_api_key,
+                self.mistral_api_key,
                 self.openrouter_api_key,
                 self.anthropic_api_key,
                 self.openai_api_key,
