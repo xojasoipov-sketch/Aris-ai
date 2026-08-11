@@ -192,6 +192,53 @@ class MessageRole(StrEnum):
     TOOL = "tool"
 
 
+class AgentStatus(StrEnum):
+    """Agent holati (V-11). DRAFT dan boshlab ARCHIVED gacha."""
+
+    DRAFT = "draft"
+    """Yangi yaratilgan, hali sinovdan o'tmagan."""
+
+    TESTING = "testing"
+    """Eval to'plami bilan sinovda."""
+
+    ACTIVE = "active"
+    """Faol — vazifalarni bajarishi mumkin."""
+
+    PAUSED = "paused"
+    """Vaqtincha to'xtatilgan (ega tomonidan)."""
+
+    DISABLED = "disabled"
+    """O'chirilgan (xato yoki siyosat buzilishi sababli)."""
+
+    ARCHIVED = "archived"
+    """Arxivlangan — qayta tiklab bo'lmaydi."""
+
+    @property
+    def is_active(self) -> bool:
+        return self is AgentStatus.ACTIVE
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in _TERMINAL_AGENT_STATUSES
+
+    def can_transition_to(self, target: AgentStatus) -> bool:
+        return target in AGENT_TRANSITIONS[self]
+
+
+_TERMINAL_AGENT_STATUSES: Final[frozenset[AgentStatus]] = frozenset({AgentStatus.ARCHIVED})
+
+AGENT_TRANSITIONS: Final[dict[AgentStatus, frozenset[AgentStatus]]] = {
+    AgentStatus.DRAFT: frozenset({AgentStatus.TESTING, AgentStatus.ARCHIVED}),
+    AgentStatus.TESTING: frozenset(
+        {AgentStatus.ACTIVE, AgentStatus.DRAFT, AgentStatus.DISABLED, AgentStatus.ARCHIVED}
+    ),
+    AgentStatus.ACTIVE: frozenset({AgentStatus.PAUSED, AgentStatus.DISABLED, AgentStatus.ARCHIVED}),
+    AgentStatus.PAUSED: frozenset({AgentStatus.ACTIVE, AgentStatus.DISABLED, AgentStatus.ARCHIVED}),
+    AgentStatus.DISABLED: frozenset({AgentStatus.DRAFT, AgentStatus.ARCHIVED}),
+    AgentStatus.ARCHIVED: frozenset(),
+}
+
+
 class RunTrigger(StrEnum):
     """Run'ni nima boshlagani (V-26).
 

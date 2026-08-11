@@ -1,0 +1,314 @@
+"""Agent Runtime — agentni ishga tushirish va boshqarish (Bo'lim 3).
+
+Runtime oqimi:
+    1. context_assembly() — system prompt + conversation context
+    2. tool_loop() — LLM chaqiruv → tool bajarish → natija qaytarish (takrorlash)
+    3. verify() — natijani tekshirish
+    4. report() — hisobot tuzish
+
+A-07 tormozlar:
+    - max_steps: qadamlar soni cheklangan
+    - max_tool_calls: tool chaqiruvlari cheklangan
+    - timeout_s: vaqt cheklangan
+
+Bog'liq qarorlar:
+    A-02 — agent = ma'lumot
+    A-07 — avtomatlashtirish tormozlari
+    V-01 — har bir natija tekshiriladi
+    V-31 — tool ruxsati
+"""
+
+from __future__ import annotations
+
+import time
+
+import structlog
+
+from zet.domain.agent import AgentRunResult, AgentSpec
+from zet.domain.tool import ToolResult
+from zet.llm.base import ChatMessage, LLMProvider, LLMResponse, ToolSpec, ToolUse
+from zet.tools.base import ToolError
+from zet.tools.registry import ToolNotFoundError, ToolRegistry
+
+log = structlog.get_logger(__name__)
+
+
+class AgentRuntimeError(Exception):
+    """Agent runtime xatosi."""
+
+
+class AgentMaxStepsError(AgentRuntimeError):
+    """Maksimal qadamlar soniga yetildi (A-07)."""
+
+
+class AgentMaxToolCallsError(AgentRuntimeError):
+    """Maksimal tool chaqiruvlari soniga yetildi (A-07)."""
+
+
+class AgentTimeoutError(AgentRuntimeError):
+    """Agent vaqt chegarasini oshirdi (A-07)."""
+
+
+class AgentRuntime:
+    """Agent runtime — context assembly → tool loop → verify → report.
+
+    Har bir agent o'zining AgentSpec'iga asoslangan holda ishlaydi.
+    LLM va ToolRegistry tashqaridan beriladi (DI).
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: LLMProvider,
+        tool_registry: ToolRegistry,
+        model: str = "fake",
+    ) -> None:
+        self._provider = provider
+        self._tool_registry = tool_registry
+        self._model = model
+
+    async def run(
+        self,
+        spec: AgentSpec,
+        task: str,
+        *,
+        context: list[ChatMessage] | None = None,
+    ) -> AgentRunResult:
+        """Agentni ishga tushiradi.
+
+        Args:
+            spec: Agent spetsifikatsiyasi.
+            task: Bajarilishi kerak bo'lgan vazifa.
+            context: Qo'shimcha kontekst xabarlari.
+
+        Returns:
+            AgentRunResult — hisobot.
+        """
+        start_time = time.monotonic()
+        tool_calls_count = 0
+        steps_count = 0
+        sources: list[str] = []
+
+        # 1. Context assembly
+        messages = self._assemble_context(spec, task, context)
+        tool_specs = self._build_tool_specs(spec)
+
+        log.info(
+            "agent.run.start",
+            agent=spec.name,
+            task=task[:100],
+            tools=len(tool_specs),
+            max_steps=spec.max_steps,
+        )
+
+        try:
+            # 2. Tool loop
+            for step in range(spec.max_steps):
+                steps_count = step + 1
+
+                # A-07: timeout tekshiruvi
+                elapsed = time.monotonic() - start_time
+                if elapsed > spec.timeout_s:
+                    raise AgentTimeoutError(
+                        f"Agent '{spec.name}' {spec.timeout_s}s vaqt chegarasini oshirdi"
+                    )
+
+                # LLM chaqiruvi
+                response = await self._call_llm(messages, tool_specs, spec)
+
+                # Tool chaqiruv yo'q — javob tayyor
+                if not response.wants_tools:
+                    log.info(
+                        "agent.run.complete",
+                        agent=spec.name,
+                        steps=steps_count,
+                        tool_calls=tool_calls_count,
+                    )
+                    return AgentRunResult(
+                        agent_name=spec.name,
+                        success=True,
+                        output=response.text,
+                        sources=sources,
+                        tool_calls_count=tool_calls_count,
+                        steps_count=steps_count,
+                    )
+
+                # Tool chaqiruvlarini bajarish
+                messages.append(
+                    ChatMessage(
+                        role="assistant",
+                        content=response.text,
+                        tool_uses=response.tool_uses,
+                    )
+                )
+
+                for tool_use in response.tool_uses:
+                    # A-07: max tool calls tekshiruvi
+                    if tool_calls_count >= spec.max_tool_calls:
+                        raise AgentMaxToolCallsError(
+                            f"Agent '{spec.name}' {spec.max_tool_calls} tool chaqiruviga yetdi"
+                        )
+
+                    tool_result = await self._execute_tool(
+                        spec,
+                        tool_use,
+                        sources,
+                    )
+                    tool_calls_count += 1
+
+                    # Tool natijasini kontekstga qo'shish
+                    messages.append(
+                        ChatMessage(
+                            role="tool",
+                            content=self._format_tool_result(tool_result),
+                            tool_call_id=tool_use.id,
+                        )
+                    )
+
+            # A-07: max steps
+            raise AgentMaxStepsError(f"Agent '{spec.name}' {spec.max_steps} qadamga yetdi")
+
+        except AgentRuntimeError as exc:
+            log.warning(
+                "agent.run.limit_reached",
+                agent=spec.name,
+                error=str(exc),
+                steps=steps_count,
+                tool_calls=tool_calls_count,
+            )
+            return AgentRunResult(
+                agent_name=spec.name,
+                success=False,
+                output="",
+                sources=sources,
+                tool_calls_count=tool_calls_count,
+                steps_count=steps_count,
+                error=str(exc),
+            )
+        except Exception as exc:
+            log.exception("agent.run.error", agent=spec.name)
+            return AgentRunResult(
+                agent_name=spec.name,
+                success=False,
+                output="",
+                sources=sources,
+                tool_calls_count=tool_calls_count,
+                steps_count=steps_count,
+                error=f"Kutilmagan xato: {type(exc).__name__}: {exc}",
+            )
+
+    def _assemble_context(
+        self,
+        spec: AgentSpec,  # noqa: ARG002
+        task: str,
+        extra_context: list[ChatMessage] | None,
+    ) -> list[ChatMessage]:
+        """System prompt + task + extra context → xabarlar ro'yxati."""
+        messages: list[ChatMessage] = []
+
+        # Extra context (agar bor bo'lsa)
+        if extra_context:
+            messages.extend(extra_context)
+
+        # Foydalanuvchi vazifasi
+        messages.append(ChatMessage(role="user", content=task))
+
+        return messages
+
+    def _build_tool_specs(self, spec: AgentSpec) -> list[ToolSpec]:
+        """Agent uchun ruxsat etilgan toollarning LLM spetsifikatsiyalari."""
+        tool_specs: list[ToolSpec] = []
+        for tool_name in spec.tool_allowlist:
+            if self._tool_registry.has(tool_name):
+                tool = self._tool_registry.get(tool_name)
+                tool_specs.append(
+                    ToolSpec(
+                        name=tool.name,
+                        description=tool.description,
+                        input_schema=tool.input_schema,
+                    )
+                )
+        return tool_specs
+
+    async def _call_llm(
+        self,
+        messages: list[ChatMessage],
+        tools: list[ToolSpec],
+        spec: AgentSpec,
+    ) -> LLMResponse:
+        """LLM chaqiruvi — system prompt bilan."""
+        return await self._provider.complete(
+            model=self._model,
+            messages=messages,
+            system=spec.system_prompt,
+            tools=tools,
+            max_tokens=2048,
+            temperature=0.0,
+        )
+
+    async def _execute_tool(
+        self,
+        spec: AgentSpec,
+        tool_use: ToolUse,
+        sources: list[str],
+    ) -> ToolResult:
+        """Tool chaqiruvini bajaradi — allowlist va permission tekshiruvi bilan."""
+        # Allowlist tekshiruvi
+        if tool_use.name not in spec.tool_allowlist:
+            log.warning(
+                "agent.tool.denied",
+                agent=spec.name,
+                tool=tool_use.name,
+                reason="allowlist'da yo'q",
+            )
+            return ToolResult(
+                tool_name=tool_use.name,
+                success=False,
+                error=f"Tool '{tool_use.name}' agent '{spec.name}' uchun ruxsat etilmagan",
+            )
+
+        try:
+            result = await self._tool_registry.execute(
+                tool_use.name,
+                tool_use.arguments,
+                caller_permission=spec.permission_level,
+            )
+
+            # Manbalarni yig'ish (source tracking)
+            if result.success and result.output:
+                source = self._extract_source(tool_use.name, result)
+                if source:
+                    sources.append(source)
+
+            return result
+
+        except ToolNotFoundError:
+            return ToolResult(
+                tool_name=tool_use.name,
+                success=False,
+                error=f"Tool '{tool_use.name}' registry'da topilmadi",
+            )
+        except ToolError as exc:
+            return ToolResult(
+                tool_name=tool_use.name,
+                success=False,
+                error=str(exc),
+            )
+
+    def _extract_source(self, tool_name: str, result: ToolResult) -> str | None:
+        """Tool natijasidan manba ma'lumotini ajratish."""
+        if not result.output:
+            return None
+
+        # Oddiy euristik: output'da url yoki manba bo'lsa
+        output_str = str(result.output)
+        if "http" in output_str or "source" in output_str.lower():
+            return f"{tool_name}: {output_str[:200]}"
+
+        return None
+
+    def _format_tool_result(self, result: ToolResult) -> str:
+        """Tool natijasini LLM uchun formatlash."""
+        if result.success:
+            return str(result.output) if result.output is not None else "OK"
+        return f"XATO: {result.error or 'nomalum xato'}"

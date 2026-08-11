@@ -29,6 +29,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON, TypeDecorator, Uuid
 
 from zet.domain.enums import (
+    AgentStatus,
     ApprovalStatus,
     MessageRole,
     ModelTier,
@@ -105,6 +106,7 @@ class Base(DeclarativeBase):
         uuid.UUID: Uuid(as_uuid=True),
         datetime: UTCDateTime(),
         # Domen enum'lari — `Mapped[PermissionLevel]` avtomatik shu tipga tushadi
+        AgentStatus: enum_column(AgentStatus),
         ApprovalStatus: enum_column(ApprovalStatus),
         MessageRole: enum_column(MessageRole),
         ModelTier: enum_column(ModelTier),

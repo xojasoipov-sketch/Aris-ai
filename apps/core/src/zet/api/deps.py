@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from zet.agents.registry import AgentRegistry
 from zet.config import Settings, get_settings
 from zet.memory.store import MemoryStore
 from zet.security.killswitch import KillSwitchState
@@ -25,6 +26,15 @@ def get_memory_store() -> MemoryStore:
     Produksiyada PgMemoryStore bilan almashtiriladi.
     """
     return MemoryStore()
+
+
+@lru_cache(maxsize=1)
+def get_agent_registry() -> AgentRegistry:
+    """Global agent registry (singleton).
+
+    Produksiyada DB-backed versiyaga almashtiriladi.
+    """
+    return AgentRegistry()
 
 
 def get_config() -> Settings:

@@ -316,6 +316,179 @@ def mem_stats() -> None:
     out.print(f"[bold cyan]Xotira[/bold cyan]: {store.count} faol yozuv")
 
 
+# ── z agent ──────────────────────────────────────────────────────
+
+agent_app = typer.Typer(
+    name="agent",
+    help="Agent boshqaruvi (Bo'lim 3)",
+    no_args_is_help=True,
+)
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command("list")
+def agent_list(
+    status: str | None = typer.Option(None, "--status", "-s", help="Holat filtri"),
+) -> None:
+    """Agentlar ro'yxati."""
+    _setup()
+    from zet.api.deps import get_agent_registry
+    from zet.domain.enums import AgentStatus
+
+    registry = get_agent_registry()
+    filter_status = None
+    if status:
+        try:
+            filter_status = AgentStatus(status)
+        except ValueError:
+            out.print(f"[red]Noto'g'ri holat: {status}[/red]")
+            out.print(f"Mumkin: {', '.join(s.value for s in AgentStatus)}")
+            raise SystemExit(1) from None
+
+    agents = registry.list_agents(status=filter_status)
+    if not agents:
+        out.print("[yellow]Agent topilmadi[/yellow]")
+        return
+
+    table = Table(title="Agentlar", border_style="cyan")
+    table.add_column("Nom", style="bold")
+    table.add_column("Bo'lim", style="cyan")
+    table.add_column("Rol")
+    table.add_column("Holat")
+    table.add_column("Runlar", justify="right")
+    table.add_column("Muvaffaqiyat", justify="right")
+
+    for a in agents:
+        status_style = {
+            "active": "green",
+            "draft": "dim",
+            "testing": "yellow",
+            "paused": "yellow",
+            "disabled": "red",
+            "archived": "dim",
+        }.get(a.status.value, "")
+        table.add_row(
+            a.spec.name,
+            a.spec.division,
+            a.spec.role,
+            f"[{status_style}]{a.status.value}[/{status_style}]",
+            str(a.total_runs),
+            f"{a.success_rate:.0%}" if a.total_runs > 0 else "-",
+        )
+
+    out.print(table)
+
+
+@agent_app.command("register")
+def agent_register(
+    name: str = typer.Argument(..., help="Agent nomi"),
+    description: str = typer.Option(..., "--desc", "-d", help="Tavsif"),
+    prompt: str = typer.Option(..., "--prompt", "-p", help="System prompt"),
+    division: str = typer.Option("general", "--division", help="Bo'lim"),
+    role: str = typer.Option("assistant", "--role", help="Rol"),
+) -> None:
+    """Yangi agentni ro'yxatga olish."""
+    _setup()
+    from zet.api.deps import get_agent_registry
+    from zet.domain.agent import AgentSpec
+
+    registry = get_agent_registry()
+
+    try:
+        spec = AgentSpec(
+            name=name,
+            description=description,
+            system_prompt=prompt,
+            division=division,
+            role=role,
+        )
+        state = registry.register(spec)
+        out.print(f"[green]✓[/green] Agent ro'yxatga olindi: [bold]{state.spec.name}[/bold]")
+        out.print(f"  Holat: [dim]{state.status.value}[/dim]")
+        out.print(f"  Bo'lim: [cyan]{state.spec.division}[/cyan], rol: {state.spec.role}")
+    except ValueError as exc:
+        out.print(f"[red]Xato: {exc}[/red]")
+        raise SystemExit(1) from None
+
+
+@agent_app.command("info")
+def agent_info(
+    name: str = typer.Argument(..., help="Agent nomi"),
+) -> None:
+    """Agent ma'lumotlarini ko'rsatish."""
+    _setup()
+    from zet.agents.registry import AgentNotFoundError
+    from zet.api.deps import get_agent_registry
+
+    registry = get_agent_registry()
+
+    try:
+        state = registry.get(name)
+    except AgentNotFoundError:
+        out.print(f"[red]Agent '{name}' topilmadi[/red]")
+        raise SystemExit(1) from None
+
+    out.print(
+        Panel(
+            f"[bold]{state.spec.name}[/bold] — {state.spec.description}\n"
+            f"  Bo'lim: [cyan]{state.spec.division}[/cyan], Rol: {state.spec.role}\n"
+            f"  Holat: {state.status.value}\n"
+            f"  Model: {state.spec.model_policy.value}, Ruxsat: {state.spec.permission_level.value}\n"
+            f"  Tormozlar: max_steps={state.spec.max_steps}, "
+            f"max_tools={state.spec.max_tool_calls}, timeout={state.spec.timeout_s}s\n"
+            f"  Toollar: {', '.join(state.spec.tool_allowlist) or 'yoq'}\n"
+            f"  Runlar: {state.total_runs} (✓{state.successful_runs} ✗{state.failed_runs})",
+            title="Agent Info",
+            border_style="cyan",
+        )
+    )
+
+
+@agent_app.command("status")
+def agent_status(
+    name: str = typer.Argument(..., help="Agent nomi"),
+    action: str = typer.Argument(
+        ...,
+        help="Amal: activate, start_testing, pause, disable, archive, reset_to_draft",
+    ),
+    reason: str = typer.Option("", "--reason", "-r", help="Sabab (disable uchun)"),
+) -> None:
+    """Agent holatini o'zgartirish (V-11 lifecycle)."""
+    _setup()
+    from zet.agents.lifecycle import AgentLifecycle, AgentLifecycleError
+    from zet.agents.registry import AgentNotFoundError
+    from zet.api.deps import get_agent_registry
+
+    registry = get_agent_registry()
+    lifecycle = AgentLifecycle(registry)
+
+    action_map = {
+        "activate": lifecycle.activate,
+        "start_testing": lifecycle.start_testing,
+        "pause": lifecycle.pause,
+        "archive": lifecycle.archive,
+        "reset_to_draft": lifecycle.reset_to_draft,
+    }
+
+    try:
+        if action == "disable":
+            state = lifecycle.disable(name, reason=reason)
+        elif action in action_map:
+            state = action_map[action](name)
+        else:
+            out.print(f"[red]Noto'g'ri amal: {action}[/red]")
+            out.print(f"Mumkin: {', '.join([*action_map, 'disable'])}")
+            raise SystemExit(1)
+
+        out.print(f"[green]✓[/green] Agent '{name}' holati: [bold]{state.status.value}[/bold]")
+    except AgentNotFoundError:
+        out.print(f"[red]Agent '{name}' topilmadi[/red]")
+        raise SystemExit(1) from None
+    except AgentLifecycleError as exc:
+        out.print(f"[red]Lifecycle xatosi: {exc}[/red]")
+        raise SystemExit(1) from None
+
+
 # ── z budget ──────────────────────────────────────────────────────
 
 
