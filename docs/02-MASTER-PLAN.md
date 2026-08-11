@@ -1,5 +1,10 @@
 # ZET — Master Plan (12 bo'lim / 18 faza)
 
+> ⚠️ **Ketma-ketlik yangilandi.** Egasining cheklovlari (`C-01…C-07`) asosida
+> bo'limlar tartibi qayta tuzildi va MVP nuqtasi belgilandi:
+> [`04-CONSTRAINTS.md`](04-CONSTRAINTS.md). Quyidagi jadval **asl** tartibni saqlaydi
+> (har bir bo'limning qamrovi o'zgarmagan) — faqat **bajarilish tartibi** o'zgardi.
+
 > Prinsip (V-44/V-45): **hammasini birdan qurma.**
 > Har bir bo'lim oxirida 4 ta artefakt majburiy: **Implementation · Tests · Verification · Documentation.**
 > Bo'lim tugamaguncha keyingisi boshlanmaydi.

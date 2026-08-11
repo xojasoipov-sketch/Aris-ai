@@ -1,6 +1,12 @@
 # BO'LIM 1 — Poydevor + Z Core (P0 + P1)
 
-> Umumiy baho: **15–20 ish kuni (3–4 hafta)** · 18 ta task
+> ⚠️ **Lean versiya amalda.** `C-07` (tezlik) uchun bu bo'lim qisqartirildi:
+> Langfuse va SSE keyinga surildi, Z1.9 Z1.8 ichiga qo'shildi, Z1.5 esa
+> 4 tier'li Model Router + `QuotaManager` bilan kengaytirildi (`ADR-0006`).
+> Yakuniy ro'yxat va kunlar: [`04-CONSTRAINTS.md`](04-CONSTRAINTS.md) → "Lean Bo'lim 1".
+> Quyidagi to'liq spetsifikatsiya kuchda qoladi — o'zgarishlar faqat qamrov va tartibga tegishli.
+
+> Umumiy baho: **~17 ish kuni (lean)** / 24 kun (to'liq) · 18 ta task
 > Bo'lim maqsadi: **buyruqni tushunadigan, reja tuzadigan, xavfli amalda to'xtab tasdiq
 > so'raydigan, bajaradigan, natijani tekshiradigan va har bir qadamni xarajati bilan
 > yozib qo'yadigan ishlaydigan yadro.**
