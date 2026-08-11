@@ -33,6 +33,7 @@ from zet.api.deps import (
     get_engine,
     get_killswitch,
     get_llm_providers,
+    get_notifier,
     get_permission_policy,
     get_tool_registry,
 )
@@ -94,6 +95,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     providers = get_llm_providers()
     for provider in providers.values():
         await provider.aclose()
+    notifier = get_notifier()
+    if hasattr(notifier, "aclose"):
+        await notifier.aclose()
     await get_engine().dispose()
 
 

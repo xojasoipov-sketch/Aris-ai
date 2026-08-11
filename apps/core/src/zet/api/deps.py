@@ -120,9 +120,20 @@ def get_daily_schedule_manager() -> DailyScheduleManager:
 def get_notifier() -> Notifier:
     """Global bildirishnoma yuboruvchi (singleton).
 
-    Hozircha `StubNotifier` — real Telegram transport ulanguncha
-    (`ZetBot`/aiogram) xabarlar faqat xotirada saqlanadi va log qilinadi.
+    Telegram token va kamida bitta owner ID sozlangan bo'lsa — haqiqiy
+    `TelegramNotifier` (Bot API orqali yuboradi). Aks holda `StubNotifier`
+    (xotirada saqlaydi, hech qayerga yubormaydi) — masalan testlarda yoki
+    hali sozlanmagan o'rnatishda.
     """
+    settings = get_settings()
+    owner_ids = settings.telegram_owner_id_set
+    if settings.telegram_bot_token is not None and owner_ids:
+        from zet.telegram.http_notifier import TelegramNotifier
+
+        return TelegramNotifier(
+            token=settings.telegram_bot_token.get_secret_value(),
+            owner_chat_id=next(iter(owner_ids)),
+        )
     return StubNotifier()
 
 
@@ -242,4 +253,5 @@ def get_telegram_bot() -> object:
         token=token,
         owner_ids=settings.telegram_owner_id_set,
         stt=StubSTT(),
+        notifier=get_notifier(),
     )
