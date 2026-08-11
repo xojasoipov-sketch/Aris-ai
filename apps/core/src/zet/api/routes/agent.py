@@ -1,14 +1,16 @@
-"""Agent API endpoint'lari (Bo'lim 3).
+"""Agent API endpoint'lari (Bo'lim 3-4).
 
-Agent CRUD, lifecycle va run:
+Agent CRUD, lifecycle, run va factory:
     POST   /api/v1/agents           — yangi agent ro'yxatga olish
     GET    /api/v1/agents           — agentlar ro'yxati
     GET    /api/v1/agents/{name}    — agent ma'lumotlari
     PATCH  /api/v1/agents/{name}/status — holat o'zgartirish (V-11)
     POST   /api/v1/agents/{name}/run    — agentni ishga tushirish
+    POST   /api/v1/agents/factory   — tabiy tildan agent yaratish (V-10)
 
 Bog'liq qarorlar:
     A-02 — agent = ma'lumot
+    V-10 — Agent Factory oqimi
     V-11 — lifecycle avtomati
     A-07 — tormozlar
 """
@@ -109,6 +111,43 @@ class AgentRunResponse(BaseModel):
     error: str | None = None
 
 
+class FactoryCreateRequest(BaseModel):
+    """Factory: tabiy til bilan agent yaratish so'rovi (V-10)."""
+
+    description: str = Field(..., min_length=5, max_length=2000)
+    auto_activate: bool = False
+
+
+class EvalCaseResponse(BaseModel):
+    """Eval holat natijasi."""
+
+    name: str
+    description: str
+    passed: bool
+    error: str | None = None
+
+
+class EvalResultResponse(BaseModel):
+    """Eval natijasi javobi."""
+
+    agent_name: str
+    total: int
+    passed: int
+    failed: int
+    success: bool
+    cases: list[EvalCaseResponse]
+
+
+class FactoryCreateResponse(BaseModel):
+    """Factory natijasi javobi."""
+
+    success: bool
+    agent: AgentResponse | None = None
+    eval_result: EvalResultResponse | None = None
+    steps: list[str]
+    error: str | None = None
+
+
 # ── Yordamchi ─────────────────────────────────────────────────────
 
 
@@ -180,6 +219,59 @@ async def create_agent(
         return _state_to_response(state)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/factory", response_model=FactoryCreateResponse, status_code=201)
+async def factory_create_agent(
+    request: FactoryCreateRequest,
+    registry: AgentRegistry = Depends(get_agent_registry),
+) -> FactoryCreateResponse:
+    """Tabiy til buyrug'i bilan agent yaratish (V-10 Factory).
+
+    Oqim: UNDERSTAND → CHECK EXISTING → DESIGN → TOOLS → PERMISSIONS
+    → PROMPT → REGISTER → TESTING → EVAL → (ixtiyoriy ACTIVATE)
+    """
+    from zet.agents.eval import EvalRunner
+    from zet.agents.factory import AgentFactory, FactoryRequest
+
+    lifecycle = AgentLifecycle(registry)
+    factory = AgentFactory(registry, lifecycle, EvalRunner())
+
+    factory_request = FactoryRequest(
+        description=request.description,
+        auto_activate=request.auto_activate,
+    )
+    result = factory.create(factory_request)
+
+    # Eval natijasini response ga o'girish
+    eval_response = None
+    if result.eval_result is not None:
+        eval_response = EvalResultResponse(
+            agent_name=result.eval_result.agent_name,
+            total=result.eval_result.total,
+            passed=result.eval_result.passed,
+            failed=result.eval_result.failed,
+            success=result.eval_result.success,
+            cases=[
+                EvalCaseResponse(
+                    name=c.name,
+                    description=c.description,
+                    passed=c.passed,
+                    error=c.error,
+                )
+                for c in result.eval_result.cases
+            ],
+        )
+
+    agent_response = _state_to_response(result.agent_state) if result.agent_state else None
+
+    return FactoryCreateResponse(
+        success=result.success,
+        agent=agent_response,
+        eval_result=eval_response,
+        steps=list(result.steps),
+        error=result.error,
+    )
 
 
 @router.get("", response_model=list[AgentResponse])

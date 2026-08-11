@@ -411,6 +411,55 @@ def agent_register(
         raise SystemExit(1) from None
 
 
+@agent_app.command("create")
+def agent_create(
+    description: str = typer.Argument(..., help="Tabiy tilda agent tavsifi"),
+    auto_activate: bool = typer.Option(
+        False, "--auto-activate", "-a", help="Eval muvaffaqiyatli bo'lsa avtomatik ACTIVE"
+    ),
+) -> None:
+    """Tabiy til buyrug'i bilan agent yaratish (V-10 Factory).
+
+    Misol: z agent create "YouTube analitikasini kuzatadigan agent"
+    """
+    _setup()
+    from zet.agents.eval import EvalRunner
+    from zet.agents.factory import AgentFactory, FactoryRequest
+    from zet.agents.lifecycle import AgentLifecycle
+    from zet.api.deps import get_agent_registry
+
+    registry = get_agent_registry()
+    lifecycle = AgentLifecycle(registry)
+    factory = AgentFactory(registry, lifecycle, EvalRunner())
+
+    request = FactoryRequest(description=description, auto_activate=auto_activate)
+    result = factory.create(request)
+
+    if result.success:
+        agent = result.agent_state
+        out.print(f"[green]✓[/green] Agent yaratildi: [bold]{agent.spec.name}[/bold]")  # type: ignore[union-attr]
+        out.print(f"  Holat: {agent.status.value}")  # type: ignore[union-attr]
+        out.print(f"  Bo'lim: [cyan]{agent.spec.division}[/cyan], rol: {agent.spec.role}")  # type: ignore[union-attr]
+        out.print(f"  Toollar: {', '.join(agent.spec.tool_allowlist) or 'yoq'}")  # type: ignore[union-attr]
+
+        if result.eval_result:
+            out.print(
+                f"  Eval: {result.eval_result.passed}/{result.eval_result.total} "
+                f"({'[green]✓[/green]' if result.eval_result.success else '[red]✗[/red]'})"
+            )
+    else:
+        out.print("[red]✗ Agent yaratish muvaffaqiyatsiz[/red]")
+        if result.error:
+            out.print(f"  Xato: {result.error}")
+        raise SystemExit(1)
+
+    # Qadamlarni ko'rsatish
+    if result.steps:
+        out.print("\n[dim]Qadamlar:[/dim]")
+        for step in result.steps:
+            out.print(f"  [dim]→ {step}[/dim]")
+
+
 @agent_app.command("info")
 def agent_info(
     name: str = typer.Argument(..., help="Agent nomi"),
