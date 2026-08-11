@@ -44,7 +44,7 @@ vault/
 logs/
 *.db
 *.sqlite3
-models/
+/models/
 .ollama/
 
 # ── IDE / OS ───────────────────────────────────────────────────────
