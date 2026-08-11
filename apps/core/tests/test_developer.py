@@ -95,11 +95,11 @@ class TestDeveloperAgent:
         """__init__ eksport va to'g'ridan-to'g'ri import bir xil."""
         assert DEVELOPER_AGENT_SPEC is DEV_DIRECT
 
-    def test_eight_specs_total(self) -> None:
-        """Jami 8 ta agent spec eksport qilingan."""
+    def test_nine_specs_total(self) -> None:
+        """Jami 9 ta agent spec eksport qilingan (Bo'lim 8 — Vision qo'shildi)."""
         from zet.agents.builtin import __all__
 
-        assert len(__all__) == 8
+        assert len(__all__) == 9
 
 
 # ── WebReaderTool ────────────────────────────────────────────────
