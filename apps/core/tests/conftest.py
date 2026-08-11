@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from zet.db.base import Base
 from zet.db.models import Conversation, Owner
 from zet.db.session import create_engine, create_session_factory
+from zet.security.killswitch import KillSwitchState
+from zet.security.permissions import PermissionPolicy
 
 
 @pytest.fixture
@@ -57,3 +59,18 @@ async def conversation(session: AsyncSession, owner: Owner) -> Conversation:
     await session.commit()
     await session.refresh(c)
     return c
+
+
+# ── Security fixture'lari ─────────────────────────────────────────
+
+
+@pytest.fixture
+def killswitch() -> KillSwitchState:
+    """Yangi KillSwitchState instance."""
+    return KillSwitchState()
+
+
+@pytest.fixture
+def permission_policy() -> PermissionPolicy:
+    """Default PermissionPolicy."""
+    return PermissionPolicy()
