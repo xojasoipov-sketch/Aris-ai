@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     Bo'sh bo'lsa — hech kimga ruxsat yo'q (fail-closed).
     """
 
+    # ── GitHub (Bo'lim 7) ────────────────────────────────────────────
+    github_token: SecretStr | None = None
+    """GitHub Personal Access Token. Bo'lsa — `github.read`/`github.write`
+    haqiqiy API'ga chiqadi; bo'lmasa — stub rejimda ishlaydi."""
+
     # ── Xavfsizlik ─────────────────────────────────────────────────
     owner_id: str = "owner"
     api_token: SecretStr | None = None

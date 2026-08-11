@@ -29,6 +29,7 @@ def build_default_registry(
     notes_dir: Path,
     enable_shell: bool = False,
     web_reader_stub: bool = True,
+    github_token: str | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
 
@@ -39,6 +40,8 @@ def build_default_registry(
             o'chirilgan — eng xavfli komponent, faqat aniq yoqilganda).
         web_reader_stub: `web.read` stub rejimida ishlasinmi (default: ha).
             Haqiqiy tarmoq chaqiruvi uchun `False` bering.
+        github_token: berilsa — `github.read`/`github.write` haqiqiy API'ga
+            chiqadi; bo'lmasa (default) — stub rejim.
 
     Returns:
         Ro'yxatga olingan `ToolRegistry`.
@@ -48,8 +51,8 @@ def build_default_registry(
     registry.register(NoteWriteTool(notes_dir=notes_dir))
     registry.register(WebSearchTool())
     registry.register(WebReaderTool(stub=web_reader_stub))
-    registry.register(GitHubReadTool())
-    registry.register(GitHubWriteTool())
+    registry.register(GitHubReadTool(token=github_token))
+    registry.register(GitHubWriteTool(token=github_token))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))
     return registry

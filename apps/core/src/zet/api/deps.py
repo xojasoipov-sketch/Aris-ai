@@ -82,6 +82,7 @@ def get_tool_registry() -> ToolRegistry:
     return build_default_registry(
         notes_dir=settings.vault_dir,
         enable_shell=settings.enable_shell,
+        github_token=(settings.github_token.get_secret_value() if settings.github_token else None),
     )
 
 
