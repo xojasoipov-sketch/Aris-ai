@@ -99,8 +99,10 @@ class Settings(BaseSettings):
     fazoda bo'lgani uchun qidiruvda hisobga olinmaydi (`pg_store`).
     """
 
-    gemini_embed_model: str = "text-embedding-004"
-    """Gemini embedding modeli (768 o'lcham, ko'p tilli)."""
+    gemini_embed_model: str = "gemini-embedding-001"
+    """Gemini embedding modeli (3072 o'lcham, ko'p tilli).
+
+    `text-embedding-004` eskirgan — jonli tekshiruvda 404 qaytardi."""
 
     mistral_embed_model: str = "mistral-embed"
     """Mistral embedding modeli (1024 o'lcham)."""

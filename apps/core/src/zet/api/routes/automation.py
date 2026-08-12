@@ -19,6 +19,10 @@
                                                           triggerlarni haqiqatan bajaradi)
     GET    /api/v1/automation/stats                    — umumiy statistika
 
+    GET    /api/v1/automation/recipes                  — 6 TIZIM retsepti + HALOL holat
+    GET    /api/v1/automation/recipes/{code}            — bitta retsept
+    POST   /api/v1/automation/recipes/{code}/install    — tayyorini o'rnatish
+
 Ilgari `AutomationEngine`/`WorkflowRunner`/`Scheduler` faqat ma'lumot
 modeli edi — hech qanday API route yoki kod ularni ishlatmasdi
 (gap-analysis: "wired to nothing"). Endi shu route'lar orqali haqiqiy
@@ -40,6 +44,7 @@ from zet.agents.registry import AgentRegistry
 from zet.api.deps import (
     get_agent_registry,
     get_automation_engine,
+    get_config,
     get_model_router,
     get_permission_policy,
     get_tool_registry,
@@ -47,9 +52,23 @@ from zet.api.deps import (
 )
 from zet.automation.engine import AutomationEngine, AutomationEvent
 from zet.automation.executor import AgentUnavailableError, WorkflowExecutor, run_agent_command
+from zet.automation.recipes import (
+    RECIPES,
+    Capability,
+    Recipe,
+    RecipeNotReadyError,
+    RecipeReadiness,
+    RecipeStatus,
+    TriggerKind,
+    detect_capabilities,
+    evaluate,
+    get_recipe,
+    install,
+)
 from zet.automation.scheduler import ScheduleRule, ScheduleStatus
 from zet.automation.triggers import EventTrigger, TriggerCondition, TriggerType
 from zet.automation.workflow import WorkflowChain, WorkflowStatus, WorkflowStep
+from zet.config import Settings
 from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
 from zet.security.permissions import PermissionPolicy
@@ -381,3 +400,104 @@ def get_stats(
 ) -> dict[str, dict[str, int]]:
     """Umumiy statistika (jadvallar, triggerlar, workflowlar, hodisalar)."""
     return engine.stats
+
+
+# ── TIZIM retseptlari (yangi zip) ─────────────────────────────────
+
+
+class RecipeDetailResponse(BaseModel):
+    """Retsept + uning HAQIQIY tayyorlik holati."""
+
+    code: str
+    name: str
+    promise: str
+    trigger_kind: TriggerKind
+    trigger_spec: str
+    result: str
+    steps: list[dict[str, str]]
+    status: RecipeStatus
+    missing: list[Capability]
+    blocked_steps: list[int]
+
+
+class RecipeInstallResponse(BaseModel):
+    """O'rnatish natijasi."""
+
+    code: str
+    installed_id: str
+    kind: TriggerKind
+
+
+def _detail(recipe: Recipe, readiness: RecipeReadiness) -> RecipeDetailResponse:
+    return RecipeDetailResponse(
+        code=recipe.code,
+        name=recipe.name,
+        promise=recipe.promise,
+        trigger_kind=recipe.trigger_kind,
+        trigger_spec=recipe.trigger_spec,
+        result=recipe.result,
+        steps=[
+            {"order": str(s.order), "title": s.title, "agent_name": s.agent_name}
+            for s in recipe.steps
+        ],
+        status=readiness.status,
+        missing=readiness.missing,
+        blocked_steps=readiness.blocked_steps,
+    )
+
+
+@router.get("/recipes", response_model=list[RecipeDetailResponse])
+def list_recipes(
+    settings: Settings = Depends(get_config),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+) -> list[RecipeDetailResponse]:
+    """Oltita TIZIM retsepti va ularning HALOL holati.
+
+    Imkoniyati yetishmagan retsept "ready" deb ko'rsatilmaydi — aynan
+    qaysi imkoniyat yo'qligi `missing` da qaytadi.
+    """
+    available = detect_capabilities(settings, tool_registry)
+    return [_detail(recipe, evaluate(recipe, available)) for recipe in RECIPES]
+
+
+@router.get("/recipes/{code}", response_model=RecipeDetailResponse)
+def get_recipe_detail(
+    code: str,
+    settings: Settings = Depends(get_config),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+) -> RecipeDetailResponse:
+    """Bitta retsept tafsiloti."""
+    recipe = get_recipe(code)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Retsept topilmadi")
+    available = detect_capabilities(settings, tool_registry)
+    return _detail(recipe, evaluate(recipe, available))
+
+
+@router.post("/recipes/{code}/install", response_model=RecipeInstallResponse, status_code=201)
+def install_recipe(
+    code: str,
+    engine: AutomationEngine = Depends(get_automation_engine),
+    settings: Settings = Depends(get_config),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+) -> RecipeInstallResponse:
+    """Tayyor retseptni o'rnatish (jadval yoki trigger sifatida).
+
+    Imkoniyati yetishmasa — 409, sababi bilan. Chala ishlaydigan
+    avtomatlashtirish o'rnatilmaydi.
+    """
+    recipe = get_recipe(code)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Retsept topilmadi")
+
+    available = detect_capabilities(settings, tool_registry)
+    try:
+        installed_id = install(recipe, engine, available)
+    except RecipeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return RecipeInstallResponse(
+        code=recipe.code,
+        installed_id=installed_id,
+        kind=recipe.trigger_kind,
+    )

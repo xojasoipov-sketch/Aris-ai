@@ -40,7 +40,7 @@ class TestModelTagWritten:
     """Yozuvda model belgisi saqlanadi."""
 
     async def test_tag_stored_next_to_vector(self, session: AsyncSession, owner: Owner) -> None:
-        embedder = _Embedder("gemini:text-embedding-004", [0.1, 0.2])
+        embedder = _Embedder("gemini:gemini-embedding-001", [0.1, 0.2])
         store = PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
 
         entry = await store.add(layer=MemoryLayer.PERSONAL, content="salom")
@@ -98,7 +98,7 @@ class TestCrossSpaceIsolation:
     async def test_same_space_is_compared(self, session: AsyncSession, owner: Owner) -> None:
         """Bir xil model — vektor qidiruvi ISHLAYDI (regressiya qorovuli)."""
         vector = [1.0, 0.0, 0.0]
-        embedder = _Embedder("gemini:text-embedding-004", vector)
+        embedder = _Embedder("gemini:gemini-embedding-001", vector)
         store = PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
 
         await store.add(layer=MemoryLayer.PERSONAL, content="mutlaqo boshqa matn")

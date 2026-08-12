@@ -22,7 +22,7 @@ from zet.memory.embeddings import (
 )
 
 GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent"
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 )
 MISTRAL_URL = "https://api.mistral.ai/v1/embeddings"
 
@@ -59,7 +59,32 @@ class TestGemini:
         assert await GeminiEmbeddingProvider(api_key="k").embed("   ") is None
 
     def test_model_id_names_the_vector_space(self) -> None:
-        assert GeminiEmbeddingProvider(api_key="k").model_id == "gemini:text-embedding-004"
+        assert GeminiEmbeddingProvider(api_key="k").model_id == "gemini:gemini-embedding-001"
+
+    @respx.mock
+    async def test_key_travels_in_header_not_url(self) -> None:
+        """Kalit URL'da bo'lmasligi SHART.
+
+        Jonli Railway log'ida kalit ochiq ko'ringan edi: httpx xato
+        matniga to'liq URL'ni qo'shadi, `?key=...` esa shu URL ichida
+        edi. Header'dagi kalit xato matniga tushmaydi.
+        """
+        route = respx.post(GEMINI_URL).mock(
+            return_value=httpx.Response(200, json={"embedding": {"values": [0.1]}})
+        )
+        await GeminiEmbeddingProvider(api_key="MAXFIY-KALIT").embed("salom")
+
+        request = route.calls.last.request
+        assert "MAXFIY-KALIT" not in str(request.url)
+        assert request.headers["x-goog-api-key"] == "MAXFIY-KALIT"
+
+    @respx.mock
+    async def test_key_absent_from_logged_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Xato log'ida ham kalit chiqmasin."""
+        respx.post(GEMINI_URL).mock(return_value=httpx.Response(404))
+        await GeminiEmbeddingProvider(api_key="MAXFIY-KALIT").embed("salom")
+
+        assert "MAXFIY-KALIT" not in caplog.text
 
 
 class TestMistral:

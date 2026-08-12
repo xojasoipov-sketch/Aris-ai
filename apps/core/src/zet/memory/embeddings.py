@@ -11,7 +11,7 @@ shu sabab semantik qidiruv produksiyada jim o'chiq turgan edi — yozish
 va o'qish ishlardi, "ma'noga qarab qidirish" esa yo'q edi. Z39.2 ikkita
 bulut provayderini qo'shadi:
 
-    `GeminiEmbeddingProvider`  — `text-embedding-004` (768 o'lcham)
+    `GeminiEmbeddingProvider`  — `gemini-embedding-001` (3072 o'lcham)
     `MistralEmbeddingProvider` — `mistral-embed` (1024 o'lcham)
 
 MODEL BELGISI SHART. `bge-m3` ham, `mistral-embed` ham 1024 o'lchamli —
@@ -50,7 +50,7 @@ class EmbeddingProvider(Protocol):
 
     @property
     def model_id(self) -> str:
-        """Vektor fazosini bir xil aniqlaydigan belgi (masalan 'gemini:text-embedding-004')."""
+        """Vektor fazosini bir xil aniqlaydigan belgi (masalan 'gemini:gemini-embedding-001')."""
         ...
 
     async def embed(self, text: str) -> list[float] | None:
@@ -137,12 +137,22 @@ class OllamaEmbeddingProvider:
 class GeminiEmbeddingProvider:
     """Google Generative Language API orqali embedding (bulut, bepul kvota bor).
 
-    Endpoint: `POST /v1beta/models/{model}:embedContent?key=...`
+    Endpoint: `POST /v1beta/models/{model}:embedContent`
     Javob: `{"embedding": {"values": [...]}}`
 
-    Default model `text-embedding-004` — 768 o'lchamli, ko'p tilli
+    Default model `gemini-embedding-001` — 3072 o'lchamli, ko'p tilli
     (o'zbekcha, ruscha, inglizcha). Railway'da Ollama yo'q bo'lgani
     uchun produksiyada asosiy tanlov shu.
+
+    `text-embedding-004` ATAYLAB ishlatilmaydi — jonli tekshiruvda u
+    404 qaytardi (Google uni olib tashlagan). Model nomini o'zgartirish
+    vektor fazosini ham o'zgartiradi, shuning uchun `model_id` orqali
+    eski yozuvlar avtomatik ajratiladi (`pg_store`).
+
+    KALIT HEADER ORQALI, URL'da EMAS. Ilgari u `?key=...` edi va httpx
+    xato matniga to'liq URL'ni qo'shgani uchun **kalit log'ga tushib
+    qolgan** (Railway'da jonli ko'rildi). `x-goog-api-key` header'i
+    xato matniga kirmaydi.
     """
 
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -151,7 +161,7 @@ class GeminiEmbeddingProvider:
         self,
         *,
         api_key: str,
-        model: str = "text-embedding-004",
+        model: str = "gemini-embedding-001",
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 15.0,
     ) -> None:
@@ -179,7 +189,7 @@ class GeminiEmbeddingProvider:
         try:
             response = await self._get_client().post(
                 f"{self.BASE_URL}/models/{self._model}:embedContent",
-                params={"key": self._api_key},
+                headers={"x-goog-api-key": self._api_key},
                 json={
                     "model": f"models/{self._model}",
                     "content": {"parts": [{"text": text}]},
