@@ -3,7 +3,10 @@ name = "zet"
 version = "0.1.0"
 description = "ZET — shaxsiy AI operatsion tizim (yadro)"
 requires-python = ">=3.12"
-license = { file = "../../LICENSE" }
+# Proprietary — to'liq matn repo ildizidagi LICENSE faylida.
+# Yo'l bilan ko'rsatilmaydi: build konteksti apps/core bo'lganda
+# (Docker/Railway) ../../LICENSE mavjud bo'lmaydi va build yiqiladi.
+license = "LicenseRef-Proprietary"
 
 dependencies = [
     # Web / API
