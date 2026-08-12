@@ -120,3 +120,26 @@ class TestUnfundedProvidersArePlacedLast:
                     f"{task_class.value}: balanssiz '{provider}' "
                     f"ishlaydigan {later & self.VERIFIED_WORKING} dan oldin turibdi"
                 )
+
+
+class TestVisionChainHasAFallback:
+    """Rasm vazifasi yagona modelga bog'lanib qolmasin.
+
+    Jonli misolda VISION zanjirida ishlaydigan bitta model bor edi
+    (`anthropic:haiku` sozlanmagan) va u bepul kvota limitiga urilganda
+    butun buyruq yiqilardi.
+    """
+
+    def test_at_least_two_vision_models_are_routed(self) -> None:
+        from zet.domain.enums import TaskClass
+        from zet.llm.catalog import ROUTING
+
+        assert len(ROUTING[TaskClass.VISION]) >= 3
+
+    def test_every_vision_entry_actually_supports_vision(self) -> None:
+        """Zanjirga matn-only model tushib qolmasin — u rasmni ko'rmaydi."""
+        from zet.domain.enums import TaskClass
+        from zet.llm.catalog import CATALOG, ROUTING
+
+        for key in ROUTING[TaskClass.VISION]:
+            assert CATALOG[key].supports_vision, f"{key} rasmni qo'llab-quvvatlamaydi"

@@ -94,6 +94,22 @@ _T1: Final[tuple[ModelSpec, ...]] = (
         free_rpd=500,
         free_rpm=20,
     ),
+    # 2026-08-12 jonli tekshirilgan: base64 rasm bilan so'rov yuborildi,
+    # to'g'ri javob qaytdi ("Bu rasmda qizil rang bor").
+    #
+    # NEGA KERAK: bungacha VISION zanjirida ikkita yozuv bor edi va
+    # ulardan biri (`anthropic:haiku`) sozlanmagan, ikkinchisi esa bepul
+    # kvotada tez-tez limitga uriladi — ya'ni rasm bilan bog'liq har
+    # qanday vazifa yagona modelga bog'lanib qolgandi.
+    ModelSpec(
+        key="mistral:pixtral",
+        provider="mistral",
+        model="pixtral-12b-2409",
+        tier=ModelTier.T1_FREE,
+        supports_vision=True,
+        free_rpd=500,
+        free_rpm=20,
+    ),
     # 2026-08-12 jonli tekshirilgan: javob qaytardi.
     ModelSpec(
         key="cohere:command-r",
@@ -239,6 +255,7 @@ ROUTING: Final[dict[TaskClass, tuple[str, ...]]] = {
     ),
     TaskClass.VISION: (
         "google:gemini-flash",
+        "mistral:pixtral",
         "anthropic:haiku",
     ),
     # Ovoz lokal `faster-whisper` bilan (Bo'lim 4) — bu yerda zaxira yo'l
