@@ -24,9 +24,19 @@ from collections.abc import Sequence
 
 import structlog
 
-from zet.domain.enums import PermissionLevel, StepStatus, TrustLevel
+from zet.domain.command import ConversationTurn
+from zet.domain.enums import (
+    MessageRole,
+    PermissionLevel,
+    StepStatus,
+    TaskClass,
+    TrustLevel,
+)
 from zet.domain.plan import Plan, PlanStep
 from zet.domain.tool import ToolResult
+from zet.llm.base import ChatMessage, LLMError
+from zet.llm.router import ModelRouter
+from zet.prompts.answer import ANSWER_SYSTEM, build_answer_prompt
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionDecision, PermissionPolicy
 from zet.tools.registry import ToolRegistry
@@ -35,6 +45,21 @@ log = structlog.get_logger(__name__)
 
 _MAX_RETRIES = 2
 """Xatoli qadam uchun maksimal qayta urinish (faqat idempotent toollar)."""
+
+
+def _history_to_messages(history: Sequence[ConversationTurn]) -> list[ChatMessage]:
+    """Domen tarixini LLM xabarlariga o'giradi.
+
+    Konvertatsiya AYNAN shu yerda: `domain` qatlami `llm` ga bog'lanmasligi
+    kerak (aylanma import), `core` esa ikkalasini ham biladi.
+    """
+    return [
+        ChatMessage(
+            role="user" if turn.role == MessageRole.USER else "assistant",
+            content=turn.content,
+        )
+        for turn in history
+    ]
 
 
 class ExecutorError(Exception):
@@ -65,12 +90,23 @@ class StepResult:
         tool_result: ToolResult | None = None,
         error: str | None = None,
         retries: int = 0,
+        output: str = "",
     ) -> None:
         self.step = step
         self.status = status
         self.tool_result = tool_result
         self.error = error
         self.retries = retries
+        self.output = output
+
+    @property
+    def text(self) -> str:
+        """Qadamning matnli natijasi — fikrlash chiqishi yoki tool javobi."""
+        if self.output:
+            return self.output
+        if self.tool_result is not None and self.tool_result.success:
+            return str(self.tool_result.output)
+        return ""
 
 
 class ExecutionContext:
@@ -107,12 +143,20 @@ class Executor:
         policy: PermissionPolicy,
         killswitch: KillSwitchState,
         budget_usd: float = 0.10,
+        router: ModelRouter | None = None,
+        command_text: str = "",
+        history: Sequence[ConversationTurn] = (),
     ) -> None:
         self._registry = registry
         self._policy = policy
         self._killswitch = killswitch
         self._budget_usd = budget_usd
         self._spent_usd: float = 0.0
+        # `router` berilmasa fikrlash qadami matn yozmaydi (eski
+        # xatti-harakat). Produksiyada Orchestrator uni doim uzatadi.
+        self._router = router
+        self._command_text = command_text
+        self._history = list(history)
 
     @property
     def spent_usd(self) -> float:
@@ -201,6 +245,50 @@ class Executor:
 
         return ctx
 
+    async def _think(self, step: PlanStep, ctx: ExecutionContext) -> str:
+        """Fikrlash qadami — LLM egaga javob yozadi.
+
+        Oldingi qadamlar natijasi (tool chiqishlari ham) kontekstga
+        qo'shiladi, ya'ni "qidir → javob ber" zanjiri ishlaydi: javob
+        qidiruv natijasiga asoslanadi, LLM xotirasiga emas.
+
+        Router berilmagan bo'lsa (eski chaqiruvchilar, ba'zi testlar) —
+        bo'sh matn qaytadi va qadam avvalgidek DONE bo'ladi.
+        """
+        if self._router is None:
+            return ""
+
+        prior = [ctx.results[pos].text for pos in sorted(ctx.results) if pos in ctx.results]
+        messages = [
+            *_history_to_messages(self._history),
+            ChatMessage(
+                role="user",
+                content=build_answer_prompt(
+                    self._command_text or step.description,
+                    step_description=step.description,
+                    prior_outputs=prior,
+                ),
+            ),
+        ]
+
+        try:
+            result = await self._router.complete(
+                task_class=TaskClass.NORMAL,
+                messages=messages,
+                system=ANSWER_SYSTEM,
+                max_tokens=1024,
+                run_budget_usd=self.budget_remaining_usd,
+                run_spent_usd=self._spent_usd,
+            )
+        except LLMError as exc:
+            # Fikrlash qadami butun run'ni yiqitmaydi — javob bo'sh
+            # qoladi va Orchestrator buni ochiq ko'rsatadi.
+            log.warning("executor.think_failed", step=step.position, error=str(exc))
+            return ""
+
+        self._spent_usd += result.cost_usd
+        return result.response.text.strip()
+
     async def _execute_step(
         self,
         step: PlanStep,
@@ -226,10 +314,15 @@ class Executor:
             )
             raise ApprovalRequiredError(step, decision)
 
-        # Tool bo'lmasa — faqat fikrlash qadami
+        # Tool bo'lmasa — FIKRLASH qadami: LLM haqiqiy javob yozadi.
+        #
+        # Ilgari bu yerda faqat `StepResult(step, status=DONE)` qaytardi —
+        # ya'ni "Nimalar qilolasan?" kabi savolga javob UMUMAN
+        # generatsiya qilinmasdi va ega jarayon hisobotini ko'rardi.
         if step.tool_name is None:
-            log.info("executor.thinking_step", step=step.position)
-            return StepResult(step, status=StepStatus.DONE)
+            output = await self._think(step, ctx)
+            log.info("executor.thinking_step", step=step.position, chars=len(output))
+            return StepResult(step, status=StepStatus.DONE, output=output)
 
         # Tool mavjudligi
         if not self._registry.has(step.tool_name):

@@ -26,7 +26,12 @@ from dataclasses import dataclass, field
 
 import structlog
 
-from zet.core.executor import ApprovalRequiredError, BudgetExhaustedError, Executor
+from zet.core.executor import (
+    ApprovalRequiredError,
+    BudgetExhaustedError,
+    ExecutionContext,
+    Executor,
+)
 from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.planner import Planner, PlannerError
 from zet.core.verifier import Verifier
@@ -41,6 +46,39 @@ from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
 log = structlog.get_logger(__name__)
+
+
+def _build_answer(ctx: ExecutionContext, *, plan_summary: str) -> str:
+    """Bajarilgan qadamlardan EGA UCHUN javob yig'adi.
+
+    Ilgari bu yerda jarayon hisoboti turardi:
+
+        f"{plan.summary} — {steps_done}/{steps_total} qadam bajarildi"
+
+    Ega "Nimalar qilolasan?" deb so'raganda ko'rgan yagona narsa
+    "...rejasi — 1/1 qadam bajarildi" edi. Reja bor, "bajarildi" belgisi
+    bor — javob yo'q. V-01 aynan buning aksini talab qiladi: natija,
+    jarayon emas.
+
+    Endi javob — bajarilgan qadamlarning matnli chiqishi. Odatda bu
+    oxirgi fikrlash qadami; tool zanjirida esa barcha mazmunli
+    chiqishlar birlashtiriladi.
+
+    Hech bir qadam matn bermasa (masalan hammasi jim WRITE tool'lar) —
+    o'shanda reja xulosasi qaytadi, chunki ega baribir nimadir
+    bajarilganini bilishi kerak.
+    """
+    texts = [
+        ctx.results[pos].text.strip()
+        for pos in sorted(ctx.results)
+        if ctx.results[pos].status == StepStatus.DONE and ctx.results[pos].text.strip()
+    ]
+    if not texts:
+        return plan_summary
+    # Oxirgi fikrlash qadami odatda oldingilarni allaqachon umumlashtiradi,
+    # shuning uchun takrorlamaymiz — faqat noyob matnlar.
+    unique = list(dict.fromkeys(texts))
+    return unique[-1] if len(unique) == 1 else "\n\n".join(unique)
 
 
 class OrchestratorError(Exception):
@@ -125,6 +163,7 @@ class Orchestrator:
         budget_usd: float = 0.10,
         max_steps: int = 20,
     ) -> None:
+        self._router = router
         self._intent = IntentRecognizer(router)
         self._planner = Planner(router, max_steps=max_steps)
         self._verifier = Verifier()
@@ -208,6 +247,11 @@ class Orchestrator:
             policy=self._permission_policy,
             killswitch=self._killswitch,
             budget_usd=self._budget_usd,
+            # Router fikrlash qadamiga HAQIQIY javob yozish uchun kerak —
+            # usiz ega jarayon hisobotini ko'radi, javobni emas.
+            router=self._router,
+            command_text=record.command.text,
+            history=record.command.history,
         )
         record.status = RunStatus.EXECUTING
         record.pending_approval_id = None
@@ -253,9 +297,7 @@ class Orchestrator:
         record.status = RunStatus.DONE if overall.ok else RunStatus.FAILED
         if not overall.ok:
             record.error = overall.reason
-        record.result_summary = (
-            f"{record.plan.summary} — {record.steps_done}/{record.steps_total} qadam bajarildi"
-        )
+        record.result_summary = _build_answer(ctx, plan_summary=record.plan.summary)
         log.info(
             "orchestrator.run_finished",
             run_id=str(record.run_id),

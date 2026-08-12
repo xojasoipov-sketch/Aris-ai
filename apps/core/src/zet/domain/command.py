@@ -16,7 +16,24 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from zet.domain.enums import TaskClass, TrustLevel
+from zet.domain.enums import MessageRole, TaskClass, TrustLevel
+
+
+class ConversationTurn(BaseModel, frozen=True):
+    """Suhbatdagi bitta oldingi almashinuv.
+
+    ATAYLAB `llm.base.ChatMessage` EMAS. `domain` qatlami `llm` qatlamiga
+    bog'lanmasligi kerak — bir marta urinib ko'rilganda aylanma import
+    chiqdi (`domain.command → llm.base → llm.__init__ → llm.budget →
+    db.models → db.base`). Konvertatsiya `core/executor.py` da, ya'ni
+    ikkala qatlamni ham biladigan joyda bo'ladi.
+    """
+
+    role: MessageRole
+    """Kim aytdi — ega (USER) yoki ZET (ASSISTANT)."""
+
+    content: str
+    """Xabar matni."""
 
 
 class Command(BaseModel, frozen=True):
@@ -39,6 +56,25 @@ class Command(BaseModel, frozen=True):
 
     metadata: dict[str, Any] = Field(default_factory=dict)
     """Kanalga xos qo'shimcha ma'lumot (masalan: telegram chat_id)."""
+
+    history: list[ConversationTurn] = Field(default_factory=list)
+    """Shu suhbatdagi oldingi xabarlar (eng eskisi birinchi).
+
+    Ilgari bu maydon yo'q edi va HAR BIR xabar mustaqil run sifatida
+    bajarilardi — ya'ni ZET oldingi gapni eslamasdi. Jonli misol:
+
+        ega:  "Nimalar qilolasan?"
+        ZET:  <imkoniyatlar haqida javob>
+        ega:  "Tushuntir"
+        ZET:  "Nimani tushuntirib berishimni xohlaysiz?"   ← kontekst yo'q
+
+    Tarix `Executor`ning fikrlash qadamiga uzatiladi, shuning uchun
+    "tushuntir", "davom et", "u haqida batafsil" kabi ergash buyruqlar
+    ishlaydi.
+
+    Chegara: `TelegramSession` faqat oxirgi bir necha almashinuvni
+    saqlaydi — token narxi va kontekst uzunligi cheklangan.
+    """
 
 
 class Intent(BaseModel, frozen=True):

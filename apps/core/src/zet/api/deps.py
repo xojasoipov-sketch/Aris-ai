@@ -29,6 +29,7 @@ from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
+from zet.memory.conversation import ConversationStore
 from zet.memory.embeddings import (
     EmbeddingProvider,
     GeminiEmbeddingProvider,
@@ -520,6 +521,7 @@ def get_telegram_bot() -> object:
     from zet.core.orchestrator import Orchestrator
     from zet.db.session import session_scope
     from zet.domain.command import Command
+    from zet.domain.enums import MessageRole
     from zet.telegram.bot import ZetBot
     from zet.telegram.handlers import OrchestratorRunResult
 
@@ -539,10 +541,23 @@ def get_telegram_bot() -> object:
                 budget_usd=settings.run_max_usd,
                 max_steps=settings.run_max_steps,
             )
-            command = Command(text=text, channel="telegram")
+            # Suhbat tarixi — ZET oldingi gapni eslab qolishi uchun.
+            # Ilgari har xabar mustaqil run edi va "Tushuntir" kabi
+            # ergash buyruqlar kontekstsiz qolardi.
+            owner = await get_or_create_owner(session, external_id=settings.owner_id)
+            store = ConversationStore(session, owner_id=owner.id)
+            conversation = await store.get_or_create(channel="telegram")
+            history = await store.recent_history(conversation)
+
+            command = Command(text=text, channel="telegram", history=history)
             record = await orchestrator.start(command)
+            answer = record.result_summary or record.error or "(bo'sh natija)"
+
+            await store.append(conversation, role=MessageRole.USER, content=text)
+            await store.append(conversation, role=MessageRole.ASSISTANT, content=answer)
+
             return OrchestratorRunResult(
-                text=record.result_summary or record.error or "(bo'sh natija)",
+                text=answer,
                 ok=record.error is None,
                 run_id=str(record.run_id),
             )

@@ -27,8 +27,45 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 
 
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1")  # noqa: S104
+"""Mahalliy manzillar — prod konteynerida bu yerda Ollama bo'lmaydi.
+
+S104 ("all interfaces") bu yerda tegishli emas: biz hech narsani
+bog'lamayapmiz, faqat sozlamadagi manzilni TANIB olyapmiz."""
+
+
 def _secret(value: SecretStr | None) -> str | None:
     return value.get_secret_value() if value is not None else None
+
+
+def _ollama_base_url(settings: Settings) -> str:
+    """Ollama manzili — prod'da loopback bo'lsa BO'SH qaytadi.
+
+    `OpenAICompatProvider` Ollama uchun kalit talab qilmaydi, ya'ni
+    `is_configured = bool(base_url)` — bu HAR DOIM rost edi, hatto
+    Railway konteynerida Ollama umuman yo'q bo'lsa ham.
+
+    Oqibati jonli ko'rindi: SIMPLE vazifalar uchun marshrutda
+    `ollama:qwen3-8b` birinchi turadi, router unga ulanmoqchi bo'ladi,
+    ~soniyalar kutadi va "provayder topilmadi" xatosini beradi. Ega
+    ekranida aynan shu xabar chiqdi.
+
+    Endi: prod'da loopback manzil = Ollama yo'q, provayder sozlanmagan
+    deb hisoblanadi va router uni darhol o'tkazib yuboradi. Tarmoqqa
+    chiqib tekshirilmaydi — qaror faqat konfiguratsiyaga asoslangan,
+    ya'ni bir ishga tushirishda o'zgarmaydi.
+
+    Lokal (dev) ishlashda hech narsa o'zgarmaydi — ADR-0007 local-first.
+    Prod'da haqiqiy Ollama serveri bo'lsa (masalan uy serveri), uning
+    manzili loopback bo'lmaydi va provayder odatdagidek ishlaydi.
+    """
+    url = settings.ollama_base_url.strip()
+    if not url:
+        return ""
+    if not settings.is_prod:
+        return url
+    host = url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0]
+    return "" if host in _LOOPBACK_HOSTS else url
 
 
 def build_providers(settings: Settings) -> dict[str, LLMProvider]:
@@ -38,7 +75,7 @@ def build_providers(settings: Settings) -> dict[str, LLMProvider]:
         "ollama": OpenAICompatProvider(
             name="ollama",
             tier=ModelTier.T0_LOCAL,
-            base_url=f"{settings.ollama_base_url.rstrip('/')}/v1",
+            base_url=(f"{url.rstrip('/')}/v1" if (url := _ollama_base_url(settings)) else ""),
             requires_key=False,
         ),
         # T1 — free tier
