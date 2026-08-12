@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 def _find_repo_root() -> Path:
     """Loyiha ildizini topadi — papka chuqurligiga bog'liq bo'lmagan holda.
 

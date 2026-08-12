@@ -395,3 +395,43 @@ class TestAgentAPIPersistence:
         assert loaded is not None
         assert loaded.total_runs == 1
         assert loaded.successful_runs == 1
+
+
+class TestKillSwitchEnforcement:
+    """Favqulodda to'xtatish (A-07) agent endpoint'larida ham majburiy.
+
+    Regressiya sinovi: `/agents/{name}/run` Orchestrator'ni chetlab
+    o'tadi, shuning uchun killswitch tekshiruvi shu route'da alohida
+    turishi kerak. Railway'dagi jonli sinovda aynan shu bo'shliq topildi —
+    killswitch yoqilgan holda agent baribir ishlab ketardi.
+    """
+
+    def test_run_blocked_when_killswitch_engaged(self, registry: AgentRegistry) -> None:
+        ks = KillSwitchState()
+        app = create_app()
+        app.dependency_overrides[get_agent_registry] = lambda: registry
+        app.dependency_overrides[get_killswitch] = lambda: ks
+        client = TestClient(app, raise_server_exceptions=False)
+
+        client.post("/api/v1/agents", json=_agent_payload())
+        client.patch("/api/v1/agents/test_agent/status", json={"action": "start_testing"})
+        client.patch("/api/v1/agents/test_agent/status", json={"action": "activate"})
+
+        # Killswitch o'chiq — ishlaydi
+        assert client.post("/api/v1/agents/test_agent/run", json={"task": "x"}).status_code == 200
+
+        ks.engage(reason="sinov")
+        blocked = client.post("/api/v1/agents/test_agent/run", json={"task": "x"})
+        assert blocked.status_code == 503
+        assert "Emergency stop" in blocked.json()["detail"]
+
+    def test_factory_blocked_when_killswitch_engaged(self, registry: AgentRegistry) -> None:
+        ks = KillSwitchState()
+        ks.engage(reason="sinov")
+        app = create_app()
+        app.dependency_overrides[get_agent_registry] = lambda: registry
+        app.dependency_overrides[get_killswitch] = lambda: ks
+        client = TestClient(app, raise_server_exceptions=False)
+
+        blocked = client.post("/api/v1/agents/factory", json={"description": "sinov agenti"})
+        assert blocked.status_code == 503

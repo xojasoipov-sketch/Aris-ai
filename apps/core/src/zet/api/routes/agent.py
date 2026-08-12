@@ -32,6 +32,7 @@ from zet.agents.runtime import AgentRuntime
 from zet.api.deps import (
     get_agent_registry,
     get_agent_repository,
+    get_killswitch,
     get_model_router,
     get_permission_policy,
     get_tool_registry,
@@ -40,6 +41,7 @@ from zet.domain.agent import AgentState
 from zet.domain.enums import AgentStatus, ModelTier, PermissionLevel, TrustLevel
 from zet.llm.routed_provider import RoutedLLMProvider, task_class_for_tier
 from zet.llm.router import ModelRouter
+from zet.security.killswitch import KillSwitchEngagedError, KillSwitchState
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
@@ -252,12 +254,24 @@ async def factory_create_agent(
     request: FactoryCreateRequest,
     registry: AgentRegistry = Depends(get_agent_registry),
     repo: AgentRepository = Depends(get_agent_repository),
+    ks: KillSwitchState = Depends(get_killswitch),
 ) -> FactoryCreateResponse:
     """Tabiy til buyrug'i bilan agent yaratish (V-10 Factory).
 
     Oqim: UNDERSTAND → CHECK EXISTING → DESIGN → TOOLS → PERMISSIONS
     → PROMPT → REGISTER → TESTING → EVAL → (ixtiyoriy ACTIVATE)
+
+    Emergency stop (A-07) bu yerda ham majburiy — favqulodda to'xtatish
+    paytida yangi agent yaratilishi mumkin emas.
     """
+    try:
+        ks.check()
+    except KillSwitchEngagedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Emergency stop yoqilgan: {exc}",
+        ) from exc
+
     from zet.agents.eval import EvalRunner
     from zet.agents.factory import AgentFactory, FactoryRequest
 
@@ -370,6 +384,7 @@ async def run_agent(
     permission_policy: PermissionPolicy = Depends(get_permission_policy),
     repo: AgentRepository = Depends(get_agent_repository),
     router: ModelRouter = Depends(get_model_router),
+    ks: KillSwitchState = Depends(get_killswitch),
 ) -> AgentRunResponse:
     """Agentni ishga tushirish.
 
@@ -377,7 +392,20 @@ async def run_agent(
     `ModelRouter` orqali — `agent.model_policy` (tier) `TaskClass`ga
     o'giriladi, real kalit bo'lmasa `ModelRouter` avtomatik keyingi
     nomzodga o'tadi (ADR-0006).
+
+    Emergency stop (A-07) shu yerda ham majburiy: bu endpoint
+    Orchestrator'ni chetlab o'tib agentni to'g'ridan-to'g'ri ishga
+    tushiradi, shuning uchun killswitch tekshiruvi `/runs` dagi kabi
+    alohida qo'yilgan — aks holda favqulodda to'xtatish teshikli bo'ladi.
     """
+    try:
+        ks.check()
+    except KillSwitchEngagedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Emergency stop yoqilgan: {exc}",
+        ) from exc
+
     try:
         state = registry.get_active(name)
     except AgentNotFoundError as exc:
