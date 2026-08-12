@@ -119,9 +119,12 @@ class Settings(BaseSettings):
     """ElevenLabs API kaliti (Scribe STT + Multilingual v2 TTS). Bo'lmasa —
     `StubSTT`/`StubTTS` ishlatiladi (Telegram ovozli xabar qotgan matn qaytadi)."""
 
-    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
-    """TTS uchun ovoz ID. Default — Rachel (standart ko'p tilli). Boshqasini
-    tanlash uchun elevenlabs.io → Voice Library'dan olib qo'ying."""
+    elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
+    """TTS uchun ovoz ID. Default — Sarah (bepul rejada mavjud, ayol, ko'p
+    tilli, o'zbekcha aniq o'qiydi — real hisob bilan tasdiqlangan). Rachel
+    (`21m00Tcm4TlvDq8ikWAM`) bepul rejaviy hisoblar uchun mavjud emas, 402
+    qaytaradi. Boshqasini tanlash uchun elevenlabs.io → Voice Library'dan
+    ovoz ID'sini nusxa oling."""
 
     # ── Xavfsizlik ─────────────────────────────────────────────────
     owner_id: str = "owner"

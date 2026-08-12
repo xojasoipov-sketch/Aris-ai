@@ -44,8 +44,11 @@ _TTS_MODEL = "eleven_multilingual_v2"
 # Uzbek ISO 639-3 kodi (Scribe kutgan format)
 _UZBEK_LANG_CODE = "uzn"
 
-# Default ovoz — Rachel (ElevenLabs standart, ko'p tilli); Settings orqali almashtiriladi
-_DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+# Default ovoz — Sarah (bepul rejada mavjud, ayol, ko'p tilli, o'zbekcha
+# aniq va tabiiy o'qiydi — real hisob bilan tasdiqlangan). Rachel eski
+# default edi (voice_id 21m00Tcm4TlvDq8ikWAM) — u bepul rejaviy hisoblarga
+# berilmaydi, 402 Payment Required qaytardi. Settings orqali almashtiriladi.
+_DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
 
 
 class ElevenLabsSTT(STTProvider):
