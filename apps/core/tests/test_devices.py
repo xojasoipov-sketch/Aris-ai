@@ -475,10 +475,11 @@ class TestVisionAgent:
         assert spec.trust_level == TrustLevel.SYSTEM
 
     def test_tools_minimal(self) -> None:
-        """Vision agent faqat time.now ishlatadi (kamera alohida provider)."""
+        """Vision agent time.now va camera.snapshot ishlatadi."""
         spec = VISION_AGENT_SPEC
         assert "time.now" in spec.tool_allowlist
-        assert len(spec.tool_allowlist) == 1
+        assert "camera.snapshot" in spec.tool_allowlist
+        assert len(spec.tool_allowlist) == 2
 
     def test_brakes(self) -> None:
         spec = VISION_AGENT_SPEC

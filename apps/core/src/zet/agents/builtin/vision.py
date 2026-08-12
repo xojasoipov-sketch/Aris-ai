@@ -63,7 +63,7 @@ JAVOB FORMATI:
 📝 Tahlil: [nimalar ko'rinyapti]
 ⚠️ Ogohlantirishlar: [agar bor bo'lsa]
 """,
-    tool_allowlist=["time.now"],
+    tool_allowlist=["time.now", "camera.snapshot"],
     model_policy=ModelTier.T2_CHEAP,  # Vision modellari kerak (Gemini/Haiku)
     permission_level=PermissionLevel.READ,
     trust_level=TrustLevel.SYSTEM,

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from zet.devices.camera import CameraProvider
+from zet.tools.builtin.camera import CameraSnapshotTool
 from zet.tools.builtin.github import GitHubReadTool, GitHubWriteTool
 from zet.tools.builtin.note_write import NoteWriteTool
 from zet.tools.builtin.shell_exec import ShellExecTool
@@ -31,6 +33,7 @@ def build_default_registry(
     web_reader_stub: bool = True,
     github_token: str | None = None,
     web_search_api_key: str | None = None,
+    camera_provider: CameraProvider | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
 
@@ -45,6 +48,8 @@ def build_default_registry(
             chiqadi; bo'lmasa (default) — stub rejim.
         web_search_api_key: berilsa — `web.search` haqiqiy qidiradi (Brave
             Search API); bo'lmasa (default) — stub rejim.
+        camera_provider: `camera.snapshot` uchun ulanish (default: `StubCamera`
+            — real RTSP/EZVIZ hali ulanmagan).
 
     Returns:
         Ro'yxatga olingan `ToolRegistry`.
@@ -56,6 +61,7 @@ def build_default_registry(
     registry.register(WebReaderTool(stub=web_reader_stub))
     registry.register(GitHubReadTool(token=github_token))
     registry.register(GitHubWriteTool(token=github_token))
+    registry.register(CameraSnapshotTool(provider=camera_provider))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))
     return registry

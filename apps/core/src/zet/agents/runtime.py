@@ -26,7 +26,7 @@ import structlog
 
 from zet.domain.agent import AgentRunResult, AgentSpec
 from zet.domain.tool import ToolResult
-from zet.llm.base import ChatMessage, LLMProvider, LLMResponse, ToolSpec, ToolUse
+from zet.llm.base import ChatMessage, ImageBlock, LLMProvider, LLMResponse, ToolSpec, ToolUse
 from zet.security.permissions import PermissionPolicy
 from zet.tools.base import ToolError
 from zet.tools.registry import ToolNotFoundError, ToolRegistry
@@ -167,6 +167,20 @@ class AgentRuntime:
                             tool_call_id=tool_use.id,
                         )
                     )
+
+                    # Rasm bo'lsa — alohida user xabari sifatida qo'shish (A-05: kamera/
+                    # skrinshot natijasi UNTRUSTED, lekin vision modelga ko'rinishi kerak).
+                    # Provider-mustaqil: "tool" rolidagi rasm ba'zi provayderlarda
+                    # qo'llab-quvvatlanmaydi, "user" roli esa har doim ishlaydi.
+                    image = self._extract_image(tool_result)
+                    if image is not None:
+                        messages.append(
+                            ChatMessage(
+                                role="user",
+                                content=f"[{tool_use.name} natijasidagi rasm]",
+                                images=(image,),
+                            )
+                        )
 
             # A-07: max steps
             raise AgentMaxStepsError(f"Agent '{spec.name}' {spec.max_steps} qadamga yetdi")
@@ -338,8 +352,27 @@ class AgentRuntime:
 
         return None
 
+    def _extract_image(self, result: ToolResult) -> ImageBlock | None:
+        """Tool natijasidan rasm ajratish (agar mavjud bo'lsa).
+
+        Konvensiya: `output` dict `has_image=True` va `image_b64` maydoniga
+        ega bo'lsa — rasm sifatida qaraladi (masalan `camera.snapshot`).
+        """
+        if not result.success or not isinstance(result.output, dict):
+            return None
+        output = result.output
+        image_b64 = output.get("image_b64")
+        if not output.get("has_image") or not image_b64:
+            return None
+        return ImageBlock(data=image_b64, media_type=output.get("media_type", "image/jpeg"))
+
     def _format_tool_result(self, result: ToolResult) -> str:
         """Tool natijasini LLM uchun formatlash."""
         if result.success:
+            if isinstance(result.output, dict) and result.output.get("has_image"):
+                # Rasmning o'zi alohida xabar sifatida qo'shiladi (_extract_image) —
+                # bu yerda katta base64 satrini takrorlamaslik uchun faqat metadata
+                meta = {k: v for k, v in result.output.items() if k != "image_b64"}
+                return f"Rasm olindi: {meta}"
             return str(result.output) if result.output is not None else "OK"
         return f"XATO: {result.error or 'nomalum xato'}"
