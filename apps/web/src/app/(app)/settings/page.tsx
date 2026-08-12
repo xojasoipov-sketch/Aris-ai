@@ -10,6 +10,7 @@
 import { motion } from "motion/react";
 import { useState } from "react";
 
+import { SettingsRow as Row, Toggle } from "@/components/ui/forms";
 import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
 import { sound } from "@/lib/sound";
 
@@ -25,37 +26,6 @@ const INTEGRATIONS = [
   { name: "Instagram Graph API", configured: false },
   { name: "GitHub", configured: false },
 ] as const;
-
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      onClick={() => {
-        sound.play("tick");
-        onChange(!on);
-      }}
-      className={`relative h-5.5 w-10 rounded-full transition-colors ${
-        on ? "bg-[var(--status-online)]" : "border border-[var(--border-hairline)] bg-[var(--surface-hover)]"
-      }`}
-    >
-      <span
-        className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-[var(--text-primary)] transition-[left] duration-200 ${
-          on ? "left-5" : "left-0.5"
-        }`}
-      />
-    </button>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between border-b border-[var(--border-hairline)] py-3 last:border-0">
-      <span className="text-sm text-[var(--text-primary)]">{label}</span>
-      {children}
-    </div>
-  );
-}
 
 export default function SettingsPage() {
   const [accent, setAccent] = useState<string>(ACCENTS[0]);

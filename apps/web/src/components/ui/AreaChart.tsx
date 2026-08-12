@@ -48,13 +48,6 @@ export function AreaChart({
           <stop offset="0%" stopColor="var(--accent-blue)" stopOpacity="0.28" />
           <stop offset="100%" stopColor="var(--accent-blue)" stopOpacity="0" />
         </linearGradient>
-        <filter id={`${id}-glow`} x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="4" result="b" />
-          <feMerge>
-            <feMergeNode in="b" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
       </defs>
 
       {/* Juda xira gorizontal grid */}
@@ -74,7 +67,7 @@ export function AreaChart({
       })}
 
       <path d={`${d} L ${pts[pts.length - 1][0]} ${pad.t + h} L ${pts[0][0]} ${pad.t + h} Z`} fill={`url(#${id}-fill)`} />
-      <path d={d} fill="none" stroke="var(--accent-blue)" strokeWidth="2" filter={`url(#${id}-glow)`} />
+      <path d={d} fill="none" stroke="var(--accent-blue)" strokeWidth="2" />
 
       {/* Oxirgi nuqta ta'kidlangan */}
       <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="3.5" fill="var(--accent-glow)" />

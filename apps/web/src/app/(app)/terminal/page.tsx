@@ -9,6 +9,7 @@ import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
 import { Eyebrow, Panel } from "@/components/ui/primitives";
+import { Tabs } from "@/components/ui/Tabs";
 import { sound } from "@/lib/sound";
 
 const TABS = ["Terminal", "Loglar", "Tizim"] as const;
@@ -67,24 +68,7 @@ export default function TerminalPage() {
     <div className="mx-auto max-w-5xl space-y-5 px-6 py-6 lg:px-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">Terminal</h1>
-        <div className="flex gap-1 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] p-1">
-          {TABS.map((t) => (
-            <button
-              key={t}
-              onClick={() => {
-                sound.play("tick");
-                setTab(t);
-              }}
-              className={`rounded-full px-3.5 py-1 text-xs transition-colors ${
-                tab === t
-                  ? "bg-[var(--accent-blue)] text-[#050608]"
-                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
+        <Tabs tabs={TABS} value={tab} onChange={setTab} />
       </div>
 
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: "easeOut" }}>

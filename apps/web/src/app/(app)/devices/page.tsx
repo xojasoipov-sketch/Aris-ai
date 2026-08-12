@@ -23,6 +23,7 @@ import {
   type AuditOutcome,
 } from "@/components/ui/devices";
 import { Button, Panel, Eyebrow } from "@/components/ui/primitives";
+import { Tabs } from "@/components/ui/Tabs";
 import { api } from "@/lib/api";
 import { sound } from "@/lib/sound";
 
@@ -374,28 +375,13 @@ export default function DevicesPage() {
       </div>
 
       {/* Tab pill'lar */}
-      <div className="flex gap-2">
-        {(
-          [
-            ["computer", "Kompyuter"],
-            ["phone", "Telefon"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => {
-              sound.play("tick");
-              setTab(id);
-            }}
-            className={`rounded-full border px-5 py-2 text-sm transition-colors ${
-              tab === id
-                ? "border-[var(--accent-blue)] bg-[rgba(74,158,255,0.12)] text-[var(--text-primary)]"
-                : "border-[var(--border-hairline)] text-[var(--text-secondary)] hover:border-[var(--border-active)]"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="flex">
+        <Tabs
+          tabs={["computer", "phone"] as const}
+          value={tab}
+          onChange={setTab}
+          labels={{ computer: "Kompyuter", phone: "Telefon" }}
+        />
       </div>
 
       {killswitch ? (

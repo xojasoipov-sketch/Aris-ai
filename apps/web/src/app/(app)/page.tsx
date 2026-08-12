@@ -8,14 +8,16 @@
  * Ma'lumot real ko'rinishli namuna (lorem yo'q); real endpoint keyin ulanadi.
  */
 
-import { BotMessageSquare, FolderPlus, ListPlus, Mic, Terminal } from "lucide-react";
+import { BotMessageSquare, FolderPlus, ListPlus, Mic, ServerOff, Terminal } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { AssistantHero } from "@/components/assistant/AssistantHero";
 import { LiveApprovals } from "@/components/dashboard/LiveApprovals";
 import { AgentListItem, RadialGauge, Sparkline } from "@/components/ui/cards";
+import { EmptyState } from "@/components/ui/forms";
 import { Button, Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
+import { useBackendHealth } from "@/lib/useBackendHealth";
 
 /* Backend agents/builtin bilan bir xil ro'yxat — tasodif emas */
 const AGENTS = [
@@ -65,43 +67,71 @@ const enter = {
 
 export default function DashboardPage() {
   const { m, history } = useLiveMetrics();
+  const health = useBackendHealth();
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-8 py-6">
       <LiveApprovals />
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr_280px]">
-        {/* ── Chap ustun: System Status ── */}
+        {/* ── Chap ustun: System Status (halol holat — real /health) ── */}
         <motion.div variants={enter} custom={1} initial="hidden" animate="show" className="space-y-4">
           <Panel className="p-4">
             <div className="flex items-center justify-between">
               <Eyebrow>System Status</Eyebrow>
               <div className="flex items-center gap-1.5">
-                <StatusDot color="var(--status-online)" />
-                <span className="text-[10px] font-medium text-[var(--status-online)]">ONLAYN</span>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-y-4">
-              <RadialGauge percent={m.cpu} label="CPU" value={`${Math.round(m.cpu)}%`} />
-              <RadialGauge percent={m.ram} label="RAM" value={`${Math.round(m.ram)}%`} />
-              <RadialGauge percent={m.disk} label="Disk" value={`${Math.round(m.disk)}%`} />
-              <RadialGauge percent={m.gpu} label="GPU" value={`${Math.round(m.gpu)}%`} />
-              <div className="col-span-2 flex flex-col items-center justify-center gap-1">
-                <span className="data text-sm text-[var(--text-primary)]">
-                  {Math.round(m.net)} <span className="text-[var(--text-muted)]">Mbps</span>
+                <StatusDot
+                  color={
+                    health === "online"
+                      ? "var(--status-online)"
+                      : health === "offline"
+                        ? "var(--status-offline)"
+                        : "var(--status-working)"
+                  }
+                  pulse={health === "checking"}
+                />
+                <span
+                  className="text-[10px] font-medium"
+                  style={{
+                    color:
+                      health === "online" ? "var(--status-online)" : "var(--text-muted)",
+                  }}
+                >
+                  {health === "online" ? "ONLAYN" : health === "offline" ? "ULANMAGAN" : "TEKSHIRILMOQDA"}
                 </span>
-                <span className="eyebrow !text-[9px]">Tarmoq</span>
               </div>
             </div>
-            <div className="mt-4 border-t border-[var(--border-hairline)] pt-3">
-              <div className="flex items-baseline justify-between">
-                <Eyebrow>CPU trend</Eyebrow>
-                <span className="data text-xs text-[var(--text-muted)]">46°C</span>
-              </div>
-              <div className="mt-2">
-                <Sparkline data={history} width={232} height={34} id="cpu" />
-              </div>
-            </div>
+            {health === "online" ? (
+              <>
+                <div className="mt-4 grid grid-cols-3 gap-y-4">
+                  <RadialGauge percent={m.cpu} label="CPU" value={`${Math.round(m.cpu)}%`} />
+                  <RadialGauge percent={m.ram} label="RAM" value={`${Math.round(m.ram)}%`} />
+                  <RadialGauge percent={m.disk} label="Disk" value={`${Math.round(m.disk)}%`} />
+                  <RadialGauge percent={m.gpu} label="GPU" value={`${Math.round(m.gpu)}%`} />
+                  <div className="col-span-2 flex flex-col items-center justify-center gap-1">
+                    <span className="data text-sm text-[var(--text-primary)]">
+                      {Math.round(m.net)} <span className="text-[var(--text-muted)]">Mbps</span>
+                    </span>
+                    <span className="eyebrow !text-[9px]">Tarmoq</span>
+                  </div>
+                </div>
+                <div className="mt-4 border-t border-[var(--border-hairline)] pt-3">
+                  <div className="flex items-baseline justify-between">
+                    <Eyebrow>CPU trend</Eyebrow>
+                    <span className="data text-xs text-[var(--text-muted)]">46°C</span>
+                  </div>
+                  <div className="mt-2">
+                    <Sparkline data={history} width={232} height={34} id="cpu" />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <EmptyState
+                icon={ServerOff}
+                title="Backend ulanmagan"
+                hint="apps/core serverini ishga tushiring — metrikalar avtomatik paydo bo'ladi"
+              />
+            )}
           </Panel>
         </motion.div>
 

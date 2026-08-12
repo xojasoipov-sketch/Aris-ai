@@ -91,6 +91,26 @@ Pill: chapda 28–32px mini-NeuroOrb (BITTA shader, boshqa seed/parametr —
 5. Floating widget + bildirishnoma kartasi + Telegram Mini App (/tg,
    WebApp SDK theme_params)
 
+## SIFAT STANDARTI (ega, 2026-08-12 — "Elite Product Design" skill)
+
+Maqsad: bu kontsept emas — **100 000 foydalanuvchisi bordek his qilinadigan,
+shipping mahsulot**. O'ylash tarzi: Linear, Stripe, Vercel, Raycast, Notion.
+Kino-interfeys yoki Dribbble-kontsept chiqsa — qaytadan.
+
+- **Har element sababli.** Bezak grafika, maqsadsiz glow — YO'Q. NeuroOrb
+  qoladi (ega mockup'ining signature elementi, assistant holatini
+  kommunikatsiya qiladi) — lekin uning atrofidagi har qanday dekorativ
+  halo/shadow olib tashlanadi.
+- **Halol holatlar.** Soxta "jonli" raqamlar production'da yolg'on.
+  Backend ulanmagan bo'lsa — buni ochiq ko'rsatadigan empty/disconnected
+  state. Har ro'yxatda empty state, har so'rovda loading/error yo'li.
+- **Kod: dublikat yo'q.** Bir xil UI ikki joyda = umumiy komponent
+  (ui/ ga). Magic number yo'q — token. O'lik kod yo'q.
+- **A11y:** klaviatura, aria, kontrast (past-kontrast --text-muted faqat
+  dekorativ yorliqlarda), focus-visible hamma interaktivda.
+- **8px ritm**, saxiy whitespace, ko'rinmas grid.
+- **Motion xabar beradi, chalg'itmaydi** — tez, tabiiy, subtle.
+
 ## BOSHQA QOIDALAR (repo'dan meros)
 - UI matni va kod izohlari — o'zbekcha
 - Sirlar (SecretStr) frontend'ga chiqmaydi

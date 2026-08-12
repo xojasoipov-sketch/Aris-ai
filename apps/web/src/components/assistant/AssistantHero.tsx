@@ -7,18 +7,17 @@
  * SSE keyingi fazada ulanadi.
  */
 
-import { Mic, SendHorizontal } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
 import { AgentStatusChip } from "@/components/ui/AgentStatusChip";
+import { CommandInput } from "@/components/ui/CommandInput";
 import {
   STATE_LABEL,
   useAssistant,
   type AssistantState,
 } from "@/lib/assistant-machine";
-import { sound } from "@/lib/sound";
 
 /* Mashina holati → orb holati */
 const TO_ORB: Record<AssistantState, OrbState> = {
@@ -112,39 +111,19 @@ export function AssistantHero() {
       </div>
 
       {/* Buyruq paneli */}
-      <div className="mt-2 flex w-full max-w-lg items-center gap-2 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] py-1.5 pl-5 pr-1.5">
-        <input
+      <div className="mt-2 w-full max-w-lg">
+        <CommandInput
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={setInput}
+          onSubmit={submit}
+          disabled={state === "thinking"}
           onFocus={() => {
             if (state === "sleep") send("WAKE");
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
-          }}
-          placeholder="Buyruq yozing yoki ovoz bilan gapiring…"
-          className="w-full bg-transparent text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
-        />
-        <button
-          aria-label="Ovozli buyruq"
-          className="rounded-full p-2.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--accent-blue)]"
-          onClick={() => {
-            sound.play("listenStart");
+          onMic={() => {
             if (state === "sleep") send("WAKE");
           }}
-        >
-          <Mic size={18} strokeWidth={1.5} />
-        </button>
-        <motion.button
-          aria-label="Yuborish"
-          whileTap={{ scale: 0.95 }}
-          transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          className="rounded-full bg-[var(--accent-blue)] p-2.5 text-[#050608] transition-[filter] hover:brightness-110 disabled:opacity-40"
-          disabled={!input.trim() || state === "thinking"}
-          onClick={submit}
-        >
-          <SendHorizontal size={18} strokeWidth={1.5} />
-        </motion.button>
+        />
       </div>
     </div>
   );

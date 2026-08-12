@@ -10,19 +10,18 @@
  * real /route endpoint keyin ulanadi.
  */
 
-import { ChevronDown, Mic, SendHorizontal } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
 import { Waveform } from "@/components/assistant/Waveform";
+import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
 import { AgentStatusChip } from "@/components/ui/AgentStatusChip";
-import { Eyebrow, Panel } from "@/components/ui/primitives";
+import { CommandInput } from "@/components/ui/CommandInput";
 import {
   useAssistant,
   type AssistantState,
 } from "@/lib/assistant-machine";
-import { sound } from "@/lib/sound";
 
 const TO_ORB: Record<AssistantState, OrbState> = {
   sleep: "idle",
@@ -165,37 +164,15 @@ export default function AiChatPage() {
       </div>
 
       {/* Input */}
-      <div className="flex items-center gap-2 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] py-1.5 pl-5 pr-1.5">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
-          }}
-          placeholder="Buyruq yozing yoki ovoz bilan gapiring…"
-          className="w-full bg-transparent text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
-        />
-        <button
-          aria-label="Ovozli buyruq"
-          className="rounded-full p-2.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--accent-blue)]"
-          onClick={() => {
-            sound.play("listenStart");
-            if (state === "sleep") send("WAKE");
-          }}
-        >
-          <Mic size={18} strokeWidth={1.5} />
-        </button>
-        <motion.button
-          aria-label="Yuborish"
-          whileTap={{ scale: 0.95 }}
-          transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          className="rounded-full bg-[var(--accent-blue)] p-2.5 text-[#050608] transition-[filter] hover:brightness-110 disabled:opacity-40"
-          disabled={!input.trim() || state === "thinking"}
-          onClick={submit}
-        >
-          <SendHorizontal size={18} strokeWidth={1.5} />
-        </motion.button>
-      </div>
+      <CommandInput
+        value={input}
+        onChange={setInput}
+        onSubmit={submit}
+        disabled={state === "thinking"}
+        onMic={() => {
+          if (state === "sleep") send("WAKE");
+        }}
+      />
     </div>
   );
 }

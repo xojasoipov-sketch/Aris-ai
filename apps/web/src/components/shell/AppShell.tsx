@@ -29,6 +29,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { sound } from "@/lib/sound";
+import { useBackendHealth } from "@/lib/useBackendHealth";
 
 const NAV = [
   { href: "/", label: "Boshqaruv", icon: LayoutGrid },
@@ -116,18 +117,27 @@ function MobileTabBar({ pathname }: { pathname: string }) {
 function StatusBar() {
   const now = useNow();
   const uptime = useUptime();
+  const health = useBackendHealth();
+
+  const healthMeta =
+    health === "online"
+      ? { color: "var(--status-online)", text: "Tizim onlayn", pulse: false }
+      : health === "offline"
+        ? { color: "var(--status-offline)", text: "Backend ulanmagan", pulse: false }
+        : { color: "var(--status-working)", text: "Tekshirilmoqda…", pulse: true };
+
   return (
     <footer className="fixed inset-x-0 bottom-0 z-40 hidden items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-6 py-1.5 text-xs lg:flex">
       <div className="flex items-center gap-2">
-        <span className="pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-[var(--status-online)]" />
-        <span className="text-[var(--text-secondary)]">Tizim onlayn</span>
+        <span
+          className={`inline-block h-1.5 w-1.5 rounded-full ${healthMeta.pulse ? "pulse-dot" : ""}`}
+          style={{ background: healthMeta.color }}
+        />
+        <span className="text-[var(--text-secondary)]">{healthMeta.text}</span>
       </div>
       <div className="data flex items-center gap-6 text-[var(--text-muted)]">
         <span>
-          Uptime <span className="text-[var(--text-secondary)]">{uptime}</span>
-        </span>
-        <span>
-          Unumdorlik <span className="text-[var(--text-secondary)]">87%</span>
+          Sessiya <span className="text-[var(--text-secondary)]">{uptime}</span>
         </span>
         <span className="text-[var(--text-secondary)]">
           {now

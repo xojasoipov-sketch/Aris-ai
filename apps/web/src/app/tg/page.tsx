@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 
 import { NeuroOrb } from "@/components/core/NeuroOrb";
 import { AgentListItem, ProgressRing } from "@/components/ui/cards";
+import { CommandInput } from "@/components/ui/CommandInput";
 import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
 import { haptic, initTelegramApp } from "@/lib/telegram";
 import { sound } from "@/lib/sound";
@@ -69,26 +70,15 @@ function ChatTab() {
           {listening ? "Eshityapman…" : "Qanday yordam beray?"}
         </p>
       </div>
-      <div className="flex w-full items-center gap-2 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] py-1.5 pl-4 pr-1.5">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Buyruq yozing…"
-          className="w-full bg-transparent text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
-        />
-        <button
-          aria-label="Yuborish"
-          disabled={!input.trim()}
-          onClick={() => {
-            haptic("medium");
-            sound.play("tick");
-            setInput("");
-          }}
-          className="rounded-full bg-[var(--accent-blue)] px-4 py-2 text-xs font-medium text-[#050608] disabled:opacity-40"
-        >
-          Yuborish
-        </button>
-      </div>
+      <CommandInput
+        value={input}
+        onChange={setInput}
+        placeholder="Buyruq yozing…"
+        onSubmit={() => {
+          haptic("medium");
+          setInput("");
+        }}
+      />
     </div>
   );
 }
