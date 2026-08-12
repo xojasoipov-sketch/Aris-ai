@@ -85,6 +85,21 @@ class ToolUse:
 
 
 @dataclass(frozen=True, slots=True)
+class ImageBlock:
+    """Xabarga biriktirilgan rasm (Bo'lim 8, Vision).
+
+    Ilgari `ChatMessage` faqat matn edi — rasm yuborib bo'lmasdi
+    (gap-analysis #11: "ChatMessage.content: str — faqat matn").
+    """
+
+    data: str
+    """Base64 kodlangan rasm baytlari (data URI prefiksisiz)."""
+
+    media_type: str = "image/jpeg"
+    """MIME turi: image/jpeg, image/png, image/webp, image/gif."""
+
+
+@dataclass(frozen=True, slots=True)
 class ChatMessage:
     """Suhbat xabari."""
 
@@ -92,6 +107,13 @@ class ChatMessage:
     content: str = ""
     tool_call_id: str | None = None
     tool_uses: tuple[ToolUse, ...] = field(default_factory=tuple)
+    images: tuple[ImageBlock, ...] = field(default_factory=tuple)
+    """Xabarga biriktirilgan rasmlar (bo'sh = oddiy matnli xabar).
+
+    Faqat `supports_vision=True` modellar buni ko'radi — `ModelRouter`
+    rasm bor xabarlarda vision qo'llab-quvvatlamaydigan nomzodlarni
+    o'tkazib yuboradi.
+    """
 
 
 @dataclass(frozen=True, slots=True)

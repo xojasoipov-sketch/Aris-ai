@@ -52,6 +52,17 @@ def _to_anthropic_messages(messages: Sequence[ChatMessage]) -> list[dict[str, An
             continue
 
         blocks: list[dict[str, Any]] = []
+        for img in msg.images:
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img.media_type,
+                        "data": img.data,
+                    },
+                }
+            )
         if msg.content:
             blocks.append({"type": "text", "text": msg.content})
         for tu in msg.tool_uses:

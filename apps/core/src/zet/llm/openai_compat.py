@@ -36,7 +36,22 @@ def _to_openai_message(msg: ChatMessage) -> dict[str, Any]:
             "tool_call_id": msg.tool_call_id or "",
             "content": msg.content,
         }
-    payload: dict[str, Any] = {"role": msg.role, "content": msg.content}
+
+    content: Any = msg.content
+    if msg.images:
+        # Rasm bor bo'lsa — content array formatiga o'tish (OpenAI-mos shartnoma)
+        parts: list[dict[str, Any]] = [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{img.media_type};base64,{img.data}"},
+            }
+            for img in msg.images
+        ]
+        if msg.content:
+            parts.append({"type": "text", "text": msg.content})
+        content = parts
+
+    payload: dict[str, Any] = {"role": msg.role, "content": content}
     if msg.tool_uses:
         payload["tool_calls"] = [
             {

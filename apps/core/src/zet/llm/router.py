@@ -153,6 +153,7 @@ class ModelRouter:
         skipped: list[SkipReason] = []
         budget_blocked = False
         estimate = self.estimate_usage(messages, system, max_tokens)
+        needs_vision = any(m.images for m in messages)
 
         for spec in candidates_for(task_class):
             provider = self._providers.get(spec.provider)
@@ -163,6 +164,10 @@ class ModelRouter:
 
             if tools and not spec.supports_tools:
                 skipped.append(SkipReason(spec.key, "tool-calling yo'q"))
+                continue
+
+            if needs_vision and not spec.supports_vision:
+                skipped.append(SkipReason(spec.key, "vision qo'llab-quvvatlanmaydi"))
                 continue
 
             if self._breaker(spec.provider).is_open(now):
