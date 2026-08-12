@@ -56,6 +56,7 @@ from zet.api.routes import (
     state,
     system,
     telegram,
+    voice,
     workspace,
 )
 from zet.automation.builtin_metrics import register_builtin_metrics
@@ -194,5 +195,6 @@ def create_app() -> FastAPI:
     app.include_router(telegram.router, prefix="/api/v1", tags=["telegram"])
     app.include_router(workspace.router, prefix="/api/v1")
     app.include_router(system.router, prefix="/api/v1")
+    app.include_router(voice.router, prefix="/api/v1")
 
     return app

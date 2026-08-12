@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
     "@react-three/fiber": "^9.1.0",
     "geist": "^1.7.2",
     "lucide-react": "^1.31.0",

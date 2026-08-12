@@ -14,12 +14,14 @@ import {
   Camera,
   FileText,
   FolderKanban,
+  Hand,
   LayoutGrid,
   ListChecks,
   MessageSquare,
   MonitorSmartphone,
   Search,
   Settings,
+  Terminal as TerminalIcon,
   Users,
   Volume2,
   VolumeX,
@@ -33,6 +35,7 @@ import { useBackendHealth } from "@/lib/useBackendHealth";
 
 const NAV = [
   { href: "/", label: "Boshqaruv", icon: LayoutGrid },
+  { href: "/nexus", label: "Nexus", icon: Hand },
   { href: "/ai-chat", label: "AI Yordamchi", icon: Bot },
   { href: "/agents", label: "Agentlar", icon: Users },
   { href: "/projects", label: "Loyihalar", icon: FolderKanban },
@@ -43,6 +46,7 @@ const NAV = [
   { href: "/analytics", label: "Analitika", icon: BarChart3 },
   { href: "/devices", label: "Qurilmalar", icon: MonitorSmartphone },
   { href: "/camera", label: "Kamera", icon: Camera },
+  { href: "/terminal", label: "Terminal", icon: TerminalIcon },
   { href: "/settings", label: "Sozlamalar", icon: Settings },
 ] as const;
 
