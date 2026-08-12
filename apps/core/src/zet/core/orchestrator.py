@@ -215,8 +215,10 @@ class Orchestrator:
             return record
 
         try:
+            # Nomlar emas, IMZOLAR: model qaysi parametr majburiyligini
+            # ko'rmasa uni tushirib qoldiradi (`video.learn` `url`siz).
             plan = await self._planner.plan(
-                intent, available_tools=self._tool_registry.tool_names()
+                intent, tool_specs=self._tool_registry.tool_signatures()
             )
         except (PlannerError, LLMError) as exc:
             record.status = RunStatus.FAILED

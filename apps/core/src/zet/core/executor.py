@@ -39,7 +39,8 @@ from zet.llm.router import ModelRouter
 from zet.prompts.answer import ANSWER_SYSTEM, build_answer_prompt
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionDecision, PermissionPolicy
-from zet.tools.registry import ToolRegistry
+from zet.tools.base import ToolPermissionDeniedError, ToolValidationError
+from zet.tools.registry import ToolNotFoundError, ToolRegistry
 
 log = structlog.get_logger(__name__)
 
@@ -395,12 +396,29 @@ class Executor:
         caller_perm = self._effective_permission(step, ctx)
 
         for attempt in range(_MAX_RETRIES + 1):
-            tool_result = await self._registry.execute(
-                step.tool_name,
-                step.tool_params,
-                caller_permission=caller_perm,
-                dry_run=dry_run,
-            )
+            try:
+                tool_result = await self._registry.execute(
+                    step.tool_name,
+                    step.tool_params,
+                    caller_permission=caller_perm,
+                    dry_run=dry_run,
+                )
+            except (ToolValidationError, ToolPermissionDeniedError, ToolNotFoundError) as exc:
+                # Shartnoma xatosi — qayta urinish yordam bermaydi.
+                #
+                # Ilgari bu istisno hech kim ushlamagani uchun butun
+                # `execute_plan`dan chiqib ketardi va API 500 qaytarardi.
+                # Jonli misol: Planner `video.learn` qadamini `url`siz
+                # qo'ydi → "Internal Server Error", ega hech qanday
+                # tushuntirish ko'rmadi. Endi bu oddiy yiqilgan qadam:
+                # fikrlash qadami buni ko'radi va egaga aytadi.
+                log.warning(
+                    "executor.tool_contract_error",
+                    step=step.position,
+                    tool=step.tool_name,
+                    error=str(exc),
+                )
+                return StepResult(step, status=StepStatus.FAILED, error=str(exc))
 
             if tool_result.success:
                 return StepResult(

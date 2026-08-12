@@ -30,6 +30,7 @@ from zet.domain.plan import Plan, PlanStep, PlanValidationError
 from zet.llm.base import ChatMessage, ToolSpec
 from zet.llm.router import ModelRouter, RouteResult
 from zet.prompts.planner import PLANNER_SYSTEM, PLANNER_TOOL_SCHEMA
+from zet.tools.registry import ToolSignature
 
 log = structlog.get_logger(__name__)
 
@@ -69,6 +70,7 @@ class Planner:
         intent: Intent,
         *,
         available_tools: Sequence[str] = (),
+        tool_specs: Sequence[ToolSignature] = (),
         task_class: TaskClass | None = None,
     ) -> Plan:
         """Intent'dan Plan yaratadi.
@@ -76,6 +78,9 @@ class Planner:
         Args:
             intent: strukturalangan niyat (Z1.7 chiqishi)
             available_tools: mavjud tool nomlari
+            tool_specs: tool imzolari (nom + majburiy parametrlar). Berilsa,
+                promptda nomlar o'rniga imzolar ko'rsatiladi va majburiy
+                parametrlar tekshiriladi. Berilmasa — eski xatti-harakat.
             task_class: model tanlash uchun sinf (None → intent'dagi qiymat)
 
         Returns:
@@ -85,9 +90,18 @@ class Planner:
             PlannerError: LLM reja yasa olmadi
         """
         effective_task_class = task_class or intent.task_class
-        tools_str = (
-            ", ".join(available_tools) if available_tools else "hech qanday tool mavjud emas"
-        )
+        if not available_tools and tool_specs:
+            available_tools = [spec.name for spec in tool_specs]
+
+        # Imzolar bo'lsa — nomlar emas, majburiy parametrlari bilan.
+        # Faqat nom ko'rsatilganda model qaysi maydon kerakligini
+        # taxmin qilardi va uni tushirib qoldirardi.
+        if tool_specs:
+            tools_str = "\n" + "\n".join(spec.render() for spec in tool_specs)
+        elif available_tools:
+            tools_str = ", ".join(available_tools)
+        else:
+            tools_str = "hech qanday tool mavjud emas"
 
         system = PLANNER_SYSTEM.format(
             max_steps=self._max_steps,
@@ -105,7 +119,9 @@ class Planner:
                 tools=[_PLAN_TOOL],
             )
 
-            plan, errors = self._extract_and_validate(route_result, intent, available_tools)
+            plan, errors = self._extract_and_validate(
+                route_result, intent, available_tools, tool_specs
+            )
 
             if plan is not None and not errors:
                 log.info(
@@ -156,6 +172,7 @@ class Planner:
         route_result: RouteResult,
         _intent: Intent,
         available_tools: Sequence[str],
+        tool_specs: Sequence[ToolSignature] = (),
     ) -> tuple[Plan | None, list[str]]:
         """LLM javobidan Plan ajratadi va validatsiya qiladi.
 
@@ -197,6 +214,24 @@ class Planner:
                         f"Qadam {step.position}: '{step.tool_name}' "
                         f"tool mavjud emas (mavjudlar: {', '.join(sorted(tool_set))})"
                     )
+
+        # Majburiy parametrlar tekshiruvi.
+        #
+        # Ilgari bu yerda faqat tool NOMI tekshirilardi. Reja qabul
+        # qilinar, so'ng Executor'da `ToolValidationError` otilardi va u
+        # hech kim ushlamagani uchun HTTP 500 bo'lib chiqardi. Endi xato
+        # shu yerda topiladi va repair urinishi uni to'g'rilay oladi.
+        by_name = {spec.name: spec for spec in tool_specs}
+        for step in plan.steps:
+            spec = by_name.get(step.tool_name or "")
+            if spec is None:
+                continue
+            missing = [key for key in spec.required if key not in (step.tool_params or {})]
+            if missing:
+                errors.append(
+                    f"Qadam {step.position}: '{step.tool_name}' uchun majburiy "
+                    f"parametr(lar) berilmagan: {', '.join(missing)}"
+                )
 
         if errors:
             return plan, errors

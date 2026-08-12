@@ -11,6 +11,7 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import jsonschema
@@ -25,6 +26,25 @@ log = structlog.get_logger(__name__)
 
 class ToolNotFoundError(Exception):
     """Registry'da bunday tool yo'q."""
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSignature:
+    """Tool'ning Planner uchun qisqa imzosi."""
+
+    name: str
+    description: str
+    required: list[str]
+    optional: list[str]
+
+    def render(self) -> str:
+        """Prompt uchun bir qatorli ko'rinish."""
+        parts = [f"- {self.name}: {self.description}"]
+        if self.required:
+            parts.append(f"  majburiy: {', '.join(self.required)}")
+        if self.optional:
+            parts.append(f"  ixtiyoriy: {', '.join(self.optional)}")
+        return "\n".join(parts)
 
 
 class ToolRegistry:
@@ -70,6 +90,30 @@ class ToolRegistry:
     def tool_names(self) -> list[str]:
         """Barcha ro'yxatdagi tool nomlari."""
         return list(self._tools.keys())
+
+    def tool_signatures(self) -> list[ToolSignature]:
+        """Planner uchun imzo — nom, tavsif va majburiy parametrlar.
+
+        Ilgari Planner'ga faqat NOMLAR ro'yxati berilardi, lekin undan
+        `tool_params`ni to'g'ri to'ldirish talab qilinardi. Model qaysi
+        maydon majburiyligini bilishning imkoni yo'q edi va jonli
+        misolda `video.learn` qadamini `url`siz qo'ydi — tool
+        validatsiyada yiqildi.
+        """
+        signatures: list[ToolSignature] = []
+        for tool in self._tools.values():
+            schema = tool.input_schema or {}
+            properties = schema.get("properties") or {}
+            required = list(schema.get("required") or [])
+            signatures.append(
+                ToolSignature(
+                    name=tool.name,
+                    description=tool.description,
+                    required=required,
+                    optional=[key for key in properties if key not in required],
+                )
+            )
+        return signatures
 
     def has(self, name: str) -> bool:
         """Tool mavjudligini tekshiradi."""
