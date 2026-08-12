@@ -36,6 +36,7 @@ uniform float uTime;
 uniform float uSpeed;
 uniform float uNoise;
 uniform float uPulse;
+uniform float uDpr;
 attribute float aSeed;
 varying float vGlow;
 
@@ -64,7 +65,8 @@ void main() {
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;
   // Masofaga qarab nuqta o'lchami; seed bilan ozgina xilma-xillik
-  gl_PointSize = (1.6 + aSeed * 1.2) * (140.0 / -mv.z);
+  // (~2px @ z=2.6 — mockup'dagi mayda nuqta zichligi)
+  gl_PointSize = (0.9 + aSeed * 0.9) * (5.5 / -mv.z) * uDpr;
 }
 `;
 
@@ -84,7 +86,7 @@ void main() {
   vec3 cyan  = vec3(0.22, 0.74, 0.97);
   vec3 col = mix(white, cyan, uCyanMix * vGlow);
 
-  gl_FragColor = vec4(col * uBrightness, alpha * 0.85);
+  gl_FragColor = vec4(col * uBrightness, alpha * 0.55);
 }
 `;
 
@@ -120,13 +122,15 @@ function Sphere({ state }: { state: AssistantState }) {
       uBrightness: { value: STATE_PARAMS.sleep.brightness },
       uCyanMix: { value: STATE_PARAMS.sleep.cyanMix },
       uPulse: { value: STATE_PARAMS.sleep.pulse },
+      uDpr: { value: 1 },
     }),
     [],
   );
 
-  useFrame((_, delta) => {
+  useFrame(({ gl }, delta) => {
     if (!mat.current) return;
     const u = mat.current.uniforms;
+    u.uDpr.value = gl.getPixelRatio();
     const target = STATE_PARAMS[state];
     const dt = reduced ? delta * 0.15 : delta;
     u.uTime.value += dt;
