@@ -28,35 +28,46 @@ tekshirayotgan yoki eslatayotgan bo'lsa — tizim tugallanmagan.
 
 ## 2. Agentning 5 xususiyati — gap matritsasi
 
-| # | Xususiyat | Talab | Hozirgi holat | Gap |
-|---|---|---|---|---|
-| 1 | **Vaqt** [Cron] | Belgilangan vaqtda o'zi uyg'onadi | ✅ `automation/scheduler.py` + `cron.py` + `deploy/automation_daemon.py` — real fon tsikli, minutlik aniqlik, `is_due()` | **Yo'q** |
-| 2 | **Xodisa** [webhook] | Tashqi hodisa kelganda uyg'onadi | ✅ `automation/triggers.py` (`TriggerType.WEBHOOK`) + `POST /api/v1/automation/events` — mos triggerlarni haqiqatan bajaradi | **Yo'q** |
-| 3 | **Kuzatuv** [watcher] | Metrikani kuzatadi, **o'zgarganda** uyg'onadi | ❌ Mavjud emas. `TriggerType`da `watcher` yo'q; hech qayerda "oldingi qiymat bilan solishtirish" mantiqi yo'q | **Bor — to'liq** |
-| 4 | **Boshqa agent** [navbat] | Bir agent tugagach keyingisiga topshiradi | ⚠️ Qisman. `WorkflowChain` **oldindan tuzilgan** zanjirni bajaradi, lekin "agent X tugadi → shartga qarab Y uyg'onsin" degan **trigger** yo'q. Zanjir statik, reaktiv emas | **Bor — trigger qatlami** |
-| 5 | **Mustaqillik** [self-planning] | Maqsad qo'yiladi; maqsadga yetmasa **qayta rejalashtiradi va o'zini yaxshilaydi**, yetguncha takrorlaydi | ❌ Mavjud emas. `deploy/selfimprove.py` faqat **tavsiya** yozadi (o'z docstringi: "Faqat TAVSIYA qiladi"). Yopiq maqsad tsikli yo'q | **Bor — to'liq** |
+| # | Xususiyat | Talab | Holat (Z39 dan keyin) |
+|---|---|---|---|
+| 1 | **Vaqt** [Cron] | Belgilangan vaqtda o'zi uyg'onadi | ✅ `automation/scheduler.py` + `cron.py` + `deploy/automation_daemon.py` |
+| 2 | **Xodisa** [webhook] | Tashqi hodisa kelganda uyg'onadi | ✅ `automation/triggers.py` + `POST /api/v1/automation/events` |
+| 3 | **Kuzatuv** [watcher] | Metrikani kuzatadi, **o'zgarganda** uyg'onadi | ✅ **Z39** `automation/watcher.py` — 6 taqqoslash turi, baza qiymat, cooldown |
+| 4 | **Boshqa agent** [navbat] | Bir agent tugagach keyingisiga topshiradi | ✅ **Z39** `automation/handoff.py` — `agent.completed` + `AGENT_HANDOFF` trigger |
+| 5 | **Mustaqillik** [self-planning] | Maqsadga yetmasa qayta rejalashtiradi | ✅ **Z39** `automation/goal.py` — yopiq tsikl, daraja bilan cheklangan |
 
-**Xulosa:** 2 ta xususiyat to'liq bor, 1 tasi qisman, 2 tasi umuman yo'q.
+**Z39 dan oldin:** 2 to'liq, 1 qisman, 2 yo'q. **Hozir:** beshtasi ham bor.
+
+Beshtasi ham oxir-oqibat `AutomationEvent` chiqaradi va `process_event()`
+dan o'tadi — ya'ni beshta xususiyat uchun **bitta** xavfsizlik yo'li bor,
+beshta emas.
 
 ---
 
 ## 3. Avtonomiya darajalari L0–L4
 
-| Daraja | Ta'rif (slayd) | ZET'da hozir |
-|---|---|---|
-| **L0** Chat | Savol-javob, hech narsa bajarilmaydi | ✅ `/api/v1/run` (READ tool'lar) |
-| **L1** Bog'lash | Tool'larga ulanadi, ega buyurganda ishlatadi | ✅ Tool Registry + 16 builtin tool |
-| **L2** Pipeline | Hodisa tushganda oldindan belgilangan zanjir ishlaydi | ✅ Trigger + Workflow |
-| **L3** Agent | **Natija** aytiladi, yo'lni o'zi topadi | ⚠️ `AgentRuntime` plan qiladi, lekin daraja tushunchasi yo'q — hamma agent bir xil huquqda |
-| **L4** Mustaqil agent | O'ziga buyruq beradi, o'zini yaxshilaydi, qaror qabul qiladi | ❌ Yo'q |
+✅ **Z39** — `automation/autonomy.py` darajani birinchi darajali
+tushunchaga aylantirdi.
 
-**Gap:** avtonomiya darajasi **birinchi darajali tushuncha emas**. Hozir
-huquqni faqat `PermissionPolicy` (tool darajasi) va `V-32` (approval)
-belgilaydi. Daraja yo'qligi ikki muammo beradi:
+| Daraja | Ta'rif (slayd) | Ochadigan imkoniyat | Ruxsat shifti |
+|---|---|---|---|
+| **L0** Chat | Savol-javob | — | READ |
+| **L1** Bog'lash | Tool'larga ulanadi, ega buyurganda | `use_tools` | WRITE |
+| **L2** Pipeline | Hodisa oldindan belgilangan zanjirni ishga tushiradi | `+ triggered_run` | EXECUTE |
+| **L3** Agent | Natija aytiladi, yo'lni o'zi topadi | `+ self_planning` | EXECUTE |
+| **L4** Mustaqil | O'ziga buyruq beradi, o'zini yaxshilaydi | `+ self_command`, `self_improve` | EXECUTE |
 
-1. Yangi agent yaratilganda uning **qanchalik erkinligi** yozilmaydi.
-2. L4 xavfli — chegarasiz o'z-o'ziga buyruq berish A-07 tormozlarini
-   chetlab o'tishi mumkin. Daraja **tormoz** sifatida ham kerak.
+**Eng muhim qaror — daraja RUXSAT BERMAYDI, RUXSATNI CHEKLAYDI.**
+
+`effective_permission()` faqat pasaytiradi. L4 agent ham
+`permission_level=READ` bo'lsa EXECUTE ga ko'tarilmaydi, va **ADMIN
+hech bir daraja orqali berilmaydi** — u faqat eganing aniq sozlamasi.
+
+Maqsad tsikli chegarasi ham shu yerdan: L0–L2 = 0 urinish (tsikl yo'q),
+L3 = 1, L4 = 5. Ya'ni "yetguncha takrorlaydi" cheksiz emas.
+
+V-32 hech bir darajada bekor qilinmaydi — test bilan qulflangan
+(`test_autonomy.py::TestApprovalInvariant`).
 
 ---
 
@@ -97,18 +108,40 @@ uchun avval **dvigatel** quriladi, retseptlar esa **e'lon qilingan, lekin
 imkoniyati yetishmasa ochiq "tayyor emas" deb ko'rsatiladigan** ro'yxat
 sifatida yoziladi.
 
-| Bosqich | Nima | Nega birinchi |
-|---|---|---|
-| **Z39** | `automation/autonomy.py` — L0–L4 | Qolgan hammasi darajaga tayanadi (watcher L2+, goal L4) |
-| **Z40** | `automation/watcher.py` — kuzatuv triggeri | 3-xususiyat; TIZIM 06 shu ustida quriladi |
-| **Z41** | `TriggerType.AGENT_HANDOFF` + `agent.completed` hodisasi | 4-xususiyat; zanjirni reaktiv qiladi |
-| **Z42** | `automation/goal.py` — maqsad tsikli | 5-xususiyat; L4 shu bilan haqiqiy bo'ladi |
-| **Z43** | `automation/recipes.py` — 6 retsept + imkoniyat tekshiruvi | Ega ko'radigan yakuniy mahsulot; yetishmovchilik ochiq |
+✅ Bajarildi — **Z39** (dvigatel) va **Z40** (retseptlar).
 
 **Qat'iy qoida:** hech bir retsept "ishlayapti" deb ko'rsatilmaydi, agar
-uning imkoniyati (kalendar kaliti, STT provayderi) haqiqatan ulanmagan
-bo'lsa. `RecipeStatus.MISSING_CAPABILITY` — halol holat, `CLAUDE.md`dagi
+uning imkoniyati (kalendar, STT provayderi) haqiqatan ulanmagan bo'lsa.
+`RecipeStatus.MISSING_CAPABILITY` — halol holat, `CLAUDE.md`dagi
 "Halol holatlar" standartining backend ko'rinishi.
+
+`GET /api/v1/automation/recipes` har bir retsept uchun `status`,
+`missing` (qaysi imkoniyat) va `blocked_steps` (qaysi qadam) qaytaradi.
+`POST /recipes/{code}/install` chala retseptni **o'rnatmaydi** (409).
+
+---
+
+## 7. Keyingi ish — tashqi integratsiyalar
+
+Dvigatel tayyor; retseptlarni yoqish uchun **faqat tashqi ulanishlar**
+qoldi. Og'irlik tartibi (nechta retsept ochilishi bo'yicha):
+
+| # | Imkoniyat | Nechta retsept ochiladi | Nima kerak |
+|---|---|---|---|
+| 1 | `calendar` | **3** (T01, T02, T05) | Google Calendar OAuth + tool |
+| 2 | `task_board` | **2** (T02, T06) | Vazifa doskasi ma'lumot modeli (ZET ichida) |
+| 3 | `meeting_link` | 1 (T01) | Zoom/Meet API |
+| 4 | `stt` | 1 (T02) | `voice/stt.py` — haqiqiy provayder (hozir `StubSTT`) |
+| 5 | `telegram.read_groups` | 1 (T03) | MTProto (Telethon) sessiyasi |
+| 6 | `timed_approval` | 1 (T04) | "Sukut = rozilik" taymerli tasdiq (V-32 kengaytmasi) |
+| 7 | `instagram.webhook` | 1 (T05) | Instagram webhook obunasi |
+
+Har bir imkoniyat qo'shilganda `detect_capabilities()` ga bitta qator
+yoziladi — retseptlarning o'zi **o'zgarmaydi** va avtomatik "ready"
+bo'ladi.
+
+Eng tez g'alaba: **`task_board`** — u tashqi API talab qilmaydi (ZET
+ichidagi ma'lumot modeli) va ikkita retseptni ochadi.
 
 ---
 

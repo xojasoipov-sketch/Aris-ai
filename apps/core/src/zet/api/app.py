@@ -56,6 +56,7 @@ from zet.api.routes import (
     state,
     telegram,
 )
+from zet.automation.builtin_metrics import register_builtin_metrics
 from zet.config import get_settings
 from zet.observability.logging import configure_logging
 
@@ -83,6 +84,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         budget_monthly=settings.budget_monthly_usd,
     )
     bootstrap_agents()
+
+    # Kuzatuv (3-xususiyat) uchun tayyor metrikalar — tashqi API'siz,
+    # shuning uchun watcher birinchi kundan sinab ko'riladi.
+    register_builtin_metrics(get_automation_engine(), get_agent_registry())
 
     # Agent Factory orqali ilgari yaratilgan (builtin bo'lmagan) agentlarni
     # DB'dan qayta tiklaydi — DB mavjud bo'lmasa ham ishga tushish davom

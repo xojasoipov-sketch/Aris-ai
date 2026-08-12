@@ -45,13 +45,17 @@ from zet.api.deps import (
     get_agent_registry,
     get_automation_engine,
     get_config,
+    get_goal_registry,
+    get_killswitch,
     get_model_router,
     get_permission_policy,
     get_tool_registry,
     get_workflow_executor,
 )
-from zet.automation.engine import AutomationEngine, AutomationEvent
+from zet.automation.autonomy import AutonomyLevel, AutonomyViolationError
+from zet.automation.engine import AutomationAction, AutomationEngine, AutomationEvent
 from zet.automation.executor import AgentUnavailableError, WorkflowExecutor, run_agent_command
+from zet.automation.goal import Goal, GoalPursuit, GoalRegistry, GoalStatus
 from zet.automation.recipes import (
     RECIPES,
     Capability,
@@ -67,10 +71,12 @@ from zet.automation.recipes import (
 )
 from zet.automation.scheduler import ScheduleRule, ScheduleStatus
 from zet.automation.triggers import EventTrigger, TriggerCondition, TriggerType
+from zet.automation.watcher import WatchComparison, WatchRule
 from zet.automation.workflow import WorkflowChain, WorkflowStatus, WorkflowStep
 from zet.config import Settings
 from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
+from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
@@ -356,42 +362,61 @@ async def submit_event(
     actions = engine.process_event(event)
     provider = RoutedLLMProvider(router)
 
-    results: list[ActionResultResponse] = []
-    for action in actions:
-        try:
-            run_result = await run_agent_command(
-                action.agent_name,
-                action.command,
-                agent_registry=agent_registry,
-                tool_registry=tool_registry,
-                permission_policy=permission_policy,
-                provider=provider,
-            )
-            results.append(
-                ActionResultResponse(
-                    agent_name=action.agent_name,
-                    command=action.command,
-                    trigger_id=action.trigger_id,
-                    trigger_name=action.trigger_name,
-                    success=run_result.success,
-                    output=run_result.output,
-                    error=run_result.error,
-                )
-            )
-        except AgentUnavailableError as exc:
-            results.append(
-                ActionResultResponse(
-                    agent_name=action.agent_name,
-                    command=action.command,
-                    trigger_id=action.trigger_id,
-                    trigger_name=action.trigger_name,
-                    success=False,
-                    output="",
-                    error=str(exc),
-                )
-            )
-
+    results = [
+        await _run_action(
+            action,
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            permission_policy=permission_policy,
+            provider=provider,
+        )
+        for action in actions
+    ]
     return AutomationEventResponse(event_type=request.event_type, actions=results)
+
+
+async def _run_action(
+    action: AutomationAction,
+    *,
+    agent_registry: AgentRegistry,
+    tool_registry: ToolRegistry,
+    permission_policy: PermissionPolicy,
+    provider: RoutedLLMProvider,
+) -> ActionResultResponse:
+    """Bitta trigger amalini bajarish va natijani javob modeliga o'girish.
+
+    Hodisa yo'li ham, watcher yo'li ham shu funksiyadan o'tadi — ikkalasi
+    uchun alohida bajarish mantiqi yozilmaydi.
+    """
+    try:
+        result = await run_agent_command(
+            action.agent_name,
+            action.command,
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            permission_policy=permission_policy,
+            provider=provider,
+        )
+    except AgentUnavailableError as exc:
+        return ActionResultResponse(
+            agent_name=action.agent_name,
+            command=action.command,
+            trigger_id=action.trigger_id,
+            trigger_name=action.trigger_name,
+            success=False,
+            output="",
+            error=str(exc),
+        )
+
+    return ActionResultResponse(
+        agent_name=action.agent_name,
+        command=action.command,
+        trigger_id=action.trigger_id,
+        trigger_name=action.trigger_name,
+        success=result.success,
+        output=result.output,
+        error=result.error,
+    )
 
 
 @router.get("/stats")
@@ -400,6 +425,210 @@ def get_stats(
 ) -> dict[str, dict[str, int]]:
     """Umumiy statistika (jadvallar, triggerlar, workflowlar, hodisalar)."""
     return engine.stats
+
+
+# ── Kuzatuv qoidalari (3-xususiyat) ───────────────────────────────
+
+
+class WatchCreateRequest(BaseModel):
+    """Yangi kuzatuv qoidasi so'rovi."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    metric: str = Field(..., min_length=1, max_length=120)
+    comparison: WatchComparison = WatchComparison.CHANGED
+    threshold: float = 0.0
+    cooldown_s: int = Field(default=300, ge=0)
+    max_fires: int | None = None
+
+
+class WatchPollResponse(BaseModel):
+    """Qo'lda o'lchash natijasi."""
+
+    fired: int
+    """Nechta qoida signal berdi."""
+
+    actions: list[ActionResultResponse]
+    """Signal natijasida bajarilgan agent amallari."""
+
+
+@router.get("/metrics", response_model=list[str])
+def list_metrics(
+    engine: AutomationEngine = Depends(get_automation_engine),
+) -> list[str]:
+    """Kuzatish mumkin bo'lgan metrikalar ro'yxati.
+
+    Kuzatuv qoidasi yozishdan oldin shu ro'yxatga qaraladi — mavjud
+    bo'lmagan metrika uchun qoida jimgina hech qachon ishlamasdi.
+    """
+    return engine.metrics.known
+
+
+@router.post("/watchers", response_model=WatchRule, status_code=201)
+def create_watcher(
+    request: WatchCreateRequest,
+    engine: AutomationEngine = Depends(get_automation_engine),
+) -> WatchRule:
+    """Yangi kuzatuv qoidasi (metrika o'zgarganda uyg'onadi).
+
+    Metrika ro'yxatdan o'tmagan bo'lsa — 422. Jimgina hech qachon
+    ishlamaydigan qoida yaratilmaydi.
+    """
+    if request.metric not in engine.metrics.known:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{request.metric}' metrikasi yo'q. "
+                f"Mavjudlari: {', '.join(engine.metrics.known) or '(hech qanday)'}"
+            ),
+        )
+    return engine.add_watch(
+        WatchRule(
+            name=request.name,
+            metric=request.metric,
+            comparison=request.comparison,
+            threshold=request.threshold,
+            cooldown_s=request.cooldown_s,
+            max_fires=request.max_fires,
+        )
+    )
+
+
+@router.get("/watchers", response_model=list[WatchRule])
+def list_watchers(
+    metric: str | None = None,
+    engine: AutomationEngine = Depends(get_automation_engine),
+) -> list[WatchRule]:
+    """Kuzatuv qoidalari ro'yxati."""
+    return engine.watchers.list_rules(metric=metric)
+
+
+@router.delete("/watchers/{rule_id}", status_code=204)
+def delete_watcher(
+    rule_id: str,
+    engine: AutomationEngine = Depends(get_automation_engine),
+) -> None:
+    """Kuzatuv qoidasini o'chirish."""
+    if not engine.watchers.remove(rule_id):
+        raise HTTPException(status_code=404, detail="Kuzatuv qoidasi topilmadi")
+
+
+@router.post("/watchers/poll", response_model=WatchPollResponse)
+async def poll_watchers(
+    engine: AutomationEngine = Depends(get_automation_engine),
+    agent_registry: AgentRegistry = Depends(get_agent_registry),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+    permission_policy: PermissionPolicy = Depends(get_permission_policy),
+    model_router: ModelRouter = Depends(get_model_router),
+) -> WatchPollResponse:
+    """Barcha kuzatuv qoidalarini HOZIR o'lchash va signal berganlarini bajarish.
+
+    Fon daemon buni o'zi qiladi; bu endpoint sinash va darhol tekshirish
+    uchun. Birinchi chaqiruv odatda hech narsa qaytarmaydi — u faqat
+    baza qiymatlarni o'rnatadi.
+    """
+    actions = await engine.poll_watchers()
+    provider = RoutedLLMProvider(model_router)
+
+    results: list[ActionResultResponse] = []
+    for action in actions:
+        results.append(
+            await _run_action(
+                action,
+                agent_registry=agent_registry,
+                tool_registry=tool_registry,
+                permission_policy=permission_policy,
+                provider=provider,
+            )
+        )
+
+    return WatchPollResponse(fired=len(actions), actions=results)
+
+
+# ── Maqsadlar (5-xususiyat, L4) ───────────────────────────────────
+
+
+class GoalCreateRequest(BaseModel):
+    """Yangi maqsad so'rovi — NATIJA aytiladi, yo'l aytilmaydi."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    outcome: str = Field(..., min_length=1, max_length=2000)
+    agent_name: str = Field(..., min_length=1)
+    success_criteria: str = Field(default="", max_length=2000)
+    evaluator_agent: str = ""
+    autonomy_level: AutonomyLevel = AutonomyLevel.L3_AGENT
+
+
+@router.post("/goals", response_model=Goal, status_code=201)
+def create_goal(
+    request: GoalCreateRequest,
+    goals: GoalRegistry = Depends(get_goal_registry),
+) -> Goal:
+    """Yangi maqsad yaratish (hali quvilmagan, PENDING)."""
+    return goals.add(
+        Goal(
+            name=request.name,
+            outcome=request.outcome,
+            agent_name=request.agent_name,
+            success_criteria=request.success_criteria,
+            evaluator_agent=request.evaluator_agent,
+            autonomy_level=request.autonomy_level,
+        )
+    )
+
+
+@router.get("/goals", response_model=list[Goal])
+def list_goals(
+    status: GoalStatus | None = None,
+    goals: GoalRegistry = Depends(get_goal_registry),
+) -> list[Goal]:
+    """Maqsadlar ro'yxati."""
+    return goals.list_goals(status=status)
+
+
+@router.get("/goals/{goal_id}", response_model=Goal)
+def get_goal(
+    goal_id: str,
+    goals: GoalRegistry = Depends(get_goal_registry),
+) -> Goal:
+    """Bitta maqsad — barcha urinishlar tarixi bilan."""
+    goal = goals.get(goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="Maqsad topilmadi")
+    return goal
+
+
+@router.post("/goals/{goal_id}/pursue", response_model=Goal)
+async def pursue_goal(
+    goal_id: str,
+    goals: GoalRegistry = Depends(get_goal_registry),
+    agent_registry: AgentRegistry = Depends(get_agent_registry),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+    permission_policy: PermissionPolicy = Depends(get_permission_policy),
+    killswitch: KillSwitchState = Depends(get_killswitch),
+    model_router: ModelRouter = Depends(get_model_router),
+) -> Goal:
+    """Maqsadni yetgunicha (yoki urinishlar tugagunicha) quvish.
+
+    Urinishlar soni AVTONOMIYA DARAJASIDAN: L3 = 1, L4 = 5.
+    L0-L2 maqsad tsikliga umuman ruxsat bermaydi (409).
+    """
+    goal = goals.get(goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="Maqsad topilmadi")
+
+    pursuit = GoalPursuit(
+        agent_registry=agent_registry,
+        tool_registry=tool_registry,
+        permission_policy=permission_policy,
+        killswitch=killswitch,
+        provider=RoutedLLMProvider(model_router, is_autonomous=True),
+    )
+    try:
+        finished = await pursuit.pursue(goal)
+    except AutonomyViolationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return goals.save(finished)
 
 
 # ── TIZIM retseptlari (yangi zip) ─────────────────────────────────

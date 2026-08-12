@@ -17,6 +17,7 @@ from zet.agents.registry import AgentRegistry
 from zet.agents.repository import AgentRepository
 from zet.automation.engine import AutomationEngine
 from zet.automation.executor import WorkflowExecutor
+from zet.automation.goal import GoalRegistry
 from zet.business.pg_crm import PgCRM
 from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
@@ -187,6 +188,16 @@ def get_automation_engine() -> AutomationEngine:
     bir xil holatga ulanadi.
     """
     return AutomationEngine()
+
+
+@lru_cache(maxsize=1)
+def get_goal_registry() -> GoalRegistry:
+    """Global maqsadlar registri (singleton) — 5-xususiyat (mustaqillik).
+
+    `AutomationEngine` bilan bir xil naqsh: hozircha in-memory,
+    DB-persistensiya keyingi bosqich.
+    """
+    return GoalRegistry()
 
 
 # `get_workflow_executor()` — pastda, `get_model_router()`dan keyin (Depends
