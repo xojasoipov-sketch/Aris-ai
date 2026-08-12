@@ -18,7 +18,8 @@
 
 import { CornerDownLeft, Loader2, MessageSquare } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "@/components/ui/forms";
 import { Button, Eyebrow, Panel } from "@/components/ui/primitives";
@@ -28,8 +29,18 @@ import { useResource } from "@/lib/useResource";
 
 const CHANNEL = "web";
 
+/** `useSearchParams` Suspense chegarasini talab qiladi (Next 15). */
 export default function MessagesPage() {
+  return (
+    <Suspense fallback={null}>
+      <MessagesView />
+    </Suspense>
+  );
+}
+
+function MessagesView() {
   const { state, reload } = useResource(() => api.messages(CHANNEL));
+  const params = useSearchParams();
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -39,6 +50,14 @@ export default function MessagesPage() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages.length, sending]);
+
+  // Yuqoridagi qidiruvdan kelgan matn — maydonga qo'yiladi, lekin
+  // AVTOMATIK YUBORILMAYDI: ega yozganini ko'rib, tahrirlab, o'zi
+  // jo'natsin (tasodifiy Enter ZET'ga buyruq bo'lib ketmasin).
+  useEffect(() => {
+    const q = params.get("q");
+    if (q) setDraft(q);
+  }, [params]);
 
   const send = async () => {
     const text = draft.trim();

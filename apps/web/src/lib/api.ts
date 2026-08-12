@@ -164,6 +164,13 @@ export interface ConversationMessageDto {
   created_at: string;
 }
 
+export interface NoteSummaryDto {
+  title: string;
+  size_bytes: number;
+  /** Unix soniya — `Date` uchun 1000 ga ko'paytiriladi. */
+  modified_at: number;
+}
+
 export interface RunDto {
   run_id: string;
   trace_id: string;
@@ -194,6 +201,15 @@ export const api = {
   /** Buyruqni HAQIQATAN backend'ga yuboradi (ilgari canned javob edi). */
   run: (message: string, channel = "web") =>
     call<RunDto>("/run", { method: "POST", body: JSON.stringify({ message, channel }) }),
+
+  /** Obsidian vault eslatmalari — ilgari `/files` bo'sh placeholder edi. */
+  notes: (query = "") =>
+    call<{ notes: NoteSummaryDto[]; total: number }>(
+      `/vault/notes${query ? `?query=${encodeURIComponent(query)}` : ""}`,
+    ),
+
+  note: (title: string) =>
+    call<{ title: string; content: string }>(`/vault/notes/${encodeURIComponent(title)}`),
 
   /** Saqlangan suhbat tarixi — ilgari o'ylab topilgan xabarlar edi. */
   messages: (channel = "web", limit = 50) =>

@@ -8,7 +8,6 @@
 
 import {
   BarChart3,
-  Bell,
   Bot,
   Calendar,
   Camera,
@@ -27,7 +26,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { sound } from "@/lib/sound";
@@ -154,6 +153,8 @@ function StatusBar() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [search, setSearch] = useState("");
 
   return (
     <div className="flex min-h-screen">
@@ -219,21 +220,30 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* ── Asosiy qism ── */}
       <div className="flex min-h-screen flex-1 flex-col pb-16 lg:ml-56 lg:pb-9">
         <header className="sticky top-0 z-30 flex items-center justify-between gap-6 border-b border-[var(--border-hairline)] bg-[rgba(5,6,8,0.85)] px-8 py-3">
-          <div className="flex max-w-md flex-1 items-center gap-2.5 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-4 py-2">
+          {/* Qidiruv — ENTER bosilganda ZET'ga buyruq sifatida ketadi.
+              Ilgari bu maydon `value`/`onChange`siz edi: yozib bo'lardi,
+              lekin hech qayerga bormasdi — bezak input. */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const q = search.trim();
+              if (!q) return;
+              setSearch("");
+              router.push(`/messages?q=${encodeURIComponent(q)}`);
+            }}
+            className="flex max-w-md flex-1 items-center gap-2.5 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-4 py-2"
+          >
             <Search size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
             <input
-              placeholder="Istalgan narsani qidiring…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ZET'ga buyruq yozing…"
+              aria-label="ZET'ga buyruq"
               className="w-full bg-transparent text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
             />
-          </div>
+          </form>
           <div className="flex items-center gap-1">
             <SoundToggle />
-            <button
-              aria-label="Bildirishnomalar"
-              className="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-            >
-              <Bell size={18} strokeWidth={1.5} />
-            </button>
           </div>
         </header>
         <main className="flex-1">{children}</main>
