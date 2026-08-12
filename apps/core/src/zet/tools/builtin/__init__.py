@@ -39,6 +39,8 @@ from zet.tools.builtin.telegram_tools import (
     TelegramChannelStatsTool,
 )
 from zet.tools.builtin.time_now import TimeNowTool
+from zet.tools.builtin.video_learn import DEFAULT_MODEL as DEFAULT_VIDEO_MODEL
+from zet.tools.builtin.video_learn import VideoLearnTool
 from zet.tools.builtin.web_reader import WebReaderTool
 from zet.tools.builtin.web_search import WebSearchTool
 from zet.tools.builtin.youtube import (
@@ -58,6 +60,8 @@ def build_default_registry(
     github_token: str | None = None,
     web_search_api_key: str | None = None,
     youtube_api_key: str | None = None,
+    gemini_api_key: str | None = None,
+    gemini_video_model: str | None = None,
     youtube_oauth_client_id: str | None = None,
     youtube_oauth_client_secret: str | None = None,
     youtube_oauth_refresh_token: str | None = None,
@@ -82,6 +86,9 @@ def build_default_registry(
             Search API); bo'lmasa (default) — stub rejim.
         youtube_api_key: berilsa — `youtube.search`/`.channel_stats`/`.video_stats`
             YouTube Data API v3'ga chiqadi; bo'lmasa (default) — stub rejim.
+        gemini_api_key: berilsa — `video.learn` YouTube videosini to'liq ko'rib
+            bilim ajratadi; bo'lmasa tool chaqirilganda tushunarli xato
+            (soxta "bilim" qaytarish yolg'on bo'lardi, shuning uchun stub yo'q).
         telegram_bot_token: berilsa — `telegram.channel_stats`/`.channel_post`
             Telegram Bot API'siga chiqadi (bot kanaldan administrator bo'lishi
             shart); bo'lmasa — stub.
@@ -108,6 +115,9 @@ def build_default_registry(
     registry.register(WebReaderTool(stub=web_reader_stub))
     registry.register(GitHubReadTool(token=github_token))
     registry.register(GitHubWriteTool(token=github_token))
+    registry.register(
+        VideoLearnTool(api_key=gemini_api_key, model=gemini_video_model or DEFAULT_VIDEO_MODEL)
+    )
     registry.register(YouTubeSearchTool(api_key=youtube_api_key))
     registry.register(YouTubeChannelStatsTool(api_key=youtube_api_key))
     registry.register(YouTubeVideoStatsTool(api_key=youtube_api_key))

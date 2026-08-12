@@ -50,6 +50,7 @@ def build_answer_prompt(
     *,
     step_description: str,
     prior_outputs: list[str] | None = None,
+    recalled: list[str] | None = None,
 ) -> str:
     """Fikrlash qadami uchun foydalanuvchi xabarini yasaydi.
 
@@ -57,11 +58,22 @@ def build_answer_prompt(
         command_text: eganing asl buyrug'i/savoli
         step_description: rejadagi shu qadam nima qilishi kerakligi
         prior_outputs: oldingi qadamlar natijalari (tool chiqishlari ham)
+        recalled: uzoq muddatli xotiradan topilgan tegishli yozuvlar
 
     Returns:
         LLM'ga yuboriladigan matn
     """
     parts = [f"EGANING SAVOLI/BUYRUG'I:\n{command_text}"]
+
+    remembered = [r.strip() for r in (recalled or []) if r and r.strip()]
+    if remembered:
+        joined = "\n\n".join(f"— {r}" for r in remembered)
+        parts.append(
+            "EGA HAQIDA ESLAB QOLGANLARING (uzoq muddatli xotira):\n"
+            f"{joined}\n\n"
+            "Bulardan javobda foydalan. Ular ega haqida ALLAQACHON "
+            "bilgan narsang — qayta so'rama."
+        )
 
     if step_description and step_description.strip() != command_text.strip():
         parts.append(f"SHU QADAMDA NIMA QILISH KERAK:\n{step_description}")

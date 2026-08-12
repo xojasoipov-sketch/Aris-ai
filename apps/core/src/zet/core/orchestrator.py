@@ -31,6 +31,7 @@ from zet.core.executor import (
     BudgetExhaustedError,
     ExecutionContext,
     Executor,
+    RecallFn,
 )
 from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.planner import Planner, PlannerError
@@ -162,8 +163,12 @@ class Orchestrator:
         run_store: RunStore,
         budget_usd: float = 0.10,
         max_steps: int = 20,
+        recall: RecallFn | None = None,
     ) -> None:
         self._router = router
+        # Uzoq muddatli xotira — ega profili va oldingi bilimlar javobga
+        # kirishi uchun. Berilmasa pipeline faqat joriy suhbatni ko'radi.
+        self._recall = recall
         self._intent = IntentRecognizer(router)
         self._planner = Planner(router, max_steps=max_steps)
         self._verifier = Verifier()
@@ -252,6 +257,7 @@ class Orchestrator:
             router=self._router,
             command_text=record.command.text,
             history=record.command.history,
+            recall=self._recall,
         )
         record.status = RunStatus.EXECUTING
         record.pending_approval_id = None

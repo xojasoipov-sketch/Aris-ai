@@ -5,7 +5,7 @@ Singleton va per-request dependency'lar.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -25,6 +25,7 @@ from zet.core.state import CoreState
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
+from zet.domain.memory import MemoryQuery
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.routed_provider import RoutedLLMProvider
@@ -124,6 +125,10 @@ def get_tool_registry() -> ToolRegistry:
         youtube_api_key=(
             settings.youtube_api_key.get_secret_value() if settings.youtube_api_key else None
         ),
+        gemini_api_key=(
+            settings.google_api_key.get_secret_value() if settings.google_api_key else None
+        ),
+        gemini_video_model=settings.gemini_video_model,
         youtube_oauth_client_id=(
             settings.youtube_oauth_client_id.get_secret_value()
             if settings.youtube_oauth_client_id
@@ -436,6 +441,61 @@ def get_workflow_executor(
     )
 
 
+# ── Uzoq muddatli xotirani eslash ─────────────────────────────────
+
+RECALL_LIMIT = 4
+"""Javobga qo'shiladigan xotira yozuvlari soni.
+
+Ko'paytirish kontekstni boyitadi, lekin har so'rov narxini oshiradi va
+mavzudan uzoq yozuvlarni ham tortadi."""
+
+RECALL_MIN_SIMILARITY = 0.35
+"""Shu chegaradan pastdagi yozuv qo'shilmaydi.
+
+Past chegara "hamma narsa tegishli" degan shovqin beradi va LLM'ni
+chalg'itadi — ega profilining butun matni har savolga ilashib chiqardi."""
+
+
+def _build_recall(memory: PgMemoryStore) -> Callable[[str], Awaitable[list[str]]]:
+    """So'rov matnidan tegishli xotira yozuvlarini topuvchi funksiya.
+
+    `Executor` xotira implementatsiyasini bilmaydi — unga faqat shu
+    funksiya beriladi (test uchun oddiy lambda bilan almashtiriladi).
+    """
+
+    async def recall(query: str) -> list[str]:
+        results = await memory.search(
+            MemoryQuery(text=query, limit=RECALL_LIMIT, min_similarity=RECALL_MIN_SIMILARITY)
+        )
+        return [r.entry.content for r in results]
+
+    return recall
+
+
+def get_recall(
+    settings: Settings = Depends(get_config),
+) -> Callable[[str], Awaitable[list[str]]]:
+    """Xotira qidiruvini **kech** ochiladigan sessiya bilan bog'laydi.
+
+    NEGA `Depends(get_memory_store)` EMAS. U so'rov boshlanishidayoq DB
+    sessiyasi ochadi va bu `get_orchestrator`ga bog'liq HAR bir endpoint'ni
+    DB'ga bog'lab qo'yardi — `GET /run/{id}` (404) va bo'sh xabar (422)
+    kabi DB talab qilmaydigan yo'llar ham 500 qaytara boshlagan edi.
+
+    Bu yerdagi yopilma sessiyani faqat haqiqatan qidiruv kerak bo'lganda
+    ochadi; DB yo'q bo'lsa istisno `Executor._think` ichida ushlanadi va
+    javob xotirasiz yoziladi (fail-open).
+    """
+
+    async def recall(query: str) -> list[str]:
+        async with session_scope(get_session_factory()) as session:
+            owner = await get_or_create_owner(session, external_id=settings.owner_id)
+            memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+            return await _build_recall(memory)(query)
+
+    return recall
+
+
 # ── Orchestrator ──────────────────────────────────────────────────
 
 
@@ -447,8 +507,14 @@ def get_orchestrator(
     killswitch: KillSwitchState = Depends(get_killswitch),
     run_store: RunStore = Depends(get_run_store),
     settings: Settings = Depends(get_config),
+    recall: Callable[[str], Awaitable[list[str]]] = Depends(get_recall),
 ) -> Orchestrator:
-    """So'rov chegarasidagi Orchestrator — Intent→Plan→Execute→Verify oqimi."""
+    """So'rov chegarasidagi Orchestrator — Intent→Plan→Execute→Verify oqimi.
+
+    `recall` — uzoq muddatli xotira. Telegram oqimi bilan bir xil bo'lishi
+    uchun bu yerda ham ulanadi: aks holda web/API orqali savol berilganda
+    ZET ega profilini ko'rmasdi, Telegram orqali esa ko'rardi.
+    """
     return Orchestrator(
         router=router,
         tool_registry=tool_registry,
@@ -458,6 +524,7 @@ def get_orchestrator(
         run_store=run_store,
         budget_usd=settings.run_max_usd,
         max_steps=settings.run_max_steps,
+        recall=recall,
     )
 
 
@@ -530,6 +597,19 @@ def get_telegram_bot() -> object:
 
     async def _runner(text: str) -> OrchestratorRunResult:
         async with session_scope(get_session_factory()) as session:
+            # Suhbat tarixi — ZET oldingi gapni eslab qolishi uchun.
+            # Ilgari har xabar mustaqil run edi va "Tushuntir" kabi
+            # ergash buyruqlar kontekstsiz qolardi.
+            owner = await get_or_create_owner(session, external_id=settings.owner_id)
+            store = ConversationStore(session, owner_id=owner.id)
+            conversation = await store.get_or_create(channel="telegram")
+            history = await store.recent_history(conversation)
+
+            # Uzoq muddatli xotira — ega profili va oldingi bilimlar.
+            # Ilgari `memory_entries` jadvaliga yozilardi, lekin javob
+            # yozishda HECH KIM o'qimasdi: profil saqlanib, ishlatilmasdi.
+            memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+
             router = ModelRouter(get_llm_providers(), session, settings)
             orchestrator = Orchestrator(
                 router=router,
@@ -540,14 +620,8 @@ def get_telegram_bot() -> object:
                 run_store=get_run_store(),
                 budget_usd=settings.run_max_usd,
                 max_steps=settings.run_max_steps,
+                recall=_build_recall(memory),
             )
-            # Suhbat tarixi — ZET oldingi gapni eslab qolishi uchun.
-            # Ilgari har xabar mustaqil run edi va "Tushuntir" kabi
-            # ergash buyruqlar kontekstsiz qolardi.
-            owner = await get_or_create_owner(session, external_id=settings.owner_id)
-            store = ConversationStore(session, owner_id=owner.id)
-            conversation = await store.get_or_create(channel="telegram")
-            history = await store.recent_history(conversation)
 
             command = Command(text=text, channel="telegram", history=history)
             record = await orchestrator.start(command)

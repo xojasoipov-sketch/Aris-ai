@@ -20,7 +20,7 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 import structlog
 
@@ -42,6 +42,13 @@ from zet.security.permissions import PermissionDecision, PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
 log = structlog.get_logger(__name__)
+
+RecallFn = Callable[[str], Awaitable[list[str]]]
+"""Uzoq muddatli xotiradan tegishli yozuvlarni topuvchi.
+
+Aniq tip (`PgMemoryStore`) emas, funksiya: `Executor` xotira
+implementatsiyasini bilishi shart emas va testda oddiy lambda bilan
+almashtiriladi."""
 
 _MAX_RETRIES = 2
 """Xatoli qadam uchun maksimal qayta urinish (faqat idempotent toollar)."""
@@ -146,6 +153,7 @@ class Executor:
         router: ModelRouter | None = None,
         command_text: str = "",
         history: Sequence[ConversationTurn] = (),
+        recall: RecallFn | None = None,
     ) -> None:
         self._registry = registry
         self._policy = policy
@@ -157,6 +165,10 @@ class Executor:
         self._router = router
         self._command_text = command_text
         self._history = list(history)
+        # Uzoq muddatli xotira. Berilmasa fikrlash qadami faqat joriy
+        # suhbatni ko'radi — ega haqidagi profil, oldingi qarorlar va
+        # bilim yozuvlari javobga KIRMAYDI.
+        self._recall = recall
 
     @property
     def spent_usd(self) -> float:
@@ -259,6 +271,14 @@ class Executor:
             return ""
 
         prior = [ctx.results[pos].text for pos in sorted(ctx.results) if pos in ctx.results]
+
+        recalled: list[str] = []
+        if self._recall is not None and self._command_text:
+            try:
+                recalled = await self._recall(self._command_text)
+            except Exception:
+                # Xotira ishlamasa javob baribir yoziladi — fail-open.
+                log.warning("executor.recall_failed", step=step.position)
         messages = [
             *_history_to_messages(self._history),
             ChatMessage(
@@ -267,6 +287,7 @@ class Executor:
                     self._command_text or step.description,
                     step_description=step.description,
                     prior_outputs=prior,
+                    recalled=recalled,
                 ),
             ),
         ]

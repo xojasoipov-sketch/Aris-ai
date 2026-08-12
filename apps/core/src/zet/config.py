@@ -106,6 +106,13 @@ class Settings(BaseSettings):
 
     mistral_embed_model: str = "mistral-embed"
     """Mistral embedding modeli (1024 o'lcham)."""
+
+    gemini_video_model: str = "gemini-flash-latest"
+    """`video.learn` uchun model — YouTube havolasini to'g'ridan-to'g'ri o'qiydi.
+
+    Bepul qatlamda har model uchun kunlik limit alohida (~20 so'rov).
+    Limit tugasa `gemini-flash-lite-latest` ga o'tish mumkin — u
+    tezroq va arzonroq, sifati biroz pastroq."""
     # T1 — free tier
     google_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
