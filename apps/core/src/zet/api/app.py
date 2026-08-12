@@ -139,6 +139,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         session_factory=get_session_factory(),
         llm_providers=get_llm_providers(),
         settings=settings,
+        # Natija egaga yetib borsin — aks holda "Kunlik puls" har kuni
+        # ishlab, hech kimga hech narsa aytmasdi.
+        notifier=get_notifier(),
     )
     automation_daemon_task = asyncio.create_task(automation_daemon.run_forever())
 

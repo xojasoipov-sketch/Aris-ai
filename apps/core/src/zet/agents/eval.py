@@ -86,6 +86,19 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "instagram.recent_media": PermissionLevel.READ,
     "instagram.publish_photo": PermissionLevel.WRITE,
     "camera.snapshot": PermissionLevel.READ,
+    "memory.search": PermissionLevel.READ,
+    "video.learn": PermissionLevel.READ,
+    # Ish maydoni (Z48) — doska ZET'ning ICHKI ma'lumoti, tashqi
+    # dunyoga hech narsa yubormaydi, shuning uchun yozish WRITE
+    # (EXECUTE emas).
+    "task.list": PermissionLevel.READ,
+    "task.create": PermissionLevel.WRITE,
+    "task.update": PermissionLevel.WRITE,
+    "task.pulse": PermissionLevel.READ,
+    "project.list": PermissionLevel.READ,
+    "project.create": PermissionLevel.WRITE,
+    "calendar.list": PermissionLevel.READ,
+    "calendar.add": PermissionLevel.WRITE,
     "desktop.screenshot": PermissionLevel.READ,
     "desktop.type_text": PermissionLevel.EXECUTE,
     "desktop.key_press": PermissionLevel.EXECUTE,

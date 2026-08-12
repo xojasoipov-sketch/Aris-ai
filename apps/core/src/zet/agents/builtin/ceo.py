@@ -58,7 +58,17 @@ CEO_AGENT_SPEC = AgentSpec(
     role="manager",
     goal="Tizim faoliyatini monitoring qilish, strategik tahlil va tavsiyalar berish",
     system_prompt=CEO_SYSTEM_PROMPT,
-    tool_allowlist=["web.search", "time.now"],
+    tool_allowlist=[
+        "web.search",
+        "time.now",
+        "memory.search",
+        # T06 "Kunlik puls" 3-qadami shu agentda: doskani O'QIYDI
+        # (yozmaydi) va xulosani egaga yetkazadi.
+        "task.pulse",
+        "task.list",
+        "project.list",
+        "calendar.list",
+    ],
     model_policy=ModelTier.T1_FREE,
     permission_level=PermissionLevel.READ,
     trust_level=TrustLevel.SYSTEM,

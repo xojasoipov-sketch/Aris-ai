@@ -21,6 +21,7 @@ from zet.deploy.automation_daemon import AutomationDaemon
 from zet.domain.enums import AgentStatus
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
+from zet.telegram.notifier import StubNotifier
 from zet.tools.builtin import build_default_registry
 
 
@@ -162,6 +163,70 @@ class TestTick:
         fired = await d.tick(now=_at(9, 0))
         # Xato ko'tarilmaydi — faqat log, ro'yxatda ham qolmaydi (ishga tushmadi)
         assert fired == [e.scheduler.list_rules()[0].id]
+
+
+class TestDelivery:
+    """Natija EGAGA yetib borishi kerak (Z48.5).
+
+    NEGA BU TESTLAR BOR. Daemon agentni ishga tushirar, natijani esa
+    faqat LOG'ga yozardi. Ya'ni T06 "Kunlik puls" har kuni 09:20 va
+    18:40 da ishlab, hech kimga hech narsa AYTMASDI — slaydda esa
+    va'da aniq: "Uch qatorli xabar: siljidi / qotdi / sizdan qaror
+    kutmoqda".
+
+    Ega ko'rmaydigan joyga tushgan avtomatlashtirish natijasi
+    avtomatlashtirish emas — shunchaki sarflangan token.
+    """
+
+    def _daemon(self, engine, registry, tmp_path, notifier):
+        return AutomationDaemon(
+            engine=engine,
+            agent_registry=registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            core_state=CoreState(),
+            killswitch=KillSwitchState(),
+            timezone="UTC",
+            notifier=notifier,
+        )
+
+    async def test_fired_rule_reaches_the_owner(
+        self,
+        automation_engine: AutomationEngine,
+        agent_registry: AgentRegistry,
+        tmp_path: Path,
+    ) -> None:
+        notifier = StubNotifier()
+
+        await self._daemon(automation_engine, agent_registry, tmp_path, notifier).tick(
+            now=_at(9, 0)
+        )
+
+        assert notifier.sent, "qoida ishga tushdi, lekin ega hech narsa olmadi"
+
+    async def test_message_names_the_rule(
+        self,
+        automation_engine: AutomationEngine,
+        agent_registry: AgentRegistry,
+        tmp_path: Path,
+    ) -> None:
+        """Ega qaysi avtomatlashtirish yozganini bilishi kerak.
+
+        Kuniga bir nechta retsept ishlaganda, nomsiz matn qayerdan
+        kelganini aytmaydi."""
+        notifier = StubNotifier()
+
+        await self._daemon(automation_engine, agent_registry, tmp_path, notifier).tick(
+            now=_at(9, 0)
+        )
+
+        assert "Kunlik hisobot" in notifier.sent[0].text
+
+    async def test_no_notifier_is_not_an_error(self, daemon: AutomationDaemon) -> None:
+        """Bildirishnoma ulanmagan bo'lsa ham qoida ishlayveradi."""
+        fired = await daemon.tick(now=_at(9, 0))
+
+        assert fired
 
 
 class TestStop:

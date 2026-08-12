@@ -11,6 +11,7 @@ Tekshiriladi:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +20,7 @@ from typer.testing import CliRunner
 
 from zet.agents.builtin.ceo import CEO_AGENT_SPEC
 from zet.agents.builtin.operations import OPERATIONS_AGENT_SPEC
-from zet.agents.eval import EvalRunner
+from zet.agents.eval import TOOL_PERMISSIONS, EvalRunner
 from zet.agents.factory import AgentFactory, FactoryRequest
 from zet.agents.lifecycle import AgentLifecycle
 from zet.agents.registry import AgentRegistry
@@ -29,6 +30,7 @@ from zet.cli import app as cli_app
 from zet.domain.agent import AgentSpec
 from zet.domain.enums import AgentStatus, PermissionLevel, TrustLevel
 from zet.security.killswitch import KillSwitchState
+from zet.tools.builtin import build_default_registry
 
 runner = CliRunner()
 
@@ -285,18 +287,63 @@ class TestCEOAgent:
         assert "QOIDALAR" in CEO_AGENT_SPEC.system_prompt
 
 
+class TestToolPermissionMap:
+    """`TOOL_PERMISSIONS` registry bilan sinxron qolishi kerak.
+
+    NEGA BU TEST BOR. `eval.py`dagi bu jadval registry'dagi tool'lar
+    ro'yxatini QO'LDA takrorlaydi. Yangi tool qo'shilganda uni bu yerga
+    yozish unutilsa, eval o'sha tool'ni "noma'lum" deb hisoblaydi va
+    uni allowlist'ga qo'shgan HAR QANDAY agent eval'dan yiqiladi —
+    sababi esa agentga umuman aloqasiz. Z48'da aynan shunday bo'ldi.
+    """
+
+    def test_every_registered_tool_has_a_permission(self, tmp_path: Path) -> None:
+        registry = build_default_registry(notes_dir=tmp_path)
+
+        missing = [t.name for t in registry.list_tools() if t.name not in TOOL_PERMISSIONS]
+
+        assert missing == [], f"Bu tool'lar TOOL_PERMISSIONS'da yo'q: {missing}"
+
+    def test_declared_permission_matches_the_tool(self, tmp_path: Path) -> None:
+        """Jadvaldagi daraja tool'ning O'ZI e'lon qilganiga mos.
+
+        Mos kelmasa eval yolg'on gapiradi: agent ruxsati yetarli
+        ko'rinadi-yu, ish vaqtida registry uni rad etadi."""
+        registry = build_default_registry(notes_dir=tmp_path)
+
+        wrong = [
+            f"{t.name}: jadval={TOOL_PERMISSIONS[t.name].value} tool={t.permission_level.value}"
+            for t in registry.list_tools()
+            if t.name in TOOL_PERMISSIONS and TOOL_PERMISSIONS[t.name] is not t.permission_level
+        ]
+
+        assert wrong == [], f"Ruxsat darajasi mos emas: {wrong}"
+
+
 class TestOperationsAgent:
     def test_spec_valid(self) -> None:
         """Operations agent spec to'g'ri."""
         assert OPERATIONS_AGENT_SPEC.name == "operations"
         assert OPERATIONS_AGENT_SPEC.division == "ops"
         assert OPERATIONS_AGENT_SPEC.role == "analyst"
-        assert OPERATIONS_AGENT_SPEC.permission_level == PermissionLevel.READ
+        # WRITE (Z48): agent vazifa qo'shadi va kalendarga yozadi. Doska
+        # ZET'ning ICHKI ma'lumoti — tashqi dunyoga hech narsa
+        # yubormaydi, shuning uchun EXECUTE emas.
+        assert OPERATIONS_AGENT_SPEC.permission_level == PermissionLevel.WRITE
 
     def test_has_tools(self) -> None:
         """Operations agentda toollar bor."""
         assert "web.search" in OPERATIONS_AGENT_SPEC.tool_allowlist
         assert "time.now" in OPERATIONS_AGENT_SPEC.tool_allowlist
+
+    def test_can_reach_the_board(self) -> None:
+        """T02 va T06 AYNAN shu agentdan boshlanadi.
+
+        Allowlist'siz `AgentRuntime` chaqiruvni rad etadi va agent
+        doskani umuman ko'rmagan holda hisobot yozib yuborardi —
+        ishonarli ko'rinishdagi to'qima."""
+        for tool in ("task.pulse", "task.list", "task.create", "calendar.add"):
+            assert tool in OPERATIONS_AGENT_SPEC.tool_allowlist, tool
 
     def test_eval_passes(self) -> None:
         """Operations agent eval dan o'tadi."""

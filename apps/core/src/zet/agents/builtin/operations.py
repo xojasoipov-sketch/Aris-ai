@@ -65,9 +65,30 @@ OPERATIONS_AGENT_SPEC = AgentSpec(
     role="analyst",
     goal="Tizim operatsiyalarini monitoring qilish, budjet nazorati, xatolarni aniqlash",
     system_prompt=OPERATIONS_SYSTEM_PROMPT,
-    tool_allowlist=["web.search", "time.now"],
+    tool_allowlist=[
+        "web.search",
+        "time.now",
+        "memory.search",
+        # Ish maydoni tool'lari (Z48.5) — T02 "Ovozdan rejaga" va T06
+        # "Kunlik puls" AYNAN shu agentdan boshlanadi. Allowlist'siz
+        # `AgentRuntime` chaqiruvni rad etadi ("allowlist'da yo'q") va
+        # agent doskani umuman ko'rmagan holda hisobot YOZIB YUBORARDI —
+        # ishonarli ko'rinishdagi to'qima. Bu vision agentdagi kamera
+        # tool'i yo'qligining aynan takrori edi.
+        "task.list",
+        "task.create",
+        "task.update",
+        "task.pulse",
+        "project.list",
+        "project.create",
+        "calendar.list",
+        "calendar.add",
+    ],
     model_policy=ModelTier.T1_FREE,
-    permission_level=PermissionLevel.READ,
+    # WRITE: vazifa qo'shish va kalendarga yozish uchun. Doska ZET'ning
+    # ICHKI ma'lumoti — tashqi dunyoga hech narsa yubormaydi, shuning
+    # uchun EXECUTE emas.
+    permission_level=PermissionLevel.WRITE,
     trust_level=TrustLevel.SYSTEM,
     max_steps=10,
     max_tool_calls=15,

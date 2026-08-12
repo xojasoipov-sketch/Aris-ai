@@ -51,6 +51,7 @@ from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
+from zet.telegram.notifier import Notifier
 from zet.tools.registry import ToolRegistry
 
 log = structlog.get_logger(__name__)
@@ -84,6 +85,7 @@ class AutomationDaemon:
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         llm_providers: dict[str, LLMProvider] | None = None,
         settings: Settings | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         self._engine = engine
         self._agent_registry = agent_registry
@@ -96,6 +98,7 @@ class AutomationDaemon:
         self._session_factory = session_factory
         self._llm_providers = llm_providers
         self._settings = settings
+        self._notifier = notifier
         self._last_fired_minute: dict[str, str] = {}
         self._stop_event = asyncio.Event()
 
@@ -151,6 +154,28 @@ class AutomationDaemon:
             await self._persist_state()
 
         return fired
+
+    async def _deliver(self, rule: ScheduleRule, output: str) -> None:
+        """Natijani EGAGA yetkazadi.
+
+        NEGA KERAK BO'LDI. Daemon agentni ishga tushirar, natijani esa
+        faqat LOG'ga yozardi. Ya'ni T06 "Kunlik puls" har kuni 09:20 va
+        18:40 da ishlab, hech kimga hech narsa AYTMASDI — slaydda esa
+        va'da aniq: "Uch qatorli xabar: siljidi / qotdi / sizdan qaror
+        kutmoqda".
+
+        Ega ko'rmaydigan joyga tushgan avtomatlashtirish natijasi
+        avtomatlashtirish emas — shunchaki sarflangan token.
+
+        Xato YUTILADI: xabar yetkazilmagani uchun qoida "bajarilmadi"
+        deb belgilanmaydi — ish HAQIQATAN bajarilgan.
+        """
+        if self._notifier is None or not output.strip():
+            return
+        try:
+            await self._notifier.send_text(f"{rule.name}\n\n{output.strip()}")
+        except Exception:
+            log.warning("automation_daemon.notify_failed", rule_id=rule.id)
 
     async def _persist_state(self) -> None:
         """Jadval holatini bazaga yozadi (fail-open).
@@ -212,6 +237,7 @@ class AutomationDaemon:
                     attempt=attempt,
                     success=True,
                 )
+                await self._deliver(rule, result.output)
                 return
 
             last_error = result.error
