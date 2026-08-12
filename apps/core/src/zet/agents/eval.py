@@ -72,6 +72,8 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "web.search": PermissionLevel.READ,
     "web.read": PermissionLevel.READ,
     "note.write": PermissionLevel.WRITE,
+    "note.read": PermissionLevel.READ,
+    "note.list": PermissionLevel.READ,
     "github.read": PermissionLevel.READ,
     "github.write": PermissionLevel.WRITE,
     "camera.snapshot": PermissionLevel.READ,

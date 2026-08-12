@@ -18,6 +18,8 @@ from pathlib import Path
 from zet.devices.camera import CameraProvider
 from zet.tools.builtin.camera import CameraSnapshotTool
 from zet.tools.builtin.github import GitHubReadTool, GitHubWriteTool
+from zet.tools.builtin.note_list import NoteListTool
+from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteWriteTool
 from zet.tools.builtin.shell_exec import ShellExecTool
 from zet.tools.builtin.time_now import TimeNowTool
@@ -57,6 +59,8 @@ def build_default_registry(
     registry = ToolRegistry()
     registry.register(TimeNowTool())
     registry.register(NoteWriteTool(notes_dir=notes_dir))
+    registry.register(NoteReadTool(notes_dir=notes_dir))
+    registry.register(NoteListTool(notes_dir=notes_dir))
     registry.register(WebSearchTool(api_key=web_search_api_key))
     registry.register(WebReaderTool(stub=web_reader_stub))
     registry.register(GitHubReadTool(token=github_token))

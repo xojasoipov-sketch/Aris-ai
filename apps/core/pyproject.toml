@@ -131,3 +131,8 @@ exclude_lines = [
     "raise NotImplementedError",
     "@overload",
 ]
+
+[dependency-groups]
+dev = [
+    "types-pyyaml>=6.0.12.20260724",
+]

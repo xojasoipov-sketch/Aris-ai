@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from zet.domain.enums import PermissionLevel, TrustLevel
+from zet.tools.builtin.note_list import NoteListTool
+from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteWriteTool
 from zet.tools.builtin.shell_exec import ShellExecTool
 from zet.tools.builtin.time_now import TimeNowTool
@@ -160,6 +162,153 @@ class TestNoteWrite:
         assert result.success is True
         assert result.output["dry_run"] is True
         assert not (tmp_path / "notes" / "test.md").exists()
+
+    async def test_frontmatter_written(self, tmp_path: Path) -> None:
+        """frontmatter berilsa — YAML fenc bilan saqlanadi."""
+        tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        result = await tool.execute(
+            {"title": "test", "content": "Tana", "frontmatter": {"tags": ["a"]}}
+        )
+
+        assert result.success is True
+        content = (tmp_path / "notes" / "test.md").read_text()
+        assert content.startswith("---\n")
+        assert "tags:" in content
+        assert content.endswith("Tana")
+
+    async def test_frontmatter_with_append_rejected(self, tmp_path: Path) -> None:
+        """frontmatter + append birga → xato."""
+        tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await tool.execute({"title": "test", "content": "birinchi"})
+        result = await tool.execute(
+            {
+                "title": "test",
+                "content": "ikkinchi",
+                "append": True,
+                "frontmatter": {"tags": ["a"]},
+            }
+        )
+        assert result.success is False
+
+
+class TestNoteRead:
+    """note.read testlari."""
+
+    async def test_read_plain_note(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "test", "content": "# Salom"})
+
+        read_tool = NoteReadTool(notes_dir=tmp_path / "notes")
+        result = await read_tool.execute({"title": "test"})
+
+        assert result.success is True
+        assert result.output["content"] == "# Salom"
+        assert result.output["frontmatter"] == {}
+
+    async def test_read_with_frontmatter(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute(
+            {"title": "test", "content": "Tana", "frontmatter": {"status": "active"}}
+        )
+
+        read_tool = NoteReadTool(notes_dir=tmp_path / "notes")
+        result = await read_tool.execute({"title": "test"})
+
+        assert result.output["frontmatter"] == {"status": "active"}
+        assert result.output["content"] == "Tana"
+
+    async def test_read_extracts_outgoing_links(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "a", "content": "Qarang [[b]]"})
+
+        read_tool = NoteReadTool(notes_dir=tmp_path / "notes")
+        result = await read_tool.execute({"title": "a"})
+
+        assert result.output["links"] == ["b"]
+
+    async def test_read_finds_backlinks(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "a", "content": "Salom"})
+        await write_tool.execute({"title": "b", "content": "Qarang [[a]]"})
+        await write_tool.execute({"title": "c", "content": "Bog'liq emas"})
+
+        read_tool = NoteReadTool(notes_dir=tmp_path / "notes")
+        result = await read_tool.execute({"title": "a"})
+
+        assert result.output["backlinks"] == ["b"]
+
+    async def test_read_missing_note_fails(self, tmp_path: Path) -> None:
+        read_tool = NoteReadTool(notes_dir=tmp_path / "notes")
+        result = await read_tool.execute({"title": "yoq"})
+
+        assert result.success is False
+        assert "topilmadi" in (result.error or "")
+
+    async def test_properties(self, tmp_path: Path) -> None:
+        tool = NoteReadTool(notes_dir=tmp_path)
+        assert tool.name == "note.read"
+        assert tool.permission_level == PermissionLevel.READ
+
+
+class TestNoteList:
+    """note.list testlari."""
+
+    async def test_list_empty_vault(self, tmp_path: Path) -> None:
+        tool = NoteListTool(notes_dir=tmp_path / "notes")
+        result = await tool.execute({})
+
+        assert result.success is True
+        assert result.output["notes"] == []
+        assert result.output["total"] == 0
+
+    async def test_list_all_notes(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "a", "content": "matn a"})
+        await write_tool.execute({"title": "b", "content": "matn b"})
+
+        list_tool = NoteListTool(notes_dir=tmp_path / "notes")
+        result = await list_tool.execute({})
+
+        assert result.output["total"] == 2
+        titles = {n["title"] for n in result.output["notes"]}
+        assert titles == {"a", "b"}
+
+    async def test_query_filters_by_title(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "loyiha-x", "content": "matn"})
+        await write_tool.execute({"title": "boshqa", "content": "matn"})
+
+        list_tool = NoteListTool(notes_dir=tmp_path / "notes")
+        result = await list_tool.execute({"query": "loyiha"})
+
+        assert result.output["total"] == 1
+        assert result.output["notes"][0]["title"] == "loyiha-x"
+
+    async def test_query_filters_by_content(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "a", "content": "noyob-kalit-so'z"})
+        await write_tool.execute({"title": "b", "content": "boshqa matn"})
+
+        list_tool = NoteListTool(notes_dir=tmp_path / "notes")
+        result = await list_tool.execute({"query": "noyob-kalit"})
+
+        assert result.output["total"] == 1
+
+    async def test_limit_applied(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        for i in range(5):
+            await write_tool.execute({"title": f"note-{i}", "content": "matn"})
+
+        list_tool = NoteListTool(notes_dir=tmp_path / "notes")
+        result = await list_tool.execute({"limit": 2})
+
+        assert len(result.output["notes"]) == 2
+        assert result.output["total"] == 5
+
+    async def test_properties(self, tmp_path: Path) -> None:
+        tool = NoteListTool(notes_dir=tmp_path)
+        assert tool.name == "note.list"
+        assert tool.permission_level == PermissionLevel.READ
 
 
 class TestShellExec:
