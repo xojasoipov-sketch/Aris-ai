@@ -109,25 +109,22 @@ class TestNoteWrite:
         assert "birinchi" in content
         assert "ikkinchi" in content
 
-    async def test_path_traversal_sanitized(self, tmp_path: Path) -> None:
-        """Path traversal (../../etc/passwd) → sanitizatsiya qilinadi, notes ichida qoladi."""
+    async def test_path_traversal_rejected(self, tmp_path: Path) -> None:
+        """Path traversal (../../etc/passwd) → rad etiladi (jimgina tozalanmaydi)."""
         tool = NoteWriteTool(notes_dir=tmp_path / "notes")
         result = await tool.execute({"title": "../../etc/passwd", "content": "xavfli"})
 
-        # Sanitizatsiya: '..' → '_', '/' → '_' → fayl notes ichida yaratiladi
-        assert result.success is True
-        # Fayl notes papkasi ICHIDA yaratilganini tekshirish
-        created_path = result.output["path"]
-        assert created_path.startswith(str(tmp_path / "notes"))
+        assert result.success is False
+        assert not (tmp_path / "etc").exists()
 
-    async def test_slash_in_title(self, tmp_path: Path) -> None:
-        """Slash (/) sanitizatsiya qilinadi."""
+    async def test_slash_creates_subfolder(self, tmp_path: Path) -> None:
+        """Slash (/) haqiqiy ichki papka yaratadi — Obsidian vault'i shunday tuzilgan."""
         tool = NoteWriteTool(notes_dir=tmp_path / "notes")
-        result = await tool.execute({"title": "sub/dir/file", "content": "ok"})
+        result = await tool.execute({"title": "Loyihalar/ZET", "content": "ok"})
 
         assert result.success is True
-        # Slash _ ga almashtiriladi
-        assert (tmp_path / "notes" / "sub_dir_file.md").exists()
+        assert (tmp_path / "notes" / "Loyihalar" / "ZET.md").exists()
+        assert result.output["title"] == "Loyihalar/ZET"
 
     async def test_content_too_large(self, tmp_path: Path) -> None:
         """100 KB dan katta matn → xato."""
@@ -248,6 +245,63 @@ class TestNoteRead:
         tool = NoteReadTool(notes_dir=tmp_path)
         assert tool.name == "note.read"
         assert tool.permission_level == PermissionLevel.READ
+
+
+class TestVaultFolders:
+    """Haqiqiy Obsidian vault'i ichki papkalarga ega — ZET ularni ko'rishi shart."""
+
+    async def test_list_finds_nested_notes(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "yuza", "content": "a"})
+        await write_tool.execute({"title": "Loyihalar/ZET", "content": "b"})
+        await write_tool.execute({"title": "Kundalik/2026-08-12", "content": "c"})
+
+        list_tool = NoteListTool(notes_dir=tmp_path / "notes")
+        result = await list_tool.execute({})
+
+        titles = {n["title"] for n in result.output["notes"]}
+        assert titles == {"yuza", "Loyihalar/ZET", "Kundalik/2026-08-12"}
+
+    async def test_list_skips_obsidian_internals(self, tmp_path: Path) -> None:
+        notes = tmp_path / "notes"
+        (notes / ".obsidian").mkdir(parents=True)
+        (notes / ".obsidian" / "workspace.md").write_text("config", encoding="utf-8")
+        (notes / "haqiqiy.md").write_text("eslatma", encoding="utf-8")
+
+        result = await NoteListTool(notes_dir=notes).execute({})
+        assert [n["title"] for n in result.output["notes"]] == ["haqiqiy"]
+
+    async def test_read_nested_note(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "Loyihalar/ZET", "content": "Loyiha matni"})
+
+        result = await NoteReadTool(notes_dir=tmp_path / "notes").execute(
+            {"title": "Loyihalar/ZET"}
+        )
+        assert result.success is True
+        assert result.output["title"] == "Loyihalar/ZET"
+        assert result.output["content"] == "Loyiha matni"
+
+    async def test_backlink_across_folders_by_basename(self, tmp_path: Path) -> None:
+        """Obsidian semantikasi: `[[ZET]]` boshqa papkadagi `Loyihalar/ZET` ga ishora qiladi."""
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "Loyihalar/ZET", "content": "Asosiy"})
+        await write_tool.execute({"title": "Kundalik/bugun", "content": "Bugun [[ZET]] ustida"})
+
+        result = await NoteReadTool(notes_dir=tmp_path / "notes").execute(
+            {"title": "Loyihalar/ZET"}
+        )
+        assert result.output["backlinks"] == ["Kundalik/bugun"]
+
+    async def test_backlink_with_full_path_link(self, tmp_path: Path) -> None:
+        write_tool = NoteWriteTool(notes_dir=tmp_path / "notes")
+        await write_tool.execute({"title": "Loyihalar/ZET", "content": "Asosiy"})
+        await write_tool.execute({"title": "reja", "content": "[[Loyihalar/ZET]] ni ko'r"})
+
+        result = await NoteReadTool(notes_dir=tmp_path / "notes").execute(
+            {"title": "Loyihalar/ZET"}
+        )
+        assert result.output["backlinks"] == ["reja"]
 
 
 class TestNoteList:

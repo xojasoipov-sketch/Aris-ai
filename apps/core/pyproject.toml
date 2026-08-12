@@ -88,6 +88,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # S101 assert · S105/S106 testdagi soxta sirlar · ARG fixture argumentlari
 "tests/**" = ["S101", "S105", "S106", "ARG001", "ARG002"]
+# RUF001: o'zbekcha (gʻ, oʻ) va kirill nomlar shu testlarning MAQSADI —
+# vault Unicode fayl nomlarini qabul qilishini tekshiradi (Obsidian kabi)
+"tests/test_vault.py" = ["S101", "S105", "S106", "ARG001", "ARG002", "RUF001", "RUF002"]
 "alembic/**" = ["ARG001", "N999"]
 
 [tool.ruff.lint.flake8-tidy-imports]

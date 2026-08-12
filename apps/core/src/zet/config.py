@@ -123,7 +123,32 @@ class Settings(BaseSettings):
 
     # ── Yo'llar ────────────────────────────────────────────────────
     data_dir: Path = _REPO_ROOT / "data"
+
     vault_dir: Path = _REPO_ROOT / "vault"
+    """Obsidian vault papkasi — `note.write`/`note.read`/`note.list` shu yerda
+    ishlaydi. `ZET_VAULT_DIR` orqali o'z vault'ingizga yo'naltiriladi."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _blank_paths_use_default(cls, data: object) -> object:
+        """Bo'sh `ZET_VAULT_DIR=` ni `Path('.')` ga aylantirmaslik uchun.
+
+        Aks holda vault butun repo bo'lib qolardi — `note.list` manba
+        daraxtidagi har bir `.md` ni ko'rar, `note.write` esa kodning
+        ichiga yozardi. Bo'sh qiymat butunlay olib tashlanadi, shunda
+        maydonning o'z default'i qo'llanadi.
+        """
+        if not isinstance(data, dict):
+            return data
+        return {
+            key: value
+            for key, value in data.items()
+            if not (
+                key.lower().removeprefix("zet_") in {"data_dir", "vault_dir"}
+                and isinstance(value, str)
+                and not value.strip()
+            )
+        }
 
     @field_validator("database_url", "redis_url")
     @classmethod

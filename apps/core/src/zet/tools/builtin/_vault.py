@@ -1,8 +1,16 @@
-"""Vault (Obsidian-style markdown papka) uchun umumiy yordamchilar.
+"""Vault (Obsidian) papkasi uchun umumiy yordamchilar.
 
 `note.write`/`note.read`/`note.list` toollarining barchasi shu modulni
-ishlatadi — fayl nomi sanitizatsiyasi, YAML frontmatter va `[[wikilink]]`
+ishlatadi — yo'l sanitizatsiyasi, YAML frontmatter va `[[wikilink]]`
 mantig'i bir joyda, takrorlanmaydi.
+
+Haqiqiy Obsidian vault'i **ichki papkalarga** ega (`Loyihalar/ZET.md`,
+`Kundalik/2026-08-12.md`). Shuning uchun eslatma nomi `/` bilan
+ajratilgan yo'l bo'lishi mumkin; har bir segment alohida sanitizatsiya
+qilinadi va `..` qat'iy rad etiladi (path traversal).
+
+Obsidian'ning o'z papkalari (`.obsidian`, `.trash`) va boshqa yashirin
+papkalar indekslashda o'tkazib yuboriladi — ular eslatma emas.
 
 Bog'liq qarorlar:
     Bo'lim 2 — Obsidian 2-tomonlama sinxron (markdown + frontmatter + backlink)
@@ -12,6 +20,7 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -19,29 +28,85 @@ import yaml
 
 from zet.tools.base import ToolError
 
-_SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_\-][a-zA-Z0-9_\- ]{0,98}$")
 _FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.DOTALL)
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 
+_UNSAFE_CHARS_RE = re.compile(
+    r"["
+    r'<>:"/\\|?*'  # fayl tizimida taqiqlangan (Windows + POSIX)
+    r"\x00-\x1f\x7f"  # boshqaruv belgilari
+    r"​-‏‪-‮⁦-⁩"  # ko'rinmas / RTL spoofing
+    r"]"
+)
+"""Ruxsat etilmagan belgilar. Qolgan hammasi — o'zbekcha lotin (okina bilan),
+kirill, arab, xitoy, emoji — ruxsat etiladi: Obsidian ham shunday ishlaydi."""
 
-def sanitize_title(title: str) -> str:
-    """Eslatma nomini xavfsiz fayl nomiga o'giradi.
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+MAX_DEPTH = 8
+"""Eslatma yo'lidagi maksimal papka chuqurligi (cheksiz ichma-ich oldini oladi)."""
+
+MAX_SEGMENT_LEN = 100
+"""Bitta papka/fayl nomi uzunligi chegarasi (fayl tizimi limitidan xavfsiz pastda)."""
+
+
+def sanitize_segment(segment: str) -> str:
+    """Bitta yo'l bo'lagini (papka yoki fayl nomi) tekshiradi.
+
+    Unicode nomlar ruxsat etiladi (o'zbekcha, kirill, emoji) — Obsidian
+    ham shunday ishlaydi. Faqat fayl tizimi uchun xavfli belgilar va
+    yo'ldan chiqish (`..`) rad etiladi.
 
     Raises:
-        ToolError: nom bo'sh yoki yaroqsiz.
+        ToolError: bo'lak bo'sh, `..`/`.`, juda uzun, xavfli belgili yoki
+            Windows'da band nom (`CON`, `NUL`, ...).
     """
-    cleaned = title.replace("/", "_").replace("\\", "_").replace("..", "_")
-    cleaned = cleaned.strip().strip(".")
+    cleaned = segment.strip()
 
+    if cleaned in {"..", "."}:
+        raise ToolError(f"Xavfsizlik: yo'lda '{cleaned}' ishlatib bo'lmaydi")
+
+    # Oxiridagi nuqta/bo'shliq Windows'da fayl nomini buzadi
+    cleaned = cleaned.rstrip(". ").lstrip(".")
     if not cleaned:
         raise ToolError("Eslatma nomi bo'sh bo'lishi mumkin emas")
 
-    if not _SAFE_FILENAME_RE.match(cleaned):
+    if len(cleaned) > MAX_SEGMENT_LEN:
+        raise ToolError(f"Eslatma nomi juda uzun: {len(cleaned)} belgi (max {MAX_SEGMENT_LEN})")
+
+    if _UNSAFE_CHARS_RE.search(cleaned):
         raise ToolError(
-            f"Eslatma nomi xavfsiz emas: '{title}'. "
-            "Faqat harflar, raqamlar, chiziq (-), pastki chiziq (_) va bo'shliq ishlatiladi."
+            f"Eslatma nomida ruxsat etilmagan belgi bor: '{segment}'. "
+            r'Quyidagilar ishlatilmaydi: < > : " / \ | ? *'
         )
+
+    if cleaned.split(".")[0].upper() in _WINDOWS_RESERVED:
+        raise ToolError(f"Eslatma nomi Windows'da band: '{cleaned}'")
+
     return cleaned
+
+
+def sanitize_title(title: str) -> str:
+    """Eslatma nomini (ichki papkalar bilan) xavfsiz nisbiy yo'lga o'giradi.
+
+    `Loyihalar/ZET` → `Loyihalar/ZET`; bo'sh bo'laklar tashlab yuboriladi
+    (`a//b` → `a/b`). `\\` ham papka ajratuvchi sifatida qabul qilinadi.
+
+    Raises:
+        ToolError: nom bo'sh, juda chuqur, `..` yoki yaroqsiz belgilar bilan.
+    """
+    raw_parts = [p for p in title.replace("\\", "/").split("/") if p.strip()]
+    if not raw_parts:
+        raise ToolError("Eslatma nomi bo'sh bo'lishi mumkin emas")
+
+    if len(raw_parts) > MAX_DEPTH:
+        raise ToolError(f"Eslatma yo'li juda chuqur: {len(raw_parts)} daraja (max {MAX_DEPTH})")
+
+    return "/".join(sanitize_segment(p) for p in raw_parts)
 
 
 def resolve_note_path(notes_dir: Path, title: str) -> Path:
@@ -51,10 +116,34 @@ def resolve_note_path(notes_dir: Path, title: str) -> Path:
         ToolError: nom yaroqsiz yoki natija `notes_dir`dan tashqarida (path traversal).
     """
     safe_title = sanitize_title(title)
-    file_path = (notes_dir / f"{safe_title}.md").resolve()
-    if not str(file_path).startswith(str(notes_dir.resolve())):
-        raise ToolError(f"Xavfsizlik: fayl yo'li notes papkasidan tashqarida: {title}")
+    root = notes_dir.resolve()
+    file_path = (root / f"{safe_title}.md").resolve()
+
+    # Sanitizatsiyadan keyin ham yakuniy tekshiruv (symlink va h.k. uchun)
+    if not file_path.is_relative_to(root):
+        raise ToolError(f"Xavfsizlik: fayl yo'li vault papkasidan tashqarida: {title}")
     return file_path
+
+
+def iter_notes(notes_dir: Path) -> Iterator[Path]:
+    """Vault'dagi barcha `.md` fayllarni (ichki papkalar bilan) qaytaradi.
+
+    Yashirin papkalar (`.obsidian`, `.trash`, `.git`) o'tkazib yuboriladi —
+    ular eslatma emas, Obsidian/git ichki fayllari.
+    """
+    if not notes_dir.exists():
+        return
+    for path in sorted(notes_dir.rglob("*.md")):
+        rel = path.relative_to(notes_dir)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        yield path
+
+
+def note_title(notes_dir: Path, path: Path) -> str:
+    """Fayl yo'lini vault'ga nisbiy eslatma nomiga o'giradi (`Loyihalar/ZET`)."""
+    rel = path.relative_to(notes_dir)
+    return str(rel.with_suffix("")).replace("\\", "/")
 
 
 def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -103,10 +192,28 @@ def extract_wikilinks(text: str) -> list[str]:
     return list(seen)
 
 
+def wikilink_targets(link: str, title: str) -> bool:
+    """`[[link]]` havolasi `title` eslatmasiga ishora qiladimi (Obsidian semantikasi).
+
+    Obsidian'da havola ham to'liq yo'l bilan (`[[Loyihalar/ZET]]`), ham
+    faqat fayl nomi bilan (`[[ZET]]`) yozilishi mumkin — ikkalasi ham
+    `Loyihalar/ZET.md` ga ishora qiladi.
+    """
+    normalized = link.replace("\\", "/").strip("/")
+    if normalized == title:
+        return True
+    return "/" not in normalized and title.rsplit("/", 1)[-1] == normalized
+
+
 __all__ = [
+    "MAX_DEPTH",
     "extract_wikilinks",
+    "iter_notes",
+    "note_title",
     "render_frontmatter",
     "resolve_note_path",
+    "sanitize_segment",
     "sanitize_title",
     "split_frontmatter",
+    "wikilink_targets",
 ]

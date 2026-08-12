@@ -25,7 +25,14 @@ from typing import Any
 
 from zet.domain.enums import PermissionLevel
 from zet.tools.base import Tool, ToolError
-from zet.tools.builtin._vault import extract_wikilinks, resolve_note_path, split_frontmatter
+from zet.tools.builtin._vault import (
+    extract_wikilinks,
+    iter_notes,
+    note_title,
+    resolve_note_path,
+    split_frontmatter,
+    wikilink_targets,
+)
 
 
 class NoteReadTool(Tool):
@@ -52,9 +59,12 @@ class NoteReadTool(Tool):
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "Eslatma nomi (fayl nomi, .md siz)",
+                    "description": (
+                        "Eslatma nomi, .md siz. Ichki papka bilan ham bo'lishi "
+                        "mumkin: 'Loyihalar/ZET'"
+                    ),
                     "minLength": 1,
-                    "maxLength": 100,
+                    "maxLength": 400,
                 },
             },
             "required": ["title"],
@@ -83,10 +93,11 @@ class NoteReadTool(Tool):
         raw = file_path.read_text(encoding="utf-8")
         frontmatter, body = split_frontmatter(raw)
         links = extract_wikilinks(body)
-        backlinks = self._find_backlinks(file_path.stem)
+        this_title = note_title(self._notes_dir, file_path)
+        backlinks = self._find_backlinks(this_title)
 
         return {
-            "title": file_path.stem,
+            "title": this_title,
             "path": str(file_path),
             "frontmatter": frontmatter,
             "content": body,
@@ -96,19 +107,18 @@ class NoteReadTool(Tool):
         }
 
     def _find_backlinks(self, title: str) -> list[str]:
-        """Vault ichidagi boshqa qaysi eslatmalar shu eslatmaga havola qilishini topadi."""
-        if not self._notes_dir.exists():
-            return []
+        """Vault bo'ylab (ichki papkalar bilan) shu eslatmaga havola qiluvchilarni topadi."""
         backlinks: list[str] = []
-        for other in sorted(self._notes_dir.glob("*.md")):
-            if other.stem == title:
+        for other in iter_notes(self._notes_dir):
+            other_title = note_title(self._notes_dir, other)
+            if other_title == title:
                 continue
             try:
                 text = other.read_text(encoding="utf-8")
             except OSError:  # pragma: no cover — o'qib bo'lmaydigan fayl, o'tkazib yuborish
                 continue
-            if title in extract_wikilinks(text):
-                backlinks.append(other.stem)
+            if any(wikilink_targets(link, title) for link in extract_wikilinks(text)):
+                backlinks.append(other_title)
         return backlinks
 
 

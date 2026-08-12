@@ -21,7 +21,7 @@ from typing import Any
 
 from zet.domain.enums import PermissionLevel
 from zet.tools.base import Tool, ToolError
-from zet.tools.builtin._vault import render_frontmatter, resolve_note_path
+from zet.tools.builtin._vault import note_title, render_frontmatter, resolve_note_path
 
 _MAX_CONTENT_BYTES = 100 * 1024  # 100 KB
 
@@ -47,9 +47,12 @@ class NoteWriteTool(Tool):
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "Eslatma nomi (fayl nomi sifatida ishlatiladi, .md qo'shiladi)",
+                    "description": (
+                        "Eslatma nomi (.md qo'shiladi). Ichki papka bilan ham bo'lishi "
+                        "mumkin: 'Loyihalar/ZET' — papka avtomatik yaratiladi."
+                    ),
                     "minLength": 1,
-                    "maxLength": 100,
+                    "maxLength": 400,
                 },
                 "content": {
                     "type": "string",
@@ -105,8 +108,8 @@ class NoteWriteTool(Tool):
 
         file_path = resolve_note_path(self._notes_dir, title)
 
-        # Papka mavjudligini ta'minlash
-        self._notes_dir.mkdir(parents=True, exist_ok=True)
+        # Papka mavjudligini ta'minlash (ichki papkalar bilan birga)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Yozish
         existed = file_path.exists()
@@ -122,7 +125,7 @@ class NoteWriteTool(Tool):
         return {
             "action": action,
             "path": str(file_path),
-            "title": file_path.stem,
+            "title": note_title(self._notes_dir, file_path),
             "size_bytes": file_path.stat().st_size,
         }
 

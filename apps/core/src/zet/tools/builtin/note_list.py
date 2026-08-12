@@ -20,6 +20,7 @@ from typing import Any
 
 from zet.domain.enums import PermissionLevel
 from zet.tools.base import Tool
+from zet.tools.builtin._vault import iter_notes, note_title
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 200
@@ -78,22 +79,20 @@ class NoteListTool(Tool):
         limit: int = params.get("limit", _DEFAULT_LIMIT)
         query_lower = query.lower()
 
-        if not self._notes_dir.exists():
-            return {"notes": [], "total": 0}
-
         matches: list[dict[str, Any]] = []
-        for path in sorted(self._notes_dir.glob("*.md")):
+        for path in iter_notes(self._notes_dir):
+            title = note_title(self._notes_dir, path)
             if query_lower:
                 try:
                     text = path.read_text(encoding="utf-8")
                 except OSError:  # pragma: no cover
                     continue
-                if query_lower not in path.stem.lower() and query_lower not in text.lower():
+                if query_lower not in title.lower() and query_lower not in text.lower():
                     continue
             stat = path.stat()
             matches.append(
                 {
-                    "title": path.stem,
+                    "title": title,
                     "path": str(path),
                     "size_bytes": stat.st_size,
                     "modified_at": stat.st_mtime,
