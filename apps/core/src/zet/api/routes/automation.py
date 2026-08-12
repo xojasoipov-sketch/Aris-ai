@@ -441,14 +441,31 @@ class WatchCreateRequest(BaseModel):
     max_fires: int | None = None
 
 
-class WatchPollResponse(BaseModel):
-    """Qo'lda o'lchash natijasi."""
+class WatchFiredResponse(BaseModel):
+    """Signal bergan bitta qoida."""
 
-    fired: int
-    """Nechta qoida signal berdi."""
+    rule_id: str
+    rule_name: str
+    metric: str
+    value: str
+    previous: str
+    direction: str
+
+
+class WatchPollResponse(BaseModel):
+    """Qo'lda o'lchash natijasi.
+
+    `fired` va `actions` BIR XIL SON EMAS: qoida signal berishi mumkin-u,
+    unga ulangan trigger bo'lmasa hech qanday agent ishga tushmaydi.
+    Shu sabab ikkalasi alohida ko'rsatiladi — aks holda triggersiz qoida
+    "kuzatuv ishlamadi" degan taassurot berardi.
+    """
+
+    fired: list[WatchFiredResponse]
+    """Signal bergan kuzatuv qoidalari."""
 
     actions: list[ActionResultResponse]
-    """Signal natijasida bajarilgan agent amallari."""
+    """Signalga ULANGAN triggerlar ishga tushirgan agentlar."""
 
 
 @router.get("/metrics", response_model=list[str])
@@ -526,22 +543,34 @@ async def poll_watchers(
     uchun. Birinchi chaqiruv odatda hech narsa qaytarmaydi — u faqat
     baza qiymatlarni o'rnatadi.
     """
-    actions = await engine.poll_watchers()
+    poll = await engine.poll_watchers()
     provider = RoutedLLMProvider(model_router)
 
-    results: list[ActionResultResponse] = []
-    for action in actions:
-        results.append(
-            await _run_action(
-                action,
-                agent_registry=agent_registry,
-                tool_registry=tool_registry,
-                permission_policy=permission_policy,
-                provider=provider,
-            )
+    results = [
+        await _run_action(
+            action,
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            permission_policy=permission_policy,
+            provider=provider,
         )
+        for action in poll.actions
+    ]
 
-    return WatchPollResponse(fired=len(actions), actions=results)
+    return WatchPollResponse(
+        fired=[
+            WatchFiredResponse(
+                rule_id=event.data.get("watch_rule_id", ""),
+                rule_name=event.data.get("watch_rule_name", ""),
+                metric=event.data.get("metric", ""),
+                value=event.data.get("value", ""),
+                previous=event.data.get("previous", ""),
+                direction=event.data.get("direction", ""),
+            )
+            for event in poll.events
+        ],
+        actions=results,
+    )
 
 
 # ── Maqsadlar (5-xususiyat, L4) ───────────────────────────────────

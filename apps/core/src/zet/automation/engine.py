@@ -29,6 +29,7 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 import structlog
+from pydantic import BaseModel, Field
 
 from zet.automation.events import AutomationAction, AutomationEvent
 from zet.automation.scheduler import Scheduler, ScheduleRule
@@ -37,6 +38,24 @@ from zet.automation.watcher import MetricRegistry, WatcherRegistry, WatchRule
 from zet.automation.workflow import WorkflowChain, WorkflowRunner, WorkflowStep
 
 log = structlog.get_logger(__name__)
+
+
+class WatcherPollResult(BaseModel, frozen=True):
+    """Bitta o'lchov davrining natijasi.
+
+    `events` — signal bergan kuzatuv qoidalari.
+    `actions` — o'sha signallarga ULANGAN triggerlar ishga tushirgan agentlar.
+
+    Ular bir xil son emas: triggersiz qoida signal beradi, lekin hech
+    kimni uyg'otmaydi. Ikkisini ajratish "kuzatuv ishlamadi" degan
+    noto'g'ri xulosaning oldini oladi.
+    """
+
+    events: list[AutomationEvent] = Field(default_factory=list)
+    """Signal bergan qoidalar hodisalari."""
+
+    actions: list[AutomationAction] = Field(default_factory=list)
+    """Bajarilishi kerak bo'lgan agent amallari."""
 
 
 class AutomationEngine:
@@ -66,16 +85,22 @@ class AutomationEngine:
         """Kuzatuv qoidasi qo'shish (3-xususiyat)."""
         return self.watchers.add(rule)
 
-    async def poll_watchers(self) -> list[AutomationAction]:
-        """Barcha kuzatuv qoidalarini o'lchash va signal bergani uchun amal qaytarish.
+    async def poll_watchers(self) -> WatcherPollResult:
+        """Barcha kuzatuv qoidalarini o'lchash va signal berganlarini qayta ishlash.
 
         Watcher hodisa ishlab chiqaradi, hodisa esa oddiy trigger yo'lidan
         o'tadi — shu sabab watcher uchun alohida xavfsizlik yo'li yo'q.
+
+        HODISALAR va AMALLAR ALOHIDA qaytadi. Ular bir xil son EMAS:
+        qoida signal berishi mumkin-u, unga ulangan trigger bo'lmasa
+        hech qanday agent ishga tushmaydi. Bittasini ikkinchisi bilan
+        hisoblash "kuzatuv ishlamadi" degan noto'g'ri xulosa berardi.
         """
+        events = await self.watchers.poll(self.metrics)
         actions: list[AutomationAction] = []
-        for event in await self.watchers.poll(self.metrics):
+        for event in events:
             actions.extend(self.process_event(event))
-        return actions
+        return WatcherPollResult(events=events, actions=actions)
 
     def create_workflow(
         self,

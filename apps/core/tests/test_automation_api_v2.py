@@ -15,7 +15,11 @@ from zet.agents.registry import AgentRegistry
 from zet.api.app import create_app
 from zet.api.deps import get_automation_engine, get_goal_registry
 from zet.automation.autonomy import AutonomyLevel
-from zet.automation.builtin_metrics import AGENTS_ACTIVE, register_builtin_metrics
+from zet.automation.builtin_metrics import (
+    AGENTS_ACTIVE,
+    AUTOMATION_EVENTS,
+    register_builtin_metrics,
+)
 from zet.automation.engine import AutomationEngine
 from zet.automation.goal import GoalRegistry
 from zet.domain.agent import AgentSpec
@@ -111,7 +115,36 @@ class TestWatcherEndpoints:
         response = client.post("/api/v1/automation/watchers/poll")
 
         assert response.status_code == 200
-        assert response.json()["fired"] == 0
+        assert response.json()["fired"] == []
+
+    def test_second_poll_reports_the_fired_rule(self, client: TestClient) -> None:
+        """Metrika o'zgargach qoida signal beradi — TRIGGER bo'lmasa ham.
+
+        Bu ajratish muhim: `fired` (signal bergan qoidalar) va `actions`
+        (uyg'ongan agentlar) bir xil son emas. Ilgari javob faqat
+        `len(actions)` ni qaytarardi va triggersiz qoida "0" ko'rinib,
+        kuzatuv ishlamayaptidek taassurot berardi.
+        """
+        client.post(
+            "/api/v1/automation/watchers",
+            json={
+                "name": "Hodisalar o'zgardi",
+                "metric": AUTOMATION_EVENTS,
+                "comparison": "changed",
+                "cooldown_s": 0,
+            },
+        )
+        client.post("/api/v1/automation/watchers/poll")  # baza
+
+        # Metrikani siljitamiz — hodisa yuborish `event_count`ni oshiradi.
+        client.post("/api/v1/automation/events", json={"event_type": "test.ping"})
+
+        body = client.post("/api/v1/automation/watchers/poll").json()
+
+        assert len(body["fired"]) == 1
+        assert body["fired"][0]["metric"] == AUTOMATION_EVENTS
+        assert body["fired"][0]["direction"] == "up"
+        assert body["actions"] == []  # ulangan trigger yo'q
 
     def test_watchers_appear_in_stats(self, client: TestClient) -> None:
         client.post(
