@@ -38,6 +38,7 @@ from zet.api.deps import (
     get_notifier,
     get_permission_policy,
     get_stt,
+    get_telegram_bot,
     get_tool_registry,
     get_tts,
 )
@@ -120,6 +121,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     automation_daemon_task = asyncio.create_task(automation_daemon.run_forever())
 
+    # Telegram bot polling — token bo'lsa haqiqiy long-polling boshlanadi.
+    # `ZetBot.start()` ichida TelegramPoller task yaratiladi va darhol qaytadi
+    # (lifespan'ni bloklamaydi). Tokensiz — stub rejim, hech qanday tarmoq
+    # chaqiruvi yo'q (test/dev bilan orqaga mos).
+    telegram_bot = get_telegram_bot()
+    await telegram_bot.start()  # type: ignore[attr-defined]
+
     yield
 
     log.info("zet.shutdown")
@@ -131,6 +139,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     automation_daemon_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await automation_daemon_task
+    with contextlib.suppress(Exception):
+        await telegram_bot.stop()  # type: ignore[attr-defined]
     providers = get_llm_providers()
     for provider in providers.values():
         await provider.aclose()
