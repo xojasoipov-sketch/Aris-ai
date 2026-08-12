@@ -276,9 +276,20 @@ class Executor:
         if self._recall is not None and self._command_text:
             try:
                 recalled = await self._recall(self._command_text)
-            except Exception:
+            except Exception as exc:
                 # Xotira ishlamasa javob baribir yoziladi — fail-open.
-                log.warning("executor.recall_failed", step=step.position)
+                # `error` MAJBURIY: usiz "xotira ishlamadi" va "xotira bo'sh"
+                # log'da bir xil ko'rinadi va nosozlikni topib bo'lmaydi.
+                log.warning("executor.recall_failed", step=step.position, error=str(exc))
+        # Muvaffaqiyatni ham yozamiz — aks holda "xotira o'qildi, lekin
+        # model foydalanmadi" holatini "xotira umuman o'qilmadi"dan
+        # ajratib bo'lmaydi (jonli tekshiruvda aynan shu savol tug'ildi).
+        log.info(
+            "executor.recalled",
+            step=step.position,
+            enabled=self._recall is not None,
+            count=len(recalled),
+        )
         messages = [
             *_history_to_messages(self._history),
             ChatMessage(
