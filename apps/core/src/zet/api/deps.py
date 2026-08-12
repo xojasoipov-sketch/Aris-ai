@@ -51,6 +51,7 @@ from zet.voice.azure_tts import AzureTTS
 from zet.voice.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from zet.voice.stt import STTProvider, StubSTT
 from zet.voice.tts import StubTTS, TTSProvider
+from zet.workspace.repository import WorkspaceRepository
 
 if TYPE_CHECKING:
     from zet.memory.store import MemoryStore
@@ -419,6 +420,20 @@ async def get_crm(
     """
     owner = await get_or_create_owner(session, external_id=settings.owner_id)
     return PgCRM(session, owner_id=owner.id)
+
+
+async def get_workspace(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_config),
+) -> WorkspaceRepository:
+    """So'rov chegarasidagi ish maydoni repozitoriysi (Z46).
+
+    `/projects`, `/tasks`, `/calendar` sahifalari ortida hech narsa
+    yo'q edi — uchalasi frontend fayli ichidagi qotirilgan massivdan
+    chizilardi. Endi shu orqali haqiqiy jadvallar bilan ishlanadi.
+    """
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+    return WorkspaceRepository(session, owner_id=owner.id)
 
 
 # ── LLM ────────────────────────────────────────────────────────────

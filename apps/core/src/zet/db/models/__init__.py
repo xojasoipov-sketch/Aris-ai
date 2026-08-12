@@ -12,6 +12,7 @@ from zet.db.models.owner import Conversation, Message, Owner
 from zet.db.models.run import Plan, Run, Step
 from zet.db.models.security import Approval, AuditLog, KillSwitch
 from zet.db.models.tool import ToolCall
+from zet.db.models.workspace import CalendarEvent, Project, Task
 
 __all__ = [
     "Agent",
@@ -21,6 +22,7 @@ __all__ = [
     "CRMContact",
     "CRMDeal",
     "CRMLead",
+    "CalendarEvent",
     "Conversation",
     "CostLedger",
     "KillSwitch",
@@ -28,8 +30,10 @@ __all__ = [
     "Message",
     "Owner",
     "Plan",
+    "Project",
     "QuotaLedger",
     "Run",
     "Step",
+    "Task",
     "ToolCall",
 ]

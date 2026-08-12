@@ -44,6 +44,34 @@ def _block_audit_log_mutation(
             )
 
 
+@event.listens_for(Session, "after_begin")
+def _enable_sqlite_foreign_keys(
+    session: Session,  # noqa: ARG001
+    transaction: Any,  # noqa: ARG001
+    connection: Any,
+) -> None:
+    """SQLite'da FK majburlashni yoqadi.
+
+    SQLite tashqi kalitlarni SUKUT BO'YICHA e'tiborsiz qoldiradi —
+    `ondelete="CASCADE"` va `ondelete="SET NULL"` shunchaki ishlamaydi.
+    Postgres esa ularni majburlaydi. Ya'ni pragmasiz testlar prod'dan
+    BOSHQACHA xatti-harakatni tekshirardi va FK bilan bog'liq xatoni
+    umuman tuta olmasdi.
+
+    Jonli misol: `task.project_id` uchun `SET NULL` e'lon qilingan,
+    lekin testda loyiha o'chirilgach vazifa eski `project_id`ni saqlab
+    qolaverdi — prod'da esa u `NULL` bo'lardi.
+
+    NEGA `connect` HODISASI EMAS. Odatdagi yo'l — engine'ning `connect`
+    hodisasida pragma yuborish. `aiosqlite` bilan u ISHLAMAYDI:
+    ulanish obyekti async o'ram va sinxron `cursor.execute` greenlet
+    konteksti yo'qligi sababli `MissingGreenlet` bilan yiqiladi.
+    `after_begin` esa async oqim ichida chaqiriladi.
+    """
+    if connection.dialect.name == "sqlite":
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
 def create_engine(url: str, *, echo: bool = False) -> AsyncEngine:
     """Async engine yaratish.
 
