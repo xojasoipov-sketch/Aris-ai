@@ -64,10 +64,34 @@ export interface HealthDto {
   status: string;
 }
 
+/** GET /agents javobi (backend `AgentResponse` bilan AYNAN mos). */
+export interface AgentDto {
+  name: string;
+  description: string;
+  division: string;
+  role: string;
+  status: string;
+  permission_level: string;
+  tool_allowlist: string[];
+  total_runs: number;
+  successful_runs: number;
+  failed_runs: number;
+  success_rate: number;
+  total_tool_calls: number;
+}
+
+/** GET /automation/stats javobi — bo'lim → o'lchov → son. */
+export type AutomationStatsDto = Record<string, Record<string, number>>;
+
 /* ── Chaqiruvlar ───────────────────────────────────────────────── */
 
 export const api = {
   health: () => call<HealthDto>("/health"),
+
+  /** Haqiqiy agentlar — ilgari dashboard'da 5 ta QOTIRILGAN agent turardi. */
+  agents: () => call<AgentDto[]>("/agents"),
+
+  automationStats: () => call<AutomationStatsDto>("/automation/stats"),
 
   approvals: {
     /** run_id MAJBURIY — global "hammasi" endpoint'i backend'da yo'q. */

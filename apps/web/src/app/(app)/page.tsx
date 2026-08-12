@@ -2,39 +2,41 @@
 
 /** Boshqaruv (Dashboard) — operatsion bosh sahifa.
  *
- * Sifat standarti bo'yicha qayta qurildi: markaziy dekorativ sahna YO'Q —
- * buyruq paneli (kichik orb bilan) + KPI qatori + faoliyat jadvali +
- * agentlar/tizim ustuni. Har panel savol javob beradi: "hozir nima
- * bo'lyapti, menga nima kerak?"
+ * Z44: QOTIRILGAN MA'LUMOT OLIB TASHLANDI. Ilgari bu sahifada beshta
+ * o'ylab topilgan agent, beshta soxta faoliyat qatori va "CPU 26% /
+ * RAM 40% / Disk 32%" turardi. Ega buni ko'rib "ko'p joyi soxta" dedi —
+ * haqli, chunki backendda 12 ta agent bor va CPU/RAM ko'rsatkichlarini
+ * ZET umuman o'lchamaydi.
+ *
+ * Endi har bir raqam backend'dan keladi (`GET /agents`,
+ * `GET /automation/stats`). Manbasi yo'q panel — SOXTA SON EMAS, ochiq
+ * "ulanmagan" holati (CLAUDE.md: "Halol holatlar").
  */
 
 import { motion } from "motion/react";
-import { ServerOff } from "lucide-react";
+import { Activity, ServerOff } from "lucide-react";
 
 import { CommandBar } from "@/components/dashboard/CommandBar";
 import { LiveApprovals } from "@/components/dashboard/LiveApprovals";
-import { AgentListItem, Sparkline, StatCard } from "@/components/ui/cards";
+import { AgentListItem, type AgentStatus, StatCard } from "@/components/ui/cards";
 import { EmptyState } from "@/components/ui/forms";
 import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
+import type { AgentDto } from "@/lib/api";
+import { useAgents } from "@/lib/useAgents";
+import { useAutomationStats } from "@/lib/useAutomationStats";
 import { useBackendHealth } from "@/lib/useBackendHealth";
 
-/* Agentlar ro'yxati — backend agents/builtin registry bilan bir xil */
-const AGENTS = [
-  { name: "CEO Agent", division: "Strategiya", status: "online" },
-  { name: "SMM Agent", division: "Marketing", status: "working" },
-  { name: "Developer Agent", division: "Texnologiya", status: "online" },
-  { name: "Research Agent", division: "Intellekt", status: "thinking" },
-  { name: "HR Agent", division: "Boshqaruv", status: "offline" },
-] as const;
-
-/* So'nggi faoliyat — observability stream ulangunga qadar namuna */
-const ACTIVITY = [
-  { time: "13:02", agent: "SMM Agent", action: "telegram.channel_stats", ok: true, ms: 142 },
-  { time: "12:58", agent: "Developer Agent", action: "github.read — PR #42", ok: true, ms: 480 },
-  { time: "12:47", agent: "Research Agent", action: "web.search — bozor tahlili", ok: true, ms: 1240 },
-  { time: "12:31", agent: "Finance Agent", action: "xarajat approval so'radi", ok: false },
-  { time: "08:00", agent: "CEO Agent", action: "kunlik briefing yaratildi", ok: true, ms: 3400 },
-] as const;
+/** Backend `AgentStatus` → UI holati.
+ *
+ * `working`/`thinking` ATAYLAB yo'q: backend "hozir ishlayapti" degan
+ * jonli signal bermaydi, shuning uchun ularni ko'rsatish to'qima
+ * bo'lardi — aynan shu ilgari sodir bo'lgan edi.
+ */
+function toUiStatus(backendStatus: string): AgentStatus {
+  if (backendStatus === "active") return "online";
+  if (backendStatus === "paused") return "paused";
+  return "offline";
+}
 
 const enter = {
   hidden: { opacity: 0, y: 8 },
@@ -45,9 +47,28 @@ const enter = {
   }),
 };
 
+function agentTotals(agents: AgentDto[]) {
+  const runs = agents.reduce((sum, a) => sum + a.total_runs, 0);
+  const ok = agents.reduce((sum, a) => sum + a.successful_runs, 0);
+  return {
+    active: agents.filter((a) => a.status === "active").length,
+    total: agents.length,
+    runs,
+    successPct: runs > 0 ? Math.round((ok / runs) * 100) : null,
+  };
+}
+
 export default function DashboardPage() {
   const health = useBackendHealth();
-  const activeAgents = AGENTS.filter((a) => a.status !== "offline").length;
+  const agentsState = useAgents();
+  const stats = useAutomationStats();
+
+  const agents = agentsState.kind === "ready" ? agentsState.agents : [];
+  const totals = agentTotals(agents);
+  const automations =
+    stats.kind === "ready"
+      ? (stats.data.schedules?.active ?? 0) + (stats.data.triggers?.active ?? 0)
+      : null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-6 py-6 lg:px-8">
@@ -58,7 +79,7 @@ export default function DashboardPage() {
         <CommandBar />
       </motion.div>
 
-      {/* KPI qatori */}
+      {/* KPI qatori — hammasi backend'dan. Ma'lumot yo'q bo'lsa "—". */}
       <motion.div
         variants={enter}
         custom={1}
@@ -66,66 +87,78 @@ export default function DashboardPage() {
         animate="show"
         className="grid grid-cols-2 gap-4 lg:grid-cols-4"
       >
-        <StatCard label="Faol agentlar" value={`${activeAgents}/${AGENTS.length}`} hint="registry'dan" />
-        <StatCard label="Bugungi vazifalar" value="3/7" hint="2 tasi bajarildi" />
-        <StatCard label="Loyihalar" value={5} hint="o'rtacha 64%" />
-        <StatCard label="Kunlik sarf" value="$0.04" hint="$0.50 limitdan" />
+        <StatCard
+          label="Faol agentlar"
+          value={agentsState.kind === "ready" ? `${totals.active}/${totals.total}` : "—"}
+          hint={agentsState.kind === "ready" ? "registry'dan" : "yuklanmoqda"}
+        />
+        <StatCard
+          label="Jami bajarilgan"
+          value={agentsState.kind === "ready" ? totals.runs : "—"}
+          hint="agent run'lari"
+        />
+        <StatCard
+          label="Muvaffaqiyat"
+          value={totals.successPct === null ? "—" : `${totals.successPct}%`}
+          hint={totals.runs > 0 ? `${totals.runs} run'dan` : "hali run yo'q"}
+        />
+        <StatCard
+          label="Avtomatlashtirish"
+          value={automations ?? "—"}
+          hint="faol jadval + trigger"
+        />
       </motion.div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
-        {/* So'nggi faoliyat — jadval */}
+        {/* So'nggi faoliyat */}
         <motion.div variants={enter} custom={2} initial="hidden" animate="show">
           <Panel className="overflow-hidden">
             <div className="flex items-baseline justify-between border-b border-[var(--border-hairline)] px-4 py-3">
               <Eyebrow>So'nggi faoliyat</Eyebrow>
-              <span className="text-[11px] text-[var(--text-muted)]">
-                namuna — observability keyin ulanadi
-              </span>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <tbody>
-                  {ACTIVITY.map((r) => (
-                    <tr
-                      key={`${r.time}-${r.action}`}
-                      className="border-b border-[var(--border-hairline)] transition-colors last:border-0 hover:bg-[var(--surface-hover)]"
-                    >
-                      <td className="data whitespace-nowrap px-4 py-2.5 text-xs text-[var(--text-muted)]">
-                        {r.time}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-[var(--text-primary)]">
-                        {r.agent}
-                      </td>
-                      <td className="w-full px-3 py-2.5 text-[var(--text-secondary)]">
-                        {r.action}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right">
-                        {r.ok ? (
-                          <span className="data text-xs text-[var(--status-online)]">
-                            OK{r.ms ? ` · ${r.ms}ms` : ""}
-                          </span>
-                        ) : (
-                          <span className="data text-xs text-[var(--status-working)]">
-                            kutilmoqda
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {/* Backend hozircha run oqimini bermaydi. Ilgari bu yerda
+                beshta o'ylab topilgan qator turardi — soxta faoliyat
+                haqiqiy faoliyatdan farq qilmasdi va ega tizimni
+                ishlayapti deb o'ylardi. */}
+            <EmptyState
+              icon={Activity}
+              title="Faoliyat oqimi hali ulanmagan"
+              hint="Backend run tarixi endpoint'i qo'shilgach shu yerda ko'rinadi"
+            />
           </Panel>
         </motion.div>
 
         {/* O'ng ustun */}
-        <motion.div variants={enter} custom={3} initial="hidden" animate="show" className="space-y-4">
+        <motion.div
+          variants={enter}
+          custom={3}
+          initial="hidden"
+          animate="show"
+          className="space-y-4"
+        >
           <Panel className="p-3">
             <Eyebrow className="px-2 pt-1">Agentlar</Eyebrow>
             <div className="mt-1">
-              {AGENTS.map((a) => (
-                <AgentListItem key={a.name} {...a} />
-              ))}
+              {agentsState.kind === "ready" && agents.length > 0 ? (
+                agents.map((a) => (
+                  <AgentListItem
+                    key={a.name}
+                    name={a.name}
+                    division={a.division}
+                    status={toUiStatus(a.status)}
+                  />
+                ))
+              ) : (
+                <EmptyState
+                  icon={ServerOff}
+                  title={agentsState.kind === "loading" ? "Yuklanmoqda…" : "Agentlar yo'q"}
+                  hint={
+                    agentsState.kind === "error"
+                      ? agentsState.message
+                      : "Backend registry bo'sh yoki ulanmagan"
+                  }
+                />
+              )}
             </div>
           </Panel>
 
@@ -157,31 +190,25 @@ export default function DashboardPage() {
                 </span>
               </div>
             </div>
-            {health === "online" ? (
-              <>
-                <div className="data mt-3 grid grid-cols-3 gap-2 text-xs">
-                  {(
-                    [
-                      ["CPU", "26%"],
-                      ["RAM", "40%"],
-                      ["Disk", "32%"],
-                    ] as const
-                  ).map(([k, v]) => (
-                    <div key={k} className="rounded-[8px] bg-[var(--bg-base)] px-2.5 py-2">
-                      <div className="text-[var(--text-muted)]">{k}</div>
-                      <div className="mt-0.5 text-sm text-[var(--text-primary)]">{v}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3">
-                  <Sparkline
-                    data={[22, 28, 24, 35, 30, 42, 38, 31, 44, 40, 36, 48]}
-                    width={252}
-                    height={30}
-                    id="sys"
-                  />
-                </div>
-              </>
+
+            {/* CPU/RAM/Disk OLIB TASHLANDI — ZET ularni o'lchamaydi va
+                qotirilgan "26% / 40% / 32%" sof to'qima edi. O'rniga
+                backend HAQIQATAN beradigan hisoblagichlar. */}
+            {health === "online" && stats.kind === "ready" ? (
+              <div className="data mt-3 grid grid-cols-3 gap-2 text-xs">
+                {(
+                  [
+                    ["Jadval", stats.data.schedules?.active ?? 0],
+                    ["Trigger", stats.data.triggers?.active ?? 0],
+                    ["Kuzatuv", stats.data.watchers?.active ?? 0],
+                  ] as const
+                ).map(([k, v]) => (
+                  <div key={k} className="rounded-[8px] bg-[var(--bg-base)] px-2.5 py-2">
+                    <div className="text-[var(--text-muted)]">{k}</div>
+                    <div className="mt-0.5 text-sm text-[var(--text-primary)]">{v}</div>
+                  </div>
+                ))}
+              </div>
             ) : (
               <EmptyState
                 icon={ServerOff}
