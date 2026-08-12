@@ -2,8 +2,13 @@
 
 /** Jonli approval'lar paneli — mavjud backend API'ga ulangan (docs/11 §2.4).
  *
- * 5 soniyada bir poll (WebSocket — ochiq savol, docs/11 §6.1); backend
- * o'chiq bo'lsa jimgina yashirinadi, UI yiqilmaydi.
+ * REAL KONTRAKT (Z35.1'da jonli backend'da tekshirildi): GET /approvals
+ * run_id talab qiladi — global ro'yxat endpoint'i YO'Q va biz backend'ga
+ * yangi endpoint qo'shmaymiz. Shuning uchun bu panel faqat faol run
+ * konteksti bilan ishlaydi (orchestrator integratsiyasi runId beradi);
+ * runId yo'q bo'lsa hech narsa ko'rsatmaydi — bu halol holat.
+ *
+ * 5 soniyada bir poll; backend o'chiq bo'lsa jimgina yashirinadi.
  */
 
 import { AnimatePresence } from "motion/react";
@@ -14,27 +19,25 @@ import { Eyebrow } from "@/components/ui/primitives";
 import { api, type ApprovalDto } from "@/lib/api";
 import { sound } from "@/lib/sound";
 
-export function LiveApprovals() {
+export function LiveApprovals({ runId }: { runId?: string }) {
   const [approvals, setApprovals] = useState<ApprovalDto[]>([]);
-  const [reachable, setReachable] = useState(false);
 
   const refresh = useCallback(async () => {
-    const res = await api.approvals.list();
+    if (!runId) return;
+    const res = await api.approvals.list(runId);
     if (res.ok) {
-      setReachable(true);
       setApprovals(res.data.filter((a) => a.status === "pending"));
-    } else {
-      setReachable(false);
     }
-  }, []);
+  }, [runId]);
 
   useEffect(() => {
+    if (!runId) return;
     void refresh();
     const t = setInterval(() => void refresh(), 5000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, runId]);
 
-  if (!reachable || approvals.length === 0) return null;
+  if (!runId || approvals.length === 0) return null;
 
   return (
     <section className="space-y-3">
@@ -48,7 +51,7 @@ export function LiveApprovals() {
                 id: a.id,
                 toolName: a.tool_name ?? "noma'lum tool",
                 reason: a.reason,
-                preview: a.preview,
+                preview: {},
                 expiresAt: a.expires_at,
               }}
               onApprove={async (id) => {
