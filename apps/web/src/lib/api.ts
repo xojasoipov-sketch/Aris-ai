@@ -182,6 +182,51 @@ export interface RunDto {
   pending_approval_id: string | null;
 }
 
+/* ── TIZIM retseptlari (Z48) ───────────────────────────────────── */
+
+export type RecipeStatus = "ready" | "missing_capability";
+
+export interface RecipeStepDto {
+  /** Backend qadam raqamini SATR sifatida yuboradi (`dict[str, str]`). */
+  order: string;
+  title: string;
+  agent_name: string;
+}
+
+export interface RecipeDto {
+  code: string;
+  name: string;
+  /** Ega uchun bir qatorlik va'da. */
+  promise: string;
+  trigger_kind: "time" | "event";
+  /** Cron ifodasi (time) yoki hodisa turi (event). */
+  trigger_spec: string;
+  /** Qo'shimcha ishga tushish vaqtlari — T06 kuniga ikki marta ishlaydi. */
+  also_at: string[];
+  result: string;
+  steps: RecipeStepDto[];
+  status: RecipeStatus;
+  /** Yetishmayotgan imkoniyatlar — bo'sh bo'lsa retsept tayyor. */
+  missing: string[];
+  blocked_steps: number[];
+}
+
+export interface RecipeInstallDto {
+  code: string;
+  installed_id: string;
+  kind: "time" | "event";
+}
+
+export interface ScheduleRuleDto {
+  id: string;
+  name: string;
+  agent_name: string;
+  cron_expr: string;
+  enabled: boolean;
+  run_count: number;
+  last_run_at: string | null;
+}
+
 /* ── Chaqiruvlar ───────────────────────────────────────────────── */
 
 export const api = {
@@ -191,6 +236,15 @@ export const api = {
   agents: () => call<AgentDto[]>("/agents"),
 
   automationStats: () => call<AutomationStatsDto>("/automation/stats"),
+
+  /** 6 TIZIM retsepti — HALOL holat bilan (tayyor / imkoniyat yetishmaydi). */
+  recipes: {
+    list: () => call<RecipeDto[]>("/automation/recipes"),
+    install: (code: string) =>
+      call<RecipeInstallDto>(`/automation/recipes/${code}/install`, { method: "POST" }),
+  },
+
+  schedules: () => call<ScheduleRuleDto[]>("/automation/schedules"),
 
   /** O'lchangan tizim ko'rsatkichlari — soxta CPU/RAM o'rniga. */
   system: () => call<SystemDto>("/system"),

@@ -24,6 +24,7 @@ import {
   Users,
   Volume2,
   VolumeX,
+  Workflow,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -37,6 +38,7 @@ const NAV = [
   { href: "/nexus", label: "Nexus", icon: Hand },
   { href: "/ai-chat", label: "AI Yordamchi", icon: Bot },
   { href: "/agents", label: "Agentlar", icon: Users },
+  { href: "/tizim", label: "TIZIM", icon: Workflow },
   { href: "/projects", label: "Loyihalar", icon: FolderKanban },
   { href: "/calendar", label: "Taqvim", icon: Calendar },
   { href: "/tasks", label: "Vazifalar", icon: ListChecks },
@@ -92,7 +94,14 @@ function SoundToggle() {
 
 /* Mobil bottom-tab-bar — sidebar lg dan past ekranlarda shu bilan almashadi */
 function MobileTabBar({ pathname }: { pathname: string }) {
-  const TABS = [NAV[0], NAV[1], NAV[5], NAV[9], NAV[11]] as const;
+  // Manzil bo'yicha tanlanadi, INDEKS bo'yicha emas: ilgari
+  // `[NAV[0], NAV[1], NAV[5], ...]` edi va `NAV` ga o'rtadan bitta
+  // qator qo'shilishi mobil tablarni jimgina boshqa sahifalarga
+  // ko'chirib yuborardi.
+  const MOBILE = ["/", "/nexus", "/tizim", "/tasks", "/analytics"];
+  const TABS = MOBILE.map((href) => NAV.find((item) => item.href === href)).filter(
+    (item): item is (typeof NAV)[number] => item !== undefined,
+  );
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-[var(--border-hairline)] bg-[var(--bg-elevated)] lg:hidden">
       {TABS.map(({ href, label, icon: I }) => {
