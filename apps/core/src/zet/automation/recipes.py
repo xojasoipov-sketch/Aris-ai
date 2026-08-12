@@ -16,9 +16,9 @@ Har bir retsept: TRIGGER → 3 QADAM → NATIJA.
 
 ENG MUHIM QARQOR — HALOL HOLAT.
 
-Retseptlarning ko'pi ZET'da hali BO'LMAGAN tashqi imkoniyatlarga
-tayanadi (kalendar, MTProto guruh o'qish, Instagram webhook, haqiqiy
-STT). Ikki yo'l bor edi:
+Retseptlarning bir qismi ZET'da hali BO'LMAGAN tashqi imkoniyatlarga
+tayanadi (MTProto guruh o'qish, Instagram webhook, uchrashuv havolasi,
+taymerli tasdiq). Ikki yo'l bor edi:
 
     (a) baribir "yoqilgan" deb ko'rsatib, ichida stub ishlatish
     (b) yetishmayotganini OCHIQ aytish
@@ -43,7 +43,7 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import structlog
 from pydantic import BaseModel, Field
@@ -81,13 +81,21 @@ class Capability(StrEnum):
     """
 
     CALENDAR = "calendar"
-    """Bo'sh slot topish va uchrashuv yozish. ZET'da hali yo'q."""
+    """Uchrashuv yozish va jadvalni o'qish.
+
+    ZET'ning ICHKI kalendari (Z46 jadvali + Z48 `calendar.add`/`calendar.list`
+    tool'lari). Google Calendar sinxronizatsiyasi ALOHIDA ish — u yo'qligi
+    ichki kalendarga yozishga to'sqinlik qilmaydi."""
 
     MEETING_LINK = "meeting_link"
     """Zoom/Meet havolasi yaratish. ZET'da hali yo'q."""
 
     STT = "stt"
-    """Ovozdan matnga. `voice/stt.py` hozir `StubSTT` — transkripsiya qilmaydi."""
+    """Ovozdan matnga.
+
+    `ELEVENLABS_API_KEY` bo'lsa — `ElevenLabsSTT` (Scribe) haqiqiy
+    transkripsiya qiladi. Kalitsiz `StubSTT` qotgan matn qaytaradi,
+    ya'ni imkoniyat YO'Q."""
 
     CONTENT_PUBLISH = "content.publish"
     """Kontentni chop etish (Instagram/YouTube/Telegram kanal)."""
@@ -99,7 +107,11 @@ class Capability(StrEnum):
     """Kontakt/lid yozuvlari."""
 
     TASK_BOARD = "task_board"
-    """Loyiha doskasi (vazifa holatlari). ZET'da ma'lumot modeli yo'q."""
+    """Loyiha doskasi (vazifa holatlari).
+
+    Z46'da `project`/`task` jadvallari, Z48'da esa `task.list`/`task.create`/
+    `task.update`/`task.pulse` tool'lari qo'shildi — ya'ni agent doskani
+    HAQIQATAN o'qiy va yoza oladi."""
 
     TIMED_APPROVAL = "approval.timed"
     """"Sukut = rozilik" taymerli tasdiq.
@@ -159,6 +171,15 @@ class Recipe(BaseModel, frozen=True):
 
     trigger_spec: str
     """Cron ifodasi (TIME) yoki hodisa turi (EVENT)."""
+
+    also_at: tuple[str, ...] = ()
+    """Qo'shimcha cron ifodalari (faqat TIME retseptlari uchun).
+
+    Slaydda "Kunlik puls" KUNIGA IKKI MARTA ishlaydi: 09:20 va 18:40.
+    Bitta 5-maydonli cron ifodasi buni bera olmaydi — daqiqalar har xil
+    (20 va 40), `20,40 9,18 * * *` esa kunda TO'RT marta ishlab ketardi
+    (09:40 va 18:20 ham). Shuning uchun har bir vaqt alohida qoida
+    bo'ladi."""
 
     steps: list[RecipeStep]
     """Qadamlar."""
@@ -351,6 +372,7 @@ RECIPES: Final[tuple[Recipe, ...]] = (
         promise="Nazorat yo'qolmaydi — hisobot so'rashingiz shart emas",
         trigger_kind=TriggerKind.TIME,
         trigger_spec="20 9 * * *",
+        also_at=("40 18 * * *",),
         steps=[
             RecipeStep(
                 order=1,
@@ -400,20 +422,42 @@ def detect_capabilities(
     if settings.telegram_bot_token is not None:
         available.add(Capability.TELEGRAM_SEND)
 
-    tool_names = (
-        {tool.name for tool in tool_registry.list_tools()} if tool_registry is not None else set()
-    )
+    if settings.elevenlabs_api_key is not None:
+        # `get_stt()` kalit bo'lganda `ElevenLabsSTT` (Scribe) tanlaydi —
+        # ovoz HAQIQATAN matnga o'giriladi. Kalitsiz `StubSTT` qotgan matn
+        # qaytaradi, ya'ni imkoniyat yo'q.
+        available.add(Capability.STT)
+
+    tools = list(tool_registry.list_tools()) if tool_registry is not None else []
+    tool_names = {tool.name for tool in tools}
     publish_tools = {"instagram.publish_photo", "youtube.publish", "telegram.channel_post"}
     if tool_names & publish_tools:
         available.add(Capability.CONTENT_PUBLISH)
 
+    # Doska va kalendar — tool ro'yxatda TURISHI yetarli emas: DB fabrikasi
+    # ulanmagan bo'lsa tool chaqirilganda yiqiladi. `connected` aynan shuni
+    # ajratadi, shuning uchun "imkoniyat bor" degani yolg'on bo'lmaydi.
+    if _connected(tools, "task.list", "task.create", "task.pulse"):
+        available.add(Capability.TASK_BOARD)
+    if _connected(tools, "calendar.list", "calendar.add"):
+        available.add(Capability.CALENDAR)
+
     # Quyidagilar ATAYLAB qo'shilmaydi — ZET'da hali yo'q. Ular
     # qo'shilganda shu yerga bitta qator yoziladi, retseptlar esa
     # o'zgarishsiz "ready" bo'ladi:
-    #   CALENDAR, MEETING_LINK, TASK_BOARD, TIMED_APPROVAL,
-    #   TELEGRAM_READ_GROUPS (MTProto), INSTAGRAM_WEBHOOK,
-    #   STT (voice/stt.py hozir StubSTT)
+    #   MEETING_LINK, TIMED_APPROVAL,
+    #   TELEGRAM_READ_GROUPS (MTProto), INSTAGRAM_WEBHOOK
     return frozenset(available)
+
+
+def _connected(tools: list[Any], *names: str) -> bool:
+    """Nomlangan tool'larning HAMMASI mavjud va ulangan bo'lsa — True.
+
+    `connected` xossasi bo'lmagan tool "ulangan" deb hisoblanadi: bu
+    xossa faqat tashqi manbaga bog'liq tool'larda bor va uni bilmagan
+    tool o'zi ishlaydi."""
+    by_name = {tool.name: tool for tool in tools}
+    return all(name in by_name and getattr(by_name[name], "connected", True) for name in names)
 
 
 def evaluate(recipe: Recipe, available: frozenset[Capability]) -> RecipeReadiness:
@@ -451,7 +495,7 @@ def install(
     alohida bajarish mexanizmi YO'Q.
 
     Returns:
-        Yaratilgan qoida/trigger ID
+        Yaratilgan qoida/trigger ID (`also_at` bo'lsa — birinchisi)
 
     Raises:
         RecipeNotReadyError: imkoniyat yetishmaydi
@@ -470,16 +514,19 @@ def install(
     lead_agent = recipe.steps[0].agent_name
 
     if recipe.trigger_kind == TriggerKind.TIME:
-        rule = engine.add_schedule(
-            ScheduleRule(
-                name=f"{recipe.code} · {recipe.name}",
-                agent_name=lead_agent,
-                cron_expr=recipe.trigger_spec,
-                command=command,
-            )
-        )
-        log.info("recipe.installed", code=recipe.code, kind="schedule", id=rule.id)
-        return rule.id
+        ids = [
+            engine.add_schedule(
+                ScheduleRule(
+                    name=f"{recipe.code} · {recipe.name}",
+                    agent_name=lead_agent,
+                    cron_expr=cron_expr,
+                    command=command,
+                )
+            ).id
+            for cron_expr in (recipe.trigger_spec, *recipe.also_at)
+        ]
+        log.info("recipe.installed", code=recipe.code, kind="schedule", ids=ids)
+        return ids[0]
 
     trigger = engine.add_trigger(
         EventTrigger(

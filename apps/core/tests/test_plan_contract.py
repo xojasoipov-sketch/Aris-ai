@@ -156,9 +156,7 @@ class _FakeToolUse:
 class TestContractErrorDoesNotCrashTheRun:
     """`ToolValidationError` yiqilgan qadam bo'lsin, 500 emas."""
 
-    async def test_missing_param_becomes_a_failed_step(
-        self, tool_registry: ToolRegistry
-    ) -> None:
+    async def test_missing_param_becomes_a_failed_step(self, tool_registry: ToolRegistry) -> None:
         plan = Plan(
             summary="reja",
             steps=[
@@ -222,9 +220,7 @@ class TestPlanningDoesNotRequireAVisionModel:
             (TaskClass.SPEECH, TaskClass.NORMAL),
         ],
     )
-    def test_modality_classes_are_downgraded(
-        self, given: TaskClass, expected: TaskClass
-    ) -> None:
+    def test_modality_classes_are_downgraded(self, given: TaskClass, expected: TaskClass) -> None:
         assert _planning_task_class(given) == expected
 
     @pytest.mark.parametrize(

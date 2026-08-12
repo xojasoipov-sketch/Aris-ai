@@ -44,6 +44,7 @@ from zet.tools.builtin.video_learn import DEFAULT_MODEL as DEFAULT_VIDEO_MODEL
 from zet.tools.builtin.video_learn import VideoLearnTool
 from zet.tools.builtin.web_reader import WebReaderTool
 from zet.tools.builtin.web_search import WebSearchTool
+from zet.tools.builtin.workspace_tools import WORKSPACE_TOOL_CLASSES, WorkspaceScope
 from zet.tools.builtin.youtube import (
     YouTubeChannelStatsTool,
     YouTubeSearchTool,
@@ -72,6 +73,8 @@ def build_default_registry(
     camera_provider: CameraProvider | None = None,
     desktop_provider: DesktopProvider | None = None,
     memory_search_fn: SearchFn | None = None,
+    workspace_scope: WorkspaceScope | None = None,
+    timezone: str = "Asia/Tashkent",
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
 
@@ -105,6 +108,14 @@ def build_default_registry(
             chaqirilganda ochiq xato beradi: Planner uni ko'rib turgani
             ma'qul, aks holda ega haqidagi savolga yo'q eslatma fayllarini
             qidirib reja tuzadi (jonli tekshiruvda aynan shunday bo'ldi).
+        workspace_scope: berilsa — `task.*`/`project.*`/`calendar.*` tool'lar
+            haqiqiy doskaga yozadi va o'qiydi. Berilmasa tool'lar baribir
+            ro'yxatda turadi, lekin chaqirilganda ochiq xato beradi (soxta
+            bo'sh doska "hech qanday vazifa yo'q" degan YOLG'ON javobga
+            olib kelardi). AYNAN shu argument `Capability.TASK_BOARD` va
+            `Capability.CALENDAR`ni haqiqiy qiladi — `recipes.py`ga qarang.
+        timezone: ega vaqt mintaqasi — kalendar va muddatlar shu mintaqada
+            o'qiladi/yoziladi (baza doim UTC saqlaydi).
         desktop_provider: `desktop.*` tool'lar uchun ulanish (default:
             `StubDesktop(available=False)` — headless server muhitida). ZET
             foydalanuvchining mahalliy Mac/Win kompyuterida ishga tushirilsa,
@@ -156,6 +167,8 @@ def build_default_registry(
             ig_user_id=instagram_business_account_id,
         )
     )
+    for workspace_tool in WORKSPACE_TOOL_CLASSES:
+        registry.register(workspace_tool(scope=workspace_scope, tz=timezone))
     registry.register(CameraSnapshotTool(provider=camera_provider))
     registry.register(DesktopScreenshotTool(provider=desktop_provider))
     registry.register(DesktopTypeTextTool(provider=desktop_provider))

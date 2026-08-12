@@ -89,11 +89,7 @@ class TestIntegrationsReflectRealConfig:
         assert "stub" in telegram["detail"]
 
     def test_present_key_is_reported_configured(self) -> None:
-        body = (
-            _client(_settings(telegram_bot_token="123:abc"))
-            .get("/api/v1/integrations")
-            .json()
-        )
+        body = _client(_settings(telegram_bot_token="123:abc")).get("/api/v1/integrations").json()
 
         telegram = next(i for i in body if i["key"] == "telegram")
         assert telegram["configured"] is True
@@ -121,11 +117,7 @@ class TestIntegrationsReflectRealConfig:
         assert azure["configured"] is True
 
     def test_instagram_needs_business_account_id(self) -> None:
-        body = (
-            _client(_settings(instagram_access_token="t"))
-            .get("/api/v1/integrations")
-            .json()
-        )
+        body = _client(_settings(instagram_access_token="t")).get("/api/v1/integrations").json()
 
         instagram = next(i for i in body if i["key"] == "instagram")
         assert instagram["configured"] is False

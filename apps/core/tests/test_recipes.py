@@ -7,6 +7,8 @@ uchrashuv qo'yilgan deb o'ylab, kalendarni tekshirmay qolardi.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -51,6 +53,9 @@ def _settings(**kwargs: object) -> Settings:
         "deepseek_api_key": None,
         "kimi_api_key": None,
         "telegram_bot_token": None,
+        # STT endi kalitga bog'liq (`ElevenLabsSTT`) — bo'shatilmasa
+        # mashinadagi `.env` testni "imkoniyat bor" tomonga og'dirardi.
+        "elevenlabs_api_key": None,
     }
     base.update(kwargs)
     return Settings.model_validate(base)
@@ -124,15 +129,40 @@ class TestCapabilityDetection:
             _settings(anthropic_api_key="k", telegram_bot_token="t"), tool_registry
         )
         for capability in (
-            Capability.CALENDAR,
             Capability.MEETING_LINK,
-            Capability.STT,
-            Capability.TASK_BOARD,
             Capability.TIMED_APPROVAL,
             Capability.TELEGRAM_READ_GROUPS,
             Capability.INSTAGRAM_WEBHOOK,
         ):
             assert capability not in available, capability
+
+    def test_stt_requires_elevenlabs_key(self) -> None:
+        """Kalitsiz `StubSTT` qotgan matn qaytaradi — bu imkoniyat emas."""
+        assert Capability.STT not in detect_capabilities(_settings())
+        assert Capability.STT in detect_capabilities(_settings(elevenlabs_api_key="k"))
+
+    def test_board_needs_tools_wired_to_the_database(self, tmp_path: Path) -> None:
+        """Tool ro'yxatda TURISHI yetarli emas — u ulangan bo'lishi kerak.
+
+        `task.*`/`calendar.*` tool'lari DB fabrikasisiz ham ro'yxatga
+        tushadi (Planner ularni ko'rib tursin), lekin chaqirilganda
+        yiqiladi. O'sha holatda imkoniyatni "bor" deb sanash retseptni
+        chala ishlaydigan qilib o'rnatardi.
+        """
+        unwired = detect_capabilities(_settings(), build_default_registry(notes_dir=tmp_path))
+        assert Capability.TASK_BOARD not in unwired
+        assert Capability.CALENDAR not in unwired
+
+        @asynccontextmanager
+        async def _scope() -> AsyncIterator[None]:
+            yield None
+
+        wired = detect_capabilities(
+            _settings(),
+            build_default_registry(notes_dir=tmp_path, workspace_scope=_scope),
+        )
+        assert Capability.TASK_BOARD in wired
+        assert Capability.CALENDAR in wired
 
 
 class TestEvaluate:
@@ -211,9 +241,31 @@ class TestInstall:
         rule_id = install(recipe, engine, ALL_CAPABILITIES)
 
         rules = engine.scheduler.list_rules()
-        assert len(rules) == 1
         assert rules[0].id == rule_id
         assert rules[0].cron_expr == recipe.trigger_spec
+
+    def test_daily_pulse_runs_morning_and_evening(self) -> None:
+        """Slayd: "Ertalab 09:20 va kechqurun 18:40".
+
+        Bitta cron ifodasi ikkala vaqtni bera olmaydi (daqiqalar har
+        xil), shuning uchun har biri alohida qoida bo'lishi kerak —
+        aks holda kechki puls umuman ishlamasdi."""
+        engine = AutomationEngine()
+        recipe = get_recipe("T06")
+        assert recipe is not None
+
+        install(recipe, engine, ALL_CAPABILITIES)
+
+        crons = {rule.cron_expr for rule in engine.scheduler.list_rules()}
+        assert crons == {"20 9 * * *", "40 18 * * *"}
+
+    def test_every_recipe_cron_is_valid(self) -> None:
+        """`also_at` ham cron tekshiruvidan o'tadi."""
+        for recipe in RECIPES:
+            if recipe.trigger_kind is not TriggerKind.TIME:
+                continue
+            for cron_expr in (recipe.trigger_spec, *recipe.also_at):
+                validate_cron(cron_expr)
 
     def test_event_recipe_creates_a_trigger(self) -> None:
         engine = AutomationEngine()

@@ -6,6 +6,7 @@ Singleton va per-request dependency'lar.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -114,6 +115,20 @@ async def _memory_search_fn(
         )
 
 
+@asynccontextmanager
+async def _workspace_scope() -> AsyncIterator[WorkspaceRepository]:
+    """`task.*`/`project.*`/`calendar.*` tool'lari uchun qisqa sessiya.
+
+    `_memory_search_fn` bilan bir xil sabab: registry singleton, DB esa
+    sessiyaga bog'liq. Sessiya chaqiruv PAYTIDA ochiladi, registry
+    qurilganda emas — aks holda birinchi so'rovdagi sessiya butun jarayon
+    davomida osilib qolardi.
+    """
+    async with session_scope(get_session_factory()) as session:
+        owner = await get_or_create_owner(session, external_id=get_settings().owner_id)
+        yield WorkspaceRepository(session, owner_id=owner.id)
+
+
 @lru_cache(maxsize=1)
 def get_tool_registry() -> ToolRegistry:
     """Global tool registry (singleton) — barcha builtin toollar bilan.
@@ -176,6 +191,8 @@ def get_tool_registry() -> ToolRegistry:
         instagram_business_account_id=settings.instagram_business_account_id or None,
         camera_provider=camera_provider,
         memory_search_fn=_memory_search_fn,
+        workspace_scope=_workspace_scope,
+        timezone=settings.timezone,
     )
 
 

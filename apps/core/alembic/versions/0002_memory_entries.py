@@ -31,17 +31,13 @@ def upgrade() -> None:
         sa.Column("summary", sa.Text(), nullable=True),
         sa.Column(
             "tags",
-            sa.JSON().with_variant(
-                postgresql.JSONB(astext_type=Text()), "postgresql"
-            ),
+            sa.JSON().with_variant(postgresql.JSONB(astext_type=Text()), "postgresql"),
             nullable=False,
         ),
         sa.Column("source", sa.String(length=500), nullable=True),
         sa.Column(
             "embedding",
-            sa.JSON().with_variant(
-                postgresql.JSONB(astext_type=Text()), "postgresql"
-            ),
+            sa.JSON().with_variant(postgresql.JSONB(astext_type=Text()), "postgresql"),
             nullable=True,
         ),
         sa.Column("version", sa.Integer(), nullable=False),

@@ -151,14 +151,14 @@ class TestTasks:
 
 
 class TestCalendar:
-    async def test_range_filter_excludes_outside_events(
-        self, repo: WorkspaceRepository
-    ) -> None:
+    async def test_range_filter_excludes_outside_events(self, repo: WorkspaceRepository) -> None:
         base = datetime(2026, 8, 15, 10, 0, tzinfo=UTC)
         await repo.create_event(title="Ichkarida", starts_at=base)
         await repo.create_event(title="Tashqarida", starts_at=base + timedelta(days=40))
 
-        events = await repo.list_events(start=base - timedelta(days=1), end=base + timedelta(days=1))
+        events = await repo.list_events(
+            start=base - timedelta(days=1), end=base + timedelta(days=1)
+        )
 
         assert [e.title for e in events] == ["Ichkarida"]
 
@@ -175,9 +175,7 @@ class TestCalendar:
 class TestOwnerIsolation:
     """Boshqa egaga tegishli yozuv qaytmasligi kerak."""
 
-    async def test_other_owner_cannot_read(
-        self, session: AsyncSession, owner: Owner
-    ) -> None:
+    async def test_other_owner_cannot_read(self, session: AsyncSession, owner: Owner) -> None:
         import uuid
 
         mine = WorkspaceRepository(session, owner_id=owner.id)

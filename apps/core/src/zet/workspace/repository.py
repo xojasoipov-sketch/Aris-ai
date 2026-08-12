@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from zet.db.base import utcnow
 from zet.db.models.workspace import CalendarEvent, Project, Task
-from zet.domain.workspace import ProjectStatus, TaskStatus
+from zet.domain.workspace import ProjectStatus, TaskPriority, TaskStatus
 
 
 class WorkspaceNotFoundError(Exception):
@@ -134,7 +134,7 @@ class WorkspaceRepository:
         title: str,
         description: str = "",
         status: TaskStatus = TaskStatus.TODO,
-        priority: str | None = None,
+        priority: TaskPriority | str | None = None,
         project_id: uuid.UUID | None = None,
         due_at: datetime | None = None,
         assigned_agent: str = "",
@@ -154,7 +154,11 @@ class WorkspaceRepository:
             done_at=utcnow() if status is TaskStatus.DONE else None,
         )
         if priority is not None:
-            task.priority = priority  # type: ignore[assignment]
+            # MAJBURIY o'girish: xom satr berilsa obyekt xotirada satr
+            # bo'lib qolardi (SQLAlchemy uni faqat yozishda o'giradi) va
+            # `task.priority.value` o'qigan har bir joy `AttributeError`
+            # bilan yiqilardi — `task.create` tooli aynan shunga urildi.
+            task.priority = TaskPriority(priority)
         self._session.add(task)
         await self._session.flush()
         return task

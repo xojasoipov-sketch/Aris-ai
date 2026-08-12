@@ -671,6 +671,13 @@ class RecipeDetailResponse(BaseModel):
     promise: str
     trigger_kind: TriggerKind
     trigger_spec: str
+    also_at: list[str] = []
+    """Qo'shimcha ishga tushish vaqtlari (T06 kuniga ikki marta ishlaydi).
+
+    Bo'sh ro'yxat — retsept faqat `trigger_spec` bo'yicha ishlaydi. Ega
+    interfeysda "09:20" ni ko'rib, kechqurun ham hisobot kelganda buni
+    kutilmagan deb o'ylamasligi uchun kerak."""
+
     result: str
     steps: list[dict[str, str]]
     status: RecipeStatus
@@ -693,6 +700,7 @@ def _detail(recipe: Recipe, readiness: RecipeReadiness) -> RecipeDetailResponse:
         promise=recipe.promise,
         trigger_kind=recipe.trigger_kind,
         trigger_spec=recipe.trigger_spec,
+        also_at=list(recipe.also_at),
         result=recipe.result,
         steps=[
             {"order": str(s.order), "title": s.title, "agent_name": s.agent_name}

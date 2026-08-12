@@ -209,21 +209,39 @@ class TestRecipeEndpoints:
         assert [r["code"] for r in recipes] == ["T01", "T02", "T03", "T04", "T05", "T06"]
 
     def test_blocked_recipe_names_what_is_missing(self, client: TestClient) -> None:
-        """Ega aynan nima yetishmayotganini ko'radi."""
+        """Ega aynan nima yetishmayotganini ko'radi.
+
+        T01 "Uchrashuv kotibi" — kalendar Z48'da ochildi, lekin uchrashuv
+        HAVOLASINI yaratish (Zoom/Meet) hali yo'q, shuning uchun retsept
+        baribir bloklangan va sababi aynan shu."""
         recipe = client.get("/api/v1/automation/recipes/T01").json()
         assert recipe["status"] == "missing_capability"
-        assert "calendar" in recipe["missing"]
+        assert "meeting_link" in recipe["missing"]
         assert recipe["blocked_steps"]
 
     def test_unknown_code_is_404(self, client: TestClient) -> None:
         assert client.get("/api/v1/automation/recipes/T99").status_code == 404
+
+    def test_daily_pulse_is_ready_and_installs(self, client: TestClient) -> None:
+        """T06 "Kunlik puls" — Z48 doskani ochgach HAQIQATAN o'rnatiladi.
+
+        Ilgari `task_board` yo'q edi va bu retsept 409 qaytarardi: jadval
+        bor edi, lekin agent unga yeta olmasdi."""
+        recipe = client.get("/api/v1/automation/recipes/T06").json()
+        assert recipe["status"] == "ready", recipe["missing"]
+
+        response = client.post("/api/v1/automation/recipes/T06/install")
+
+        assert response.status_code in {200, 201}
+        rules = client.get("/api/v1/automation/schedules").json()
+        assert any("T06" in rule["name"] for rule in rules)
 
     def test_install_refuses_incomplete_recipe(self, client: TestClient) -> None:
         """Chala avtomatlashtirish o'rnatilmaydi."""
         response = client.post("/api/v1/automation/recipes/T01/install")
 
         assert response.status_code == 409
-        assert "calendar" in response.json()["detail"]
+        assert "meeting_link" in response.json()["detail"]
         assert client.get("/api/v1/automation/triggers").json() == []
 
 

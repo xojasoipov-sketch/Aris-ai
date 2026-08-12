@@ -156,9 +156,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_calendar_event_owner_id"), "calendar_event", ["owner_id"])
     op.create_index(op.f("ix_calendar_event_project_id"), "calendar_event", ["project_id"])
     op.create_index(op.f("ix_calendar_event_starts_at"), "calendar_event", ["starts_at"])
-    op.create_index(
-        "ix_calendar_event_owner_start", "calendar_event", ["owner_id", "starts_at"]
-    )
+    op.create_index("ix_calendar_event_owner_start", "calendar_event", ["owner_id", "starts_at"])
     op.create_index(op.f("ix_calendar_event_created_at"), "calendar_event", ["created_at"])
 
 
