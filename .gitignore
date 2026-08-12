@@ -47,6 +47,11 @@ logs/
 /models/
 .ollama/
 
+# ── Hetzner deploy (server-mahalliy, .env sirlar) ───────────────────
+infra/hetzner/.env
+infra/hetzner/.env.web
+infra/hetzner/Caddyfile.active
+
 # ── IDE / OS ───────────────────────────────────────────────────────
 .idea/
 .vscode/

@@ -97,7 +97,13 @@ PLANNER_TOOL_SCHEMA: dict[str, object] = {
                     },
                     "expected_outcome": {
                         "type": "string",
-                        "description": "Kutilgan natija tavsifi",
+                        "description": (
+                            "Kutilgan natija. Qisqa bo'lsa (1-3 so'z yoki regex) "
+                            "chiqishdan so'zma-so'z QIDIRILADI va topilmasa qadam "
+                            "yiqiladi — shuning uchun faqat chiqishda haqiqatan "
+                            "uchraydigan matnni yoz. Aks holda uzunroq tavsif yoz: "
+                            "u tekshiruv sifatida ishlatilmaydi."
+                        ),
                     },
                     "depends_on": {
                         "type": "array",

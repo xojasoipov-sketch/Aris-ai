@@ -23,6 +23,32 @@ from zet.domain.tool import ToolResult, Verification
 
 log = structlog.get_logger(__name__)
 
+MAX_LITERAL_WORDS = 3
+"""Shu so'zdan ko'p bo'lgan `expected_outcome` — TAVSIF, shablon emas.
+
+NEGA BU CHEGARA BOR.
+
+`expected_outcome` Planner sxemasida "kutilgan natija TAVSIFI" deb
+e'lon qilingan, ya'ni model u yerga jonli tildagi jumla yozadi:
+
+    "YouTube videosidan foydali ma'lumotlarni olish va ajratib olish"
+
+Verifier esa uni tool chiqishi ichidan **so'zma-so'z** qidirardi.
+Bunday jumla JSON chiqish ichida hech qachon uchramaydi, natijada
+hammasi mukammal bajarilgan run ham FAILED bo'lardi. Jonli misol:
+
+    video_learn.done  key_points=5 terms=7
+    tool.ok           latency_ms=18779
+    orchestrator.run_finished  status="failed"   ← yolg'on
+
+Ega to'liq va to'g'ri natijani oldi, lekin ZET uni "muvaffaqiyatsiz"
+deb ko'rsatdi.
+
+Qisqa shablon (`natija`, `\\d{3}`) — haqiqatan tekshiriladi va topilmasa
+qadam yiqiladi. Uzun jumla esa tekshirib bo'lmaydigan tavsif: u
+ishonchni pasaytiradi va sababi yoziladi, lekin muvaffaqiyatli tool
+natijasini yolg'ondan yiqitmaydi."""
+
 
 class Verifier:
     """Qadam natijasini kutilgan natijaga tekshiradi.
@@ -151,6 +177,20 @@ class Verifier:
                 )
         except re.error:
             pass  # Regex emas — oddiy matn sifatida qaralsin
+
+        # Jonli tildagi jumla — tekshirib bo'lmaydi (yuqoridagi izohga
+        # qarang). Tool o'zi muvaffaqiyat deb aytdi; buni "yiqildi" deb
+        # qayta yozish egaga yolg'on ma'lumot berish bo'lardi.
+        if len(expected.split()) > MAX_LITERAL_WORDS:
+            return Verification(
+                ok=True,
+                reason=(
+                    f"Kutilgan natija matnan tasdiqlanmadi (tavsif): '{expected}'. "
+                    "Tool muvaffaqiyat deb qaytardi."
+                ),
+                auto=True,
+                confidence=0.6,
+            )
 
         return Verification(
             ok=False,

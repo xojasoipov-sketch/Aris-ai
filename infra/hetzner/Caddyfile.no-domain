@@ -1,0 +1,13 @@
+# Domensiz sinov uchun — TLS yo'q, IP:port orqali kirish.
+# Let's Encrypt domensiz sertifikat bera olmaydi, shuning uchun bu
+# holatda oddiy HTTP portlarga proksi qilinadi.
+
+:80 {
+	reverse_proxy web:3000
+	encode gzip
+}
+
+:8000 {
+	reverse_proxy backend:8000
+	encode gzip
+}

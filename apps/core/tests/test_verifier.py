@@ -200,3 +200,54 @@ class TestVerifyRun:
 
         assert result.ok is True
         assert result.confidence == 0.8
+
+
+class TestDescriptionsAreNotLiteralChecks:
+    """Uzun `expected_outcome` — tavsif, so'zma-so'z shablon emas.
+
+    Jonli misolda `video.learn` 18.8 soniyada to'liq natija qaytardi
+    (`tool.ok`, 5 asosiy fikr, 7 atama), lekin Planner yozgan jumla
+    JSON chiqish ichida uchramagani uchun run FAILED deb belgilandi.
+    Ega to'g'ri natijani oldi-yu, ZET uni "muvaffaqiyatsiz" dedi.
+    """
+
+    def test_long_description_does_not_fail_a_successful_tool(self) -> None:
+        v = Verifier()
+        step = _step(
+            expected_outcome="YouTube videosidan foydali ma'lumotlarni olish va ajratib olish"
+        )
+
+        result = v.verify_step(step, _result(output={"title": "Neyron tarmoqlar"}))
+
+        assert result.ok is True
+        assert "tasdiqlanmadi" in result.reason
+        assert result.confidence < 0.8
+
+    def test_short_literal_still_fails_when_absent(self) -> None:
+        """Qisqa shablon haqiqiy tekshiruv bo'lib qoladi."""
+        v = Verifier()
+        step = _step(expected_outcome="maxfiy_so'z")
+
+        result = v.verify_step(step, _result(output="boshqa matn"))
+
+        assert result.ok is False
+
+    def test_boundary_three_words_is_still_a_literal(self) -> None:
+        """Chegara aniq: 3 so'z — shablon, 4 so'z — tavsif."""
+        v = Verifier()
+
+        three = v.verify_step(_step(expected_outcome="bir ikki uch"), _result(output="x"))
+        four = v.verify_step(_step(expected_outcome="bir ikki uch tort"), _result(output="x"))
+
+        assert three.ok is False
+        assert four.ok is True
+
+    def test_a_matching_long_description_is_still_a_pass(self) -> None:
+        """Tasodifan mos kelsa — ishonch yuqori bo'ladi."""
+        v = Verifier()
+        step = _step(expected_outcome="natija muvaffaqiyatli tayyor boldi")
+
+        result = v.verify_step(step, _result(output="natija muvaffaqiyatli tayyor boldi"))
+
+        assert result.ok is True
+        assert result.confidence >= 0.85
