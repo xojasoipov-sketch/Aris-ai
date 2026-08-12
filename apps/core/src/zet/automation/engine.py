@@ -117,7 +117,7 @@ class AutomationEngine:
         event_data = {"event_type": event.event_type, "source": event.source}
         event_data.update(event.data)
 
-        matching = self.triggers.find_matching(event_data)
+        matching = self.triggers.find_matching(event_data, now=event.timestamp)
         actions: list[AutomationAction] = []
 
         for trigger in matching:

@@ -142,20 +142,29 @@ class EventTrigger(BaseModel, frozen=True):
             return False
         return not (self.max_fires is not None and self.fire_count >= self.max_fires)
 
-    def matches(self, event_data: dict[str, str]) -> bool:
+    def matches(self, event_data: dict[str, str], *, now: datetime | None = None) -> bool:
         """Hodisa triggerni ishga tushiradimi.
 
         Args:
             event_data: Hodisa ma'lumotlari
+            now: Tekshirish vaqti (cooldown uchun; standart — joriy vaqt)
 
         Returns:
-            True agar barcha shartlar bajarilsa
+            True agar barcha shartlar bajarilsa va cooldown tugagan bo'lsa
         """
         if not self.is_active:
+            return False
+        if self._in_cooldown(now or datetime.now(UTC)):
             return False
         if not self.conditions:
             return True  # Shartsiz trigger — har doim ishlaydi
         return all(c.evaluate(event_data) for c in self.conditions)
+
+    def _in_cooldown(self, now: datetime) -> bool:
+        """Oxirgi ishga tushishdan beri `cooldown_s` hali o'tmaganmi."""
+        if self.cooldown_s <= 0 or self.last_fired_at is None:
+            return False
+        return (now - self.last_fired_at).total_seconds() < self.cooldown_s
 
     def render_command(self, event_data: dict[str, str]) -> str:
         """Buyruq shablonini hodisa ma'lumotlari bilan to'ldirish.
@@ -205,16 +214,19 @@ class TriggerRegistry:
             return list(self._triggers.values())
         return [t for t in self._triggers.values() if t.trigger_type == trigger_type]
 
-    def find_matching(self, event_data: dict[str, str]) -> list[EventTrigger]:
+    def find_matching(
+        self, event_data: dict[str, str], *, now: datetime | None = None
+    ) -> list[EventTrigger]:
         """Hodisaga mos triggerlarni topish.
 
         Args:
             event_data: Hodisa ma'lumotlari
+            now: Tekshirish vaqti (cooldown uchun)
 
         Returns:
             Mos kelgan triggerlar ro'yxati
         """
-        return [t for t in self._triggers.values() if t.matches(event_data)]
+        return [t for t in self._triggers.values() if t.matches(event_data, now=now)]
 
     def record_fire(self, trigger_id: str) -> EventTrigger | None:
         """Ishga tushish yozuvini qo'shish."""

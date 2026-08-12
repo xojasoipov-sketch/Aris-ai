@@ -24,6 +24,8 @@ from enum import StrEnum
 import structlog
 from pydantic import BaseModel, Field
 
+from zet.automation.cron import CRON_SHORTCUTS
+
 log = structlog.get_logger(__name__)
 
 # Oddiy cron field validatsiyasi (5-field: min hour dom month dow)
@@ -94,13 +96,7 @@ class ScheduleRule(BaseModel, frozen=True):
     @property
     def normalized_cron(self) -> str:
         """Cron ifodani normallash (shortcutlarni ochish)."""
-        shortcuts = {
-            "@hourly": "0 * * * *",
-            "@daily": "0 0 * * *",
-            "@weekly": "0 0 * * 0",
-            "@monthly": "0 0 1 * *",
-        }
-        return shortcuts.get(self.cron_expr, self.cron_expr)
+        return CRON_SHORTCUTS.get(self.cron_expr, self.cron_expr)
 
     @property
     def is_active(self) -> bool:
@@ -119,8 +115,7 @@ def validate_cron(expr: str) -> bool:
     Returns:
         True agar yaroqli bo'lsa
     """
-    shortcuts = {"@hourly", "@daily", "@weekly", "@monthly"}
-    if expr in shortcuts:
+    if expr in CRON_SHORTCUTS:
         return True
     return bool(_CRON_PATTERN.match(expr))
 

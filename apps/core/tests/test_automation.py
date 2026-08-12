@@ -817,6 +817,7 @@ class TestAutomationInit:
         from zet.automation import __all__
 
         expected = {
+            "AgentUnavailableError",
             "AutomationEngine",
             "EventTrigger",
             "ScheduleRule",
@@ -824,8 +825,11 @@ class TestAutomationInit:
             "TriggerCondition",
             "TriggerType",
             "WorkflowChain",
+            "WorkflowExecutor",
             "WorkflowStatus",
             "WorkflowStep",
+            "is_due",
+            "run_agent_command",
         }
         assert set(__all__) == expected
 

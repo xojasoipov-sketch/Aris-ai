@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from zet.agents.registry import AgentRegistry
 from zet.agents.repository import AgentRepository
+from zet.automation.engine import AutomationEngine
+from zet.automation.executor import WorkflowExecutor
 from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.state import CoreState
@@ -131,6 +133,33 @@ def get_run_store() -> RunStore:
 def get_daily_schedule_manager() -> DailyScheduleManager:
     """Global kunlik jadval (singleton) — V-35."""
     return DailyScheduleManager()
+
+
+@lru_cache(maxsize=1)
+def get_automation_engine() -> AutomationEngine:
+    """Global Automation Engine (singleton) — Bo'lim 9.
+
+    `Scheduler`/`TriggerRegistry`/`WorkflowRunner` — hozircha in-memory
+    (`AgentRegistry` bilan bir xil boshlang'ich naqsh; DB-persistensiya
+    keyingi bosqich). `AutomationDaemon` va API route'lari shu orqali
+    bir xil holatga ulanadi.
+    """
+    return AutomationEngine()
+
+
+def get_workflow_executor(
+    engine: AutomationEngine = Depends(get_automation_engine),
+    agent_registry: AgentRegistry = Depends(get_agent_registry),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+    permission_policy: PermissionPolicy = Depends(get_permission_policy),
+) -> WorkflowExecutor:
+    """So'rov chegarasidagi Workflow Executor — workflow zanjirini haqiqatan bajaradi."""
+    return WorkflowExecutor(
+        workflows=engine.workflows,
+        agent_registry=agent_registry,
+        tool_registry=tool_registry,
+        permission_policy=permission_policy,
+    )
 
 
 # ── Monitoring / Alerts ───────────────────────────────────────────
