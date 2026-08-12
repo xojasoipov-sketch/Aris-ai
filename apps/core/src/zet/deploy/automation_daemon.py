@@ -143,7 +143,29 @@ class AutomationDaemon:
             await self._fire(rule)
             fired.append(rule.id)
 
+        if fired:
+            # `_fire()` ichida `record_run()` chaqiriladi — ya'ni ishga
+            # tushish soni va `max_runs` qoldig'i O'ZGARDI. Buni yozmasak,
+            # qayta ishga tushishdan keyin cheklangan qoida hisobni
+            # noldan boshlab ortiqcha ishlab ketardi.
+            await self._persist_state()
+
         return fired
+
+    async def _persist_state(self) -> None:
+        """Jadval holatini bazaga yozadi (fail-open).
+
+        Daemon fon tsikli — bu yerda istisno butun tsiklni to'xtatmasligi
+        kerak, shuning uchun `persist_automation` xatoni yutadi."""
+        if self._session_factory is None or self._settings is None:
+            return
+        from zet.automation.persistence import persist_automation
+
+        await persist_automation(
+            self._engine,
+            self._session_factory,
+            owner_external_id=self._settings.owner_id,
+        )
 
     async def _run_once(self, rule: ScheduleRule) -> AgentRunResult:
         """Qoidani bir marta bajaradi — sozlangan bo'lsa yangi DB sessiya bilan real LLM."""

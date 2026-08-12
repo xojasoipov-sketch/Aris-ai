@@ -37,7 +37,7 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from zet.agents.registry import AgentRegistry
@@ -56,6 +56,7 @@ from zet.automation.autonomy import AutonomyLevel, AutonomyViolationError
 from zet.automation.engine import AutomationAction, AutomationEngine, AutomationEvent
 from zet.automation.executor import AgentUnavailableError, WorkflowExecutor, run_agent_command
 from zet.automation.goal import Goal, GoalPursuit, GoalRegistry, GoalStatus
+from zet.automation.persistence import persist_automation
 from zet.automation.recipes import (
     RECIPES,
     Capability,
@@ -73,7 +74,7 @@ from zet.automation.scheduler import ScheduleRule, ScheduleStatus
 from zet.automation.triggers import EventTrigger, TriggerCondition, TriggerType
 from zet.automation.watcher import WatchComparison, WatchRule
 from zet.automation.workflow import WorkflowChain, WorkflowStatus, WorkflowStep
-from zet.config import Settings
+from zet.config import Settings, get_settings
 from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
 from zet.security.killswitch import KillSwitchState
@@ -162,17 +163,39 @@ class AutomationEventResponse(BaseModel):
     actions: list[ActionResultResponse]
 
 
+# ── Holatni saqlash ────────────────────────────────────────────────
+
+
+def _persist(background: BackgroundTasks, engine: AutomationEngine) -> None:
+    """Dvigatel holatini bazaga yozishni navbatga qo'yadi.
+
+    `BackgroundTasks` — javob YUBORILGANDAN KEYIN ishlaydi. Bu ataylab:
+    saqlash yiqilsa ham ega qo'shgan qoida XOTIRADA ishlab turaveradi va
+    so'rov 500 bo'lmaydi. Yagona yo'qotish — qayta ishga tushishdan omon
+    qolmaslik, va u log'da ko'rinadi (`automation.persist_failed`).
+    """
+    from zet.api.deps import get_session_factory
+
+    background.add_task(
+        persist_automation,
+        engine,
+        get_session_factory(),
+        owner_external_id=get_settings().owner_id,
+    )
+
+
 # ── Jadvallar (Scheduler) ──────────────────────────────────────────
 
 
 @router.post("/schedules", response_model=ScheduleRule, status_code=201)
 def create_schedule(
     request: ScheduleCreateRequest,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> ScheduleRule:
     """Yangi jadval qoidasi qo'shish (cron)."""
     try:
-        return engine.add_schedule(
+        rule = engine.add_schedule(
             ScheduleRule(
                 name=request.name,
                 agent_name=request.agent_name,
@@ -183,6 +206,8 @@ def create_schedule(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _persist(background, engine)
+    return rule
 
 
 @router.get("/schedules", response_model=list[ScheduleRule])
@@ -197,35 +222,41 @@ def list_schedules(
 @router.post("/schedules/{schedule_id}/pause", response_model=ScheduleRule)
 def pause_schedule(
     schedule_id: str,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> ScheduleRule:
     """Jadval qoidasini to'xtatish."""
     rule = engine.scheduler.pause_rule(schedule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Jadval qoidasi topilmadi")
+    _persist(background, engine)
     return rule
 
 
 @router.post("/schedules/{schedule_id}/resume", response_model=ScheduleRule)
 def resume_schedule(
     schedule_id: str,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> ScheduleRule:
     """Jadval qoidasini qayta boshlash."""
     rule = engine.scheduler.resume_rule(schedule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Jadval qoidasi topilmadi")
+    _persist(background, engine)
     return rule
 
 
 @router.delete("/schedules/{schedule_id}", status_code=204)
 def delete_schedule(
     schedule_id: str,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> None:
     """Jadval qoidasini o'chirish."""
     if not engine.scheduler.remove_rule(schedule_id):
         raise HTTPException(status_code=404, detail="Jadval qoidasi topilmadi")
+    _persist(background, engine)
 
 
 # ── Triggerlar ────────────────────────────────────────────────────
@@ -234,10 +265,11 @@ def delete_schedule(
 @router.post("/triggers", response_model=EventTrigger, status_code=201)
 def create_trigger(
     request: TriggerCreateRequest,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> EventTrigger:
     """Yangi hodisaga asoslangan trigger qo'shish."""
-    return engine.add_trigger(
+    trigger = engine.add_trigger(
         EventTrigger(
             name=request.name,
             trigger_type=request.trigger_type,
@@ -251,6 +283,8 @@ def create_trigger(
             cooldown_s=request.cooldown_s,
         )
     )
+    _persist(background, engine)
+    return trigger
 
 
 @router.get("/triggers", response_model=list[EventTrigger])
@@ -265,11 +299,13 @@ def list_triggers(
 @router.delete("/triggers/{trigger_id}", status_code=204)
 def delete_trigger(
     trigger_id: str,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> None:
     """Triggerni o'chirish."""
     if not engine.triggers.remove(trigger_id):
         raise HTTPException(status_code=404, detail="Trigger topilmadi")
+    _persist(background, engine)
 
 
 # ── Workflowlar ───────────────────────────────────────────────────
@@ -483,6 +519,7 @@ def list_metrics(
 @router.post("/watchers", response_model=WatchRule, status_code=201)
 def create_watcher(
     request: WatchCreateRequest,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> WatchRule:
     """Yangi kuzatuv qoidasi (metrika o'zgarganda uyg'onadi).
@@ -498,7 +535,7 @@ def create_watcher(
                 f"Mavjudlari: {', '.join(engine.metrics.known) or '(hech qanday)'}"
             ),
         )
-    return engine.add_watch(
+    rule = engine.add_watch(
         WatchRule(
             name=request.name,
             metric=request.metric,
@@ -508,6 +545,8 @@ def create_watcher(
             max_fires=request.max_fires,
         )
     )
+    _persist(background, engine)
+    return rule
 
 
 @router.get("/watchers", response_model=list[WatchRule])
@@ -522,11 +561,13 @@ def list_watchers(
 @router.delete("/watchers/{rule_id}", status_code=204)
 def delete_watcher(
     rule_id: str,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
 ) -> None:
     """Kuzatuv qoidasini o'chirish."""
     if not engine.watchers.remove(rule_id):
         raise HTTPException(status_code=404, detail="Kuzatuv qoidasi topilmadi")
+    _persist(background, engine)
 
 
 @router.post("/watchers/poll", response_model=WatchPollResponse)
@@ -743,6 +784,7 @@ def get_recipe_detail(
 @router.post("/recipes/{code}/install", response_model=RecipeInstallResponse, status_code=201)
 def install_recipe(
     code: str,
+    background: BackgroundTasks,
     engine: AutomationEngine = Depends(get_automation_engine),
     settings: Settings = Depends(get_config),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -761,6 +803,10 @@ def install_recipe(
         installed_id = install(recipe, engine, available)
     except RecipeNotReadyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # Yoqilgan retsept qayta ishga tushishdan omon qolishi SHART: ega
+    # "Yoqilgan" yozuvini ko'rib, hisobot kelishini kutib qoladi.
+    _persist(background, engine)
 
     return RecipeInstallResponse(
         code=recipe.code,

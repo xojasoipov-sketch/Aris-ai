@@ -72,6 +72,7 @@ log = structlog.get_logger(__name__)
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Ilova boshlanganda va tugaganda bajariladigan kod."""
     from zet.api.deps import get_session_factory
+    from zet.automation.persistence import load_automation
     from zet.db.session import session_scope
     from zet.deploy.automation_daemon import AutomationDaemon
     from zet.deploy.bootstrap import bootstrap_agents, load_persisted_agents
@@ -116,6 +117,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         settings=settings,
     )
     daemon_task = asyncio.create_task(daemon.run_forever())
+
+    # Saqlangan avtomatlashtirishlarni tiklash — daemon ISHGA TUSHISHDAN
+    # OLDIN. Aks holda birinchi tick bo'sh jadval ko'rib o'tib ketardi va
+    # ega yoqqan retsept o'sha daqiqada ishlamay qolardi.
+    await load_automation(
+        get_automation_engine(),
+        get_session_factory(),
+        owner_external_id=settings.owner_id,
+    )
 
     automation_daemon = AutomationDaemon(
         engine=get_automation_engine(),
