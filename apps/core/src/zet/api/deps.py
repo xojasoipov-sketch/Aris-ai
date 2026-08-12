@@ -112,6 +112,9 @@ def get_tool_registry() -> ToolRegistry:
         youtube_api_key=(
             settings.youtube_api_key.get_secret_value() if settings.youtube_api_key else None
         ),
+        telegram_bot_token=(
+            settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else None
+        ),
         camera_provider=camera_provider,
     )
 

@@ -64,6 +64,8 @@ SMM_AGENT_SPEC = AgentSpec(
         "youtube.search",
         "youtube.channel_stats",
         "youtube.video_stats",
+        "telegram.channel_stats",
+        "telegram.channel_post",
     ],
     model_policy=ModelTier.T1_FREE,
     permission_level=PermissionLevel.WRITE,

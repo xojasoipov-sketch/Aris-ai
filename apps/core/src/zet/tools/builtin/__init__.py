@@ -22,6 +22,10 @@ from zet.tools.builtin.note_list import NoteListTool
 from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteWriteTool
 from zet.tools.builtin.shell_exec import ShellExecTool
+from zet.tools.builtin.telegram_tools import (
+    TelegramChannelPostTool,
+    TelegramChannelStatsTool,
+)
 from zet.tools.builtin.time_now import TimeNowTool
 from zet.tools.builtin.web_reader import WebReaderTool
 from zet.tools.builtin.web_search import WebSearchTool
@@ -41,6 +45,7 @@ def build_default_registry(
     github_token: str | None = None,
     web_search_api_key: str | None = None,
     youtube_api_key: str | None = None,
+    telegram_bot_token: str | None = None,
     camera_provider: CameraProvider | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
@@ -58,6 +63,9 @@ def build_default_registry(
             Search API); bo'lmasa (default) — stub rejim.
         youtube_api_key: berilsa — `youtube.search`/`.channel_stats`/`.video_stats`
             YouTube Data API v3'ga chiqadi; bo'lmasa (default) — stub rejim.
+        telegram_bot_token: berilsa — `telegram.channel_stats`/`.channel_post`
+            Telegram Bot API'siga chiqadi (bot kanaldan administrator bo'lishi
+            shart); bo'lmasa — stub.
         camera_provider: `camera.snapshot` uchun ulanish (default: `StubCamera`
             — real RTSP/EZVIZ hali ulanmagan).
 
@@ -76,6 +84,8 @@ def build_default_registry(
     registry.register(YouTubeSearchTool(api_key=youtube_api_key))
     registry.register(YouTubeChannelStatsTool(api_key=youtube_api_key))
     registry.register(YouTubeVideoStatsTool(api_key=youtube_api_key))
+    registry.register(TelegramChannelStatsTool(token=telegram_bot_token))
+    registry.register(TelegramChannelPostTool(token=telegram_bot_token))
     registry.register(CameraSnapshotTool(provider=camera_provider))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))
