@@ -15,10 +15,16 @@ from zet.llm.anthropic import AnthropicProvider
 from zet.llm.base import LLMProvider
 from zet.llm.openai_compat import OpenAICompatProvider
 
-# Free tier'larning OpenAI-mos endpointlari
+# OpenAI-mos endpointlar. Hammasi bitta `OpenAICompatProvider` bilan
+# ishlaydi — yangi provayder qo'shish uchun URL va kalit yetarli.
 GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+COHERE_BASE_URL = "https://api.cohere.ai/compatibility/v1"
+CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 
 
 def _secret(value: SecretStr | None) -> str | None:
@@ -53,6 +59,43 @@ def build_providers(settings: Settings) -> dict[str, LLMProvider]:
             tier=ModelTier.T1_FREE,
             base_url=MISTRAL_BASE_URL,
             api_key=_secret(settings.mistral_api_key),
+        ),
+        # `openrouter_api_key` konfiguratsiyada bor edi, lekin bu yerda
+        # hech qachon qurilmagan — kalit qo'yilsa ham ishlamasdi.
+        "openrouter": OpenAICompatProvider(
+            name="openrouter",
+            tier=ModelTier.T1_FREE,
+            base_url=OPENROUTER_BASE_URL,
+            api_key=_secret(settings.openrouter_api_key),
+        ),
+        "cohere": OpenAICompatProvider(
+            name="cohere",
+            tier=ModelTier.T1_FREE,
+            base_url=COHERE_BASE_URL,
+            api_key=_secret(settings.cohere_api_key),
+        ),
+        # Quyidagi uchtasi 2026-08-12 da tekshirilganda balanssiz edi
+        # (kalit yaroqli, hisob bo'sh). Ular ro'yxatga OLINADI va
+        # marshrutning oxirida turadi: hisob to'ldirilgach kod
+        # o'zgarmasdan ishlaydi, shu paytgacha circuit breaker ularni
+        # birinchi xatodan keyin chetlab o'tadi.
+        "cerebras": OpenAICompatProvider(
+            name="cerebras",
+            tier=ModelTier.T1_FREE,
+            base_url=CEREBRAS_BASE_URL,
+            api_key=_secret(settings.cerebras_api_key),
+        ),
+        "deepseek": OpenAICompatProvider(
+            name="deepseek",
+            tier=ModelTier.T2_CHEAP,
+            base_url=DEEPSEEK_BASE_URL,
+            api_key=_secret(settings.deepseek_api_key),
+        ),
+        "kimi": OpenAICompatProvider(
+            name="kimi",
+            tier=ModelTier.T2_CHEAP,
+            base_url=KIMI_BASE_URL,
+            api_key=_secret(settings.kimi_api_key),
         ),
         # T2 / T3 — to'lovli
         "anthropic": AnthropicProvider(_secret(settings.anthropic_api_key)),

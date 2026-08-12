@@ -111,6 +111,23 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr | None = None
     mistral_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
+    cohere_api_key: SecretStr | None = None
+    """Cohere — `command-r` oilasi. Jonli tasdiqlangan (2026-08-12)."""
+
+    # Kalit bor, lekin hisob to'ldirilmagan bo'lsa provayder ro'yxatga
+    # olinadi va marshrutning OXIRIDA turadi. Router `is_configured`ni
+    # tekshiradi, circuit breaker esa ketma-ket xatodan keyin uni yopadi —
+    # ya'ni pulsiz provayder har so'rovni sekinlashtirmaydi. Hisob
+    # to'ldirilgach kod o'zgarmasdan ishlay boshlaydi.
+    cerebras_api_key: SecretStr | None = None
+    """Cerebras — juda tez inferens. 2026-08-12: kalit yaroqli, balans yo'q."""
+
+    deepseek_api_key: SecretStr | None = None
+    """DeepSeek — arzon reasoning. 2026-08-12: kalit yaroqli, balans yo'q."""
+
+    kimi_api_key: SecretStr | None = None
+    """Moonshot Kimi — uzun kontekst. 2026-08-12: kalit yaroqli, balans yo'q."""
+
     # T2 / T3 — to'lovli
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
@@ -281,6 +298,10 @@ class Settings(BaseSettings):
                 self.groq_api_key,
                 self.mistral_api_key,
                 self.openrouter_api_key,
+                self.cohere_api_key,
+                self.cerebras_api_key,
+                self.deepseek_api_key,
+                self.kimi_api_key,
                 self.anthropic_api_key,
                 self.openai_api_key,
                 bool(self.ollama_base_url),

@@ -94,10 +94,64 @@ _T1: Final[tuple[ModelSpec, ...]] = (
         free_rpd=500,
         free_rpm=20,
     ),
+    # 2026-08-12 jonli tekshirilgan: javob qaytardi.
+    ModelSpec(
+        key="cohere:command-r",
+        provider="cohere",
+        model="command-r-08-2024",
+        tier=ModelTier.T1_FREE,
+        free_rpd=1000,
+        free_rpm=20,
+    ),
+    # OpenRouter'ning `:free` slug'lari. Bepul modellar ro'yxati tez-tez
+    # o'zgaradi — bu model yo'qolsa router keyingisiga o'tadi.
+    #
+    # SEKIN: 2026-08-12 o'lchovi ~33 s (boshqa bepul variantlar tezroq,
+    # lekin `nemotron-3.5-lightning` javob ichida "thinking" matnini
+    # qaytardi, ikkitasi esa bo'sh content berdi). Shu sabab toza javob
+    # tanlandi va u zanjirning OXIRIDA turadi — faqat google/mistral/
+    # cohere/ollama yiqilganda ishlaydi, ya'ni sekinlik kundalik yo'lga
+    # tegmaydi.
+    ModelSpec(
+        key="openrouter:nemotron-ultra",
+        provider="openrouter",
+        model="nvidia/nemotron-3-ultra-550b-a55b:free",
+        tier=ModelTier.T1_FREE,
+        free_rpd=50,
+        free_rpm=20,
+    ),
+    # Kaliti bor, hisobi bo'sh (2026-08-12). Marshrutning oxirida turadi —
+    # hisob to'ldirilgach o'zi ishlay boshlaydi.
+    ModelSpec(
+        key="cerebras:gpt-oss-120b",
+        provider="cerebras",
+        model="gpt-oss-120b",
+        tier=ModelTier.T1_FREE,
+        free_rpd=100,
+        free_rpm=10,
+    ),
 )
 
 # ── T2 / T3: to'lovli, qattiq chegara ostida ───────────────────────
 _PAID: Final[tuple[ModelSpec, ...]] = (
+    # DeepSeek va Kimi — arzon muqobillar. 2026-08-12: kalit yaroqli,
+    # balans yo'q. Narxlar taxminiy (provayder saytidan, tekshirilishi shart).
+    ModelSpec(
+        key="deepseek:flash",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        tier=ModelTier.T2_CHEAP,
+        input_usd_per_mtok=0.14,
+        output_usd_per_mtok=0.28,
+    ),
+    ModelSpec(
+        key="kimi:k2",
+        provider="kimi",
+        model="kimi-k2.6",
+        tier=ModelTier.T2_CHEAP,
+        input_usd_per_mtok=0.60,
+        output_usd_per_mtok=2.50,
+    ),
     ModelSpec(
         key="anthropic:haiku",
         provider="anthropic",
@@ -133,12 +187,26 @@ CATALOG: Final[dict[str, ModelSpec]] = {s.key: s for s in (*_T0, *_T1, *_PAID)}
 # ── Marshrutlash siyosati (V-29 + ADR-0006) ────────────────────────
 # Tartib = ustuvorlik. Router birinchi mos kelganini oladi:
 # kalit bor + kvota bor + budjet yetadi + circuit breaker yopiq.
+#
+# TARTIB JONLI TEKSHIRUVGA ASOSLANGAN (2026-08-12). Har bir provayderga
+# haqiqiy so'rov yuborildi — "kalit bor" degani "ishlaydi" degani emas:
+#
+#     ishladi:  google, mistral, cohere, openrouter (:free)
+#     balanssiz: cerebras, deepseek, kimi (kalit yaroqli, hisob bo'sh)
+#
+# Balanssizlari zanjirdan OLIB TASHLANMADI, balki OXIRIGA qo'yildi:
+# hisob to'ldirilgach kod o'zgarmasdan ishlay boshlaydi. Ular har
+# so'rovni sekinlashtirmaydi — circuit breaker birinchi xatodan keyin
+# provayderni chetlab o'tadi.
 ROUTING: Final[dict[TaskClass, tuple[str, ...]]] = {
     # Klassifikatsiya, xulosa, formatlash — lokal bemalol uddalaydi
     TaskClass.SIMPLE: (
         "ollama:qwen3-8b",
         "google:gemini-flash",
         "groq:llama-3.3-70b",
+        "cohere:command-r",
+        "openrouter:nemotron-ultra",
+        "cerebras:gpt-oss-120b",
         "anthropic:haiku",
     ),
     # Kundalik ish oti — free tier birinchi
@@ -146,7 +214,11 @@ ROUTING: Final[dict[TaskClass, tuple[str, ...]]] = {
         "google:gemini-flash",
         "groq:llama-3.3-70b",
         "mistral:small",
+        "cohere:command-r",
         "ollama:qwen3-8b",
+        "openrouter:nemotron-ultra",
+        "cerebras:gpt-oss-120b",
+        "deepseek:flash",
         "anthropic:haiku",
     ),
     # Planner va murakkab reasoning — bu yerda sifat pul turadi
@@ -154,11 +226,16 @@ ROUTING: Final[dict[TaskClass, tuple[str, ...]]] = {
         "anthropic:sonnet",
         "google:gemini-flash",
         "groq:llama-3.3-70b",
+        "openrouter:nemotron-ultra",
+        "deepseek:flash",
+        "kimi:k2",
     ),
     TaskClass.CODING: (
         "anthropic:sonnet",
         "groq:llama-3.3-70b",
         "google:gemini-flash",
+        "deepseek:flash",
+        "kimi:k2",
     ),
     TaskClass.VISION: (
         "google:gemini-flash",

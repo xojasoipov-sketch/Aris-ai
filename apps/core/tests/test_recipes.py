@@ -46,6 +46,10 @@ def _settings(**kwargs: object) -> Settings:
         "mistral_api_key": None,
         "openrouter_api_key": None,
         "openai_api_key": None,
+        "cohere_api_key": None,
+        "cerebras_api_key": None,
+        "deepseek_api_key": None,
+        "kimi_api_key": None,
         "telegram_bot_token": None,
     }
     base.update(kwargs)
