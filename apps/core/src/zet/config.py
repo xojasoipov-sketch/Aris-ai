@@ -114,6 +114,15 @@ class Settings(BaseSettings):
     hikvision_channel: int = Field(default=1, ge=1)
     """Kamera kanal raqami (NVR uchun 101, 201, ...; yagona kamera uchun 1)."""
 
+    # ── Ovoz (Bo'lim 5, V-18) ─────────────────────────────────────────
+    elevenlabs_api_key: SecretStr | None = None
+    """ElevenLabs API kaliti (Scribe STT + Multilingual v2 TTS). Bo'lmasa —
+    `StubSTT`/`StubTTS` ishlatiladi (Telegram ovozli xabar qotgan matn qaytadi)."""
+
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    """TTS uchun ovoz ID. Default — Rachel (standart ko'p tilli). Boshqasini
+    tanlash uchun elevenlabs.io → Voice Library'dan olib qo'ying."""
+
     # ── Xavfsizlik ─────────────────────────────────────────────────
     owner_id: str = "owner"
     api_token: SecretStr | None = None

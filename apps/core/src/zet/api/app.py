@@ -37,7 +37,9 @@ from zet.api.deps import (
     get_llm_providers,
     get_notifier,
     get_permission_policy,
+    get_stt,
     get_tool_registry,
+    get_tts,
 )
 from zet.api.middleware import TraceMiddleware
 from zet.api.routes import (
@@ -136,6 +138,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if hasattr(notifier, "aclose"):
         await notifier.aclose()
     await get_embedding_provider().aclose()
+    for closable in (get_stt(), get_tts()):
+        if hasattr(closable, "aclose"):
+            await closable.aclose()
     await get_engine().dispose()
 
 

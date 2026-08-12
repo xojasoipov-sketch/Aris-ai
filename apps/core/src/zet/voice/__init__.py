@@ -9,10 +9,13 @@ Bog'liq qarorlar:
     ADR-0007 — lokal birinchi (STT/TTS lokal)
 """
 
+from zet.voice.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from zet.voice.stt import STTProvider, STTResult, StubSTT
 from zet.voice.tts import StubTTS, TTSProvider, TTSResult
 
 __all__ = [
+    "ElevenLabsSTT",
+    "ElevenLabsTTS",
     "STTProvider",
     "STTResult",
     "StubSTT",

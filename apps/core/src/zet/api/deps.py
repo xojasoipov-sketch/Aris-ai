@@ -37,6 +37,9 @@ from zet.security.permissions import PermissionPolicy
 from zet.telegram.notifier import Notifier, StubNotifier
 from zet.tools.builtin import build_default_registry
 from zet.tools.registry import ToolRegistry
+from zet.voice.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
+from zet.voice.stt import STTProvider, StubSTT
+from zet.voice.tts import StubTTS, TTSProvider
 
 if TYPE_CHECKING:
     from zet.memory.store import MemoryStore
@@ -354,13 +357,43 @@ def get_orchestrator(
 
 
 @lru_cache(maxsize=1)
+def get_stt() -> STTProvider:
+    """Global STT provayder (singleton).
+
+    ElevenLabs API kaliti bo'lsa — Scribe orqali haqiqiy transkripsiya
+    (o'zbek 99+ til ichida). Bo'lmasa — `StubSTT` (Telegram ovozli xabar
+    qotgan matn qaytadi, ilgari default xatti-harakat).
+    """
+    settings = get_settings()
+    if settings.elevenlabs_api_key is not None:
+        return ElevenLabsSTT(api_key=settings.elevenlabs_api_key.get_secret_value())
+    return StubSTT()
+
+
+@lru_cache(maxsize=1)
+def get_tts() -> TTSProvider:
+    """Global TTS provayder (singleton).
+
+    ElevenLabs API kaliti bo'lsa — Multilingual v2 orqali haqiqiy audio
+    (o'zbek matnini yaxshi o'qiydi, `language_code`siz). Bo'lmasa — `StubTTS`.
+    """
+    settings = get_settings()
+    if settings.elevenlabs_api_key is not None:
+        return ElevenLabsTTS(
+            api_key=settings.elevenlabs_api_key.get_secret_value(),
+            voice_id=settings.elevenlabs_voice_id,
+        )
+    return StubTTS()
+
+
+@lru_cache(maxsize=1)
 def get_telegram_bot() -> object:
     """Global Telegram bot (singleton).
 
     ZetBot qaytaradi — turini `object` qilish tsiklik importdan saqlanish uchun.
+    STT `get_stt()` orqali ulanadi (ElevenLabs Scribe yoki StubSTT).
     """
     from zet.telegram.bot import ZetBot
-    from zet.voice.stt import StubSTT
 
     settings = get_settings()
     token = settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else ""
@@ -368,6 +401,6 @@ def get_telegram_bot() -> object:
     return ZetBot(
         token=token,
         owner_ids=settings.telegram_owner_id_set,
-        stt=StubSTT(),
+        stt=get_stt(),
         notifier=get_notifier(),
     )
