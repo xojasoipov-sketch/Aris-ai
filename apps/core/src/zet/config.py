@@ -18,7 +18,34 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+def _find_repo_root() -> Path:
+    """Loyiha ildizini topadi — papka chuqurligiga bog'liq bo'lmagan holda.
+
+    Ilgari `parents[4]` qat'iy yozilgan edi: repo ichida
+    (`apps/core/src/zet/config.py`) to'g'ri ishlardi, lekin Docker
+    konteynerida (`/app/src/zet/config.py`) yo'l qisqaroq bo'lib
+    `IndexError` bilan yiqilardi.
+
+    Marker fayl (`pyproject.toml` yoki `.git`) bo'yicha yuqoriga
+    ko'tariladi; topilmasa — paket ota-papkasiga qaytadi. `data_dir`/
+    `vault_dir` odatda `ZET_*` env orqali beriladi, shuning uchun bu
+    faqat lokal dev uchun oqilona default.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
+            # apps/core/pyproject.toml topilsa — monorepo ildizi bir pog'ona
+            # yuqorida bo'lishi mumkin; .git bor joyni afzal ko'ramiz.
+            if (parent / ".git").exists():
+                return parent
+            for outer in parent.parents:
+                if (outer / ".git").exists():
+                    return outer
+            return parent
+    return here.parents[min(2, len(here.parents) - 1)]
+
+
+_REPO_ROOT = _find_repo_root()
 
 
 class Env(StrEnum):
