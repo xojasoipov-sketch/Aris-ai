@@ -32,12 +32,14 @@ from zet.agents.runtime import AgentRuntime
 from zet.api.deps import (
     get_agent_registry,
     get_agent_repository,
+    get_model_router,
     get_permission_policy,
     get_tool_registry,
 )
 from zet.domain.agent import AgentState
 from zet.domain.enums import AgentStatus, ModelTier, PermissionLevel, TrustLevel
-from zet.llm.fake import FakeProvider
+from zet.llm.routed_provider import RoutedLLMProvider, task_class_for_tier
+from zet.llm.router import ModelRouter
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
@@ -367,12 +369,14 @@ async def run_agent(
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     permission_policy: PermissionPolicy = Depends(get_permission_policy),
     repo: AgentRepository = Depends(get_agent_repository),
+    router: ModelRouter = Depends(get_model_router),
 ) -> AgentRunResponse:
     """Agentni ishga tushirish.
 
-    Faqat ACTIVE agentlar ishga tushirilishi mumkin (V-11).
-    LLM hali FakeProvider bilan — real ModelRouter integratsiyasi
-    (agent.model_policy → tier tanlash) keyingi bosqichda.
+    Faqat ACTIVE agentlar ishga tushirilishi mumkin (V-11). LLM real
+    `ModelRouter` orqali — `agent.model_policy` (tier) `TaskClass`ga
+    o'giriladi, real kalit bo'lmasa `ModelRouter` avtomatik keyingi
+    nomzodga o'tadi (ADR-0006).
     """
     try:
         state = registry.get_active(name)
@@ -381,11 +385,12 @@ async def run_agent(
     except AgentNotActiveError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    provider = FakeProvider()
+    provider = RoutedLLMProvider(router)
     runtime = AgentRuntime(
         provider=provider,
         tool_registry=tool_registry,
         permission_policy=permission_policy,
+        model=task_class_for_tier(state.spec.model_policy).value,
     )
 
     result = await runtime.run(state.spec, request.task)

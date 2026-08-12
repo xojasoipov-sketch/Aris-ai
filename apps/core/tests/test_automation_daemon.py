@@ -36,7 +36,7 @@ def agent_registry() -> AgentRegistry:
 
 
 @pytest.fixture()
-def engine() -> AutomationEngine:
+def automation_engine() -> AutomationEngine:
     e = AutomationEngine()
     e.add_schedule(
         ScheduleRule(
@@ -51,10 +51,10 @@ def engine() -> AutomationEngine:
 
 @pytest.fixture()
 def daemon(
-    engine: AutomationEngine, agent_registry: AgentRegistry, tmp_path: Path
+    automation_engine: AutomationEngine, agent_registry: AgentRegistry, tmp_path: Path
 ) -> AutomationDaemon:
     return AutomationDaemon(
-        engine=engine,
+        engine=automation_engine,
         agent_registry=agent_registry,
         tool_registry=build_default_registry(notes_dir=tmp_path),
         permission_policy=PermissionPolicy(),
@@ -66,12 +66,12 @@ def daemon(
 
 class TestTick:
     async def test_fires_at_matching_time(
-        self, daemon: AutomationDaemon, engine: AutomationEngine
+        self, daemon: AutomationDaemon, automation_engine: AutomationEngine
     ) -> None:
         fired = await daemon.tick(now=_at(9, 0))
         assert len(fired) == 1
 
-        rule = engine.scheduler.list_rules()[0]
+        rule = automation_engine.scheduler.list_rules()[0]
         assert rule.run_count == 1
         assert rule.last_run_at is not None
 
@@ -92,12 +92,12 @@ class TestTick:
         assert len(fired) == 1
 
     async def test_skipped_while_sleeping(
-        self, engine: AutomationEngine, agent_registry: AgentRegistry, tmp_path: Path
+        self, automation_engine: AutomationEngine, agent_registry: AgentRegistry, tmp_path: Path
     ) -> None:
         state = CoreState()
         state.sleep(reason="Test")
         d = AutomationDaemon(
-            engine=engine,
+            engine=automation_engine,
             agent_registry=agent_registry,
             tool_registry=build_default_registry(notes_dir=tmp_path),
             permission_policy=PermissionPolicy(),
@@ -109,12 +109,12 @@ class TestTick:
         assert fired == []
 
     async def test_skipped_while_killswitch_engaged(
-        self, engine: AutomationEngine, agent_registry: AgentRegistry, tmp_path: Path
+        self, automation_engine: AutomationEngine, agent_registry: AgentRegistry, tmp_path: Path
     ) -> None:
         ks = KillSwitchState()
         ks.engage(reason="Test")
         d = AutomationDaemon(
-            engine=engine,
+            engine=automation_engine,
             agent_registry=agent_registry,
             tool_registry=build_default_registry(notes_dir=tmp_path),
             permission_policy=PermissionPolicy(),
@@ -173,3 +173,55 @@ class TestStop:
         daemon.stop()
         await asyncio.wait_for(task, timeout=5)
         assert task.done()
+
+
+class TestRealProviderWiring:
+    """`session_factory`/`llm_providers`/`settings` berilsa — real `ModelRouter`
+    orqali (`RoutedLLMProvider`, `is_autonomous=True`) ishga tushiriladi."""
+
+    async def test_fire_uses_routed_provider(
+        self,
+        agent_registry: AgentRegistry,
+        tmp_path: Path,
+        session_factory,
+    ) -> None:
+        from zet.config import Settings
+        from zet.domain.enums import ModelTier
+        from zet.llm.fake import FakeProvider
+
+        fake_google = FakeProvider(name="google", tier=ModelTier.T1_FREE)
+        engine = AutomationEngine()
+        engine.add_schedule(
+            ScheduleRule(
+                name="Kunlik hisobot",
+                agent_name="ceo",
+                cron_expr="0 9 * * *",
+                command="Hisobot tayyorla",
+            )
+        )
+        d = AutomationDaemon(
+            engine=engine,
+            agent_registry=agent_registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            core_state=CoreState(),
+            killswitch=KillSwitchState(),
+            timezone="UTC",
+            session_factory=session_factory,
+            llm_providers={"google": fake_google},
+            settings=Settings(_env_file=None),
+        )
+
+        fired = await d.tick(now=_at(9, 0))
+
+        assert len(fired) == 1
+        assert fake_google.calls  # haqiqatan chaqirilgan
+        assert engine.scheduler.list_rules()[0].run_count == 1
+
+    async def test_without_llm_config_falls_back_to_fake(
+        self, daemon: AutomationDaemon, automation_engine: AutomationEngine
+    ) -> None:
+        """`session_factory`/`llm_providers` berilmasa — avvalgi FakeProvider yo'li."""
+        fired = await daemon.tick(now=_at(9, 0))
+        assert len(fired) == 1
+        assert automation_engine.scheduler.list_rules()[0].run_count == 1

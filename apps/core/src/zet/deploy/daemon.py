@@ -12,14 +12,16 @@ Xavfsizlik:
     - Bir kunda bir slot faqat bir marta ishga tushadi (xotirada — restart'da
       qayta tiklanadi, produksiyada DB-backed `last_fired`ga almashtiriladi)
 
-LLM: hozircha `FakeProvider` bilan (Bo'lim 3 lean naqshi — real ModelRouter
-integratsiyasi AgentRuntime uchun alohida vazifa, `AgentSpec.model_policy`
-ni `ModelRouter`ga bog'lash kerak).
+LLM: `session_factory`/`llm_providers`/`settings` berilsa — har bir fire
+uchun yangi DB sessiya bilan real `ModelRouter` quriladi (`RoutedLLMProvider`
+orqali, `is_autonomous=True` — ADR-0006 §4 avtonom budjet ulushi). Berilmasa
+(default, testlar) — avvalgidek `FakeProvider()` (orqaga mos).
 
 Bog'liq qarorlar:
     V-35 — kunlik avtonom jadval
     Bo'lim 9 — Automation Engine
     Bo'lim 12 — Production + Scale
+    ADR-0006 — 4 darajali Model Router
 """
 
 from __future__ import annotations
@@ -30,12 +32,18 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from zet.agents.registry import AgentNotActiveError, AgentNotFoundError, AgentRegistry
 from zet.agents.runtime import AgentRuntime
+from zet.config import Settings
 from zet.core.state import CoreState
+from zet.db.session import session_scope
 from zet.deploy.schedule import DailyScheduleManager, DailyTask
+from zet.llm.base import LLMProvider
 from zet.llm.fake import FakeProvider
+from zet.llm.routed_provider import RoutedLLMProvider, task_class_for_tier
+from zet.llm.router import ModelRouter
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
@@ -65,6 +73,9 @@ class DailyScheduleDaemon:
         killswitch: KillSwitchState,
         timezone: str = "Asia/Tashkent",
         tick_seconds: int = DEFAULT_TICK_SECONDS,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+        llm_providers: dict[str, LLMProvider] | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._schedule = schedule
         self._agent_registry = agent_registry
@@ -74,6 +85,9 @@ class DailyScheduleDaemon:
         self._killswitch = killswitch
         self._tz = ZoneInfo(timezone)
         self._tick_seconds = tick_seconds
+        self._session_factory = session_factory
+        self._llm_providers = llm_providers
+        self._settings = settings
         self._last_fired: dict[str, date] = {}
         self._stop_event = asyncio.Event()
 
@@ -133,12 +147,29 @@ class DailyScheduleDaemon:
             log.warning("daemon.agent_unavailable", agent=task.agent_name, error=str(exc))
             return
 
-        runtime = AgentRuntime(
-            provider=FakeProvider(),
-            tool_registry=self._tool_registry,
-            permission_policy=self._permission_policy,
-        )
-        result = await runtime.run(state.spec, task.command)
+        if (
+            self._session_factory is not None
+            and self._llm_providers is not None
+            and self._settings is not None
+        ):
+            async with session_scope(self._session_factory) as session:
+                router = ModelRouter(self._llm_providers, session, self._settings)
+                provider: LLMProvider = RoutedLLMProvider(router, is_autonomous=True)
+                model = task_class_for_tier(state.spec.model_policy).value
+                result = await AgentRuntime(
+                    provider=provider,
+                    tool_registry=self._tool_registry,
+                    permission_policy=self._permission_policy,
+                    model=model,
+                ).run(state.spec, task.command)
+        else:
+            runtime = AgentRuntime(
+                provider=FakeProvider(),
+                tool_registry=self._tool_registry,
+                permission_policy=self._permission_policy,
+            )
+            result = await runtime.run(state.spec, task.command)
+
         self._agent_registry.record_run(
             task.agent_name,
             success=result.success,

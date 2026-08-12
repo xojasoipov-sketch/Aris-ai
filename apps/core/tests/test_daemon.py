@@ -177,3 +177,56 @@ class TestRunForever:
         daemon.stop()
         await asyncio.wait_for(task, timeout=5)
         assert task.done()
+
+
+class TestRealProviderWiring:
+    """`session_factory`/`llm_providers`/`settings` berilsa — real `ModelRouter`
+    orqali (`RoutedLLMProvider`, `is_autonomous=True`) ishga tushiriladi."""
+
+    async def test_fire_uses_routed_provider(
+        self,
+        agent_registry: AgentRegistry,
+        tmp_path: Path,
+        session_factory,
+    ) -> None:
+        from zet.config import Settings
+        from zet.domain.enums import ModelTier
+        from zet.llm.fake import FakeProvider
+
+        fake_google = FakeProvider(name="google", tier=ModelTier.T1_FREE)
+        schedule = DailyScheduleManager(
+            tasks=[
+                DailyTask(
+                    slot=ScheduleSlot.MORNING_BRIEF,
+                    agent_name="ceo",
+                    command="Brifing tayyorla",
+                    cron_expr="0 8 * * *",
+                ),
+            ]
+        )
+        daemon = DailyScheduleDaemon(
+            schedule=schedule,
+            agent_registry=agent_registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            core_state=CoreState(),
+            killswitch=KillSwitchState(),
+            timezone="UTC",
+            session_factory=session_factory,
+            llm_providers={"google": fake_google},
+            settings=Settings(_env_file=None),
+        )
+
+        fired = await daemon.tick(now=_at(8, 0))
+
+        assert fired == ["08:00"]
+        assert fake_google.calls  # haqiqatan chaqirilgan
+        assert agent_registry.get("ceo").total_runs == 1
+
+    async def test_without_llm_config_falls_back_to_fake(
+        self, daemon: DailyScheduleDaemon, agent_registry: AgentRegistry
+    ) -> None:
+        """`session_factory`/`llm_providers` berilmasa — avvalgi FakeProvider yo'li."""
+        fired = await daemon.tick(now=_at(8, 0))
+        assert fired == ["08:00"]
+        assert agent_registry.get("ceo").total_runs == 1

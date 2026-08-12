@@ -182,3 +182,65 @@ class TestWorkflowExecutor:
     async def test_unknown_workflow_raises(self, executor: WorkflowExecutor) -> None:
         with pytest.raises(ValueError, match="topilmadi"):
             await executor.run_to_completion("no-such-id")
+
+
+class TestRealProviderWiring:
+    """`provider` berilsa — `FakeProvider()` o'rniga real (yoki har qanday
+    berilgan) LLMProvider ishlatiladi, model esa agent.model_policy'dan
+    hisoblanadi (`task_class_for_tier`)."""
+
+    async def test_run_agent_command_uses_given_provider(
+        self, agent_registry: AgentRegistry, tool_registry: ToolRegistry
+    ) -> None:
+        from zet.llm.fake import FakeProvider
+
+        custom_provider = FakeProvider(name="custom")
+        result = await run_agent_command(
+            "worker",
+            "Vazifa",
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            permission_policy=PermissionPolicy(),
+            provider=custom_provider,
+        )
+        assert result.agent_name == "worker"
+        assert custom_provider.calls  # haqiqatan chaqirilgan
+        # model_policy default T1_FREE -> TaskClass.NORMAL
+        assert custom_provider.calls[0]["model"] == "normal"
+
+    async def test_run_agent_command_default_provider_uses_fake_model(
+        self, agent_registry: AgentRegistry, tool_registry: ToolRegistry
+    ) -> None:
+        """`provider` berilmasa — eski xatti-harakat: model='fake'."""
+        result = await run_agent_command(
+            "worker",
+            "Vazifa",
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            permission_policy=PermissionPolicy(),
+        )
+        assert result.success is True
+
+    async def test_workflow_executor_passes_provider_through(
+        self,
+        agent_registry: AgentRegistry,
+        tool_registry: ToolRegistry,
+    ) -> None:
+        from zet.llm.fake import FakeProvider
+
+        custom_provider = FakeProvider(name="custom")
+        workflows = WorkflowRunner()
+        executor = WorkflowExecutor(
+            workflows=workflows,
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            permission_policy=PermissionPolicy(),
+            provider=custom_provider,
+        )
+        chain = workflows.create(
+            name="Real provider",
+            steps=[WorkflowStep(agent_name="worker", command_template="Ishla")],
+        )
+        result = await executor.run_to_completion(chain.id)
+        assert result.status == WorkflowStatus.COMPLETED
+        assert custom_provider.calls

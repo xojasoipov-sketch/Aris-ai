@@ -14,19 +14,27 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from zet.agents.registry import AgentRegistry
 from zet.api.app import create_app
-from zet.api.deps import get_agent_registry, get_automation_engine, get_tool_registry
+from zet.api.deps import (
+    get_agent_registry,
+    get_automation_engine,
+    get_db_session,
+    get_llm_providers,
+    get_tool_registry,
+)
 from zet.automation.engine import AutomationEngine
 from zet.domain.agent import AgentSpec
-from zet.domain.enums import AgentStatus
+from zet.domain.enums import AgentStatus, ModelTier
+from zet.llm.fake import FakeProvider
 from zet.tools.builtin import build_default_registry
 from zet.tools.registry import ToolRegistry
 
 
 @pytest.fixture()
-def engine() -> AutomationEngine:
+def automation_engine() -> AutomationEngine:
     return AutomationEngine()
 
 
@@ -47,12 +55,26 @@ def tool_registry(tmp_path: Path) -> ToolRegistry:
 
 @pytest.fixture()
 def client(
-    engine: AutomationEngine, agent_registry: AgentRegistry, tool_registry: ToolRegistry
+    automation_engine: AutomationEngine,
+    agent_registry: AgentRegistry,
+    tool_registry: ToolRegistry,
+    session: AsyncSession,
 ) -> TestClient:
+    """`get_db_session`/`get_llm_providers` ham almashtiriladi — workflow/event
+    endpointlari endi real `ModelRouter` orqali ishlaydi (haqiqiy tarmoqqa
+    chiqmaydigan `FakeProvider`, katalogdagi "google" nomi ostida)."""
     app = create_app()
-    app.dependency_overrides[get_automation_engine] = lambda: engine
+
+    async def _session_override():
+        yield session
+
+    app.dependency_overrides[get_automation_engine] = lambda: automation_engine
     app.dependency_overrides[get_agent_registry] = lambda: agent_registry
     app.dependency_overrides[get_tool_registry] = lambda: tool_registry
+    app.dependency_overrides[get_db_session] = _session_override
+    app.dependency_overrides[get_llm_providers] = lambda: {
+        "google": FakeProvider(name="google", tier=ModelTier.T1_FREE)
+    }
     return TestClient(app, raise_server_exceptions=False)
 
 

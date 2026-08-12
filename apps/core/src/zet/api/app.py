@@ -98,6 +98,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         core_state=get_core_state(),
         killswitch=get_killswitch(),
         timezone=settings.timezone,
+        session_factory=get_session_factory(),
+        llm_providers=get_llm_providers(),
+        settings=settings,
     )
     daemon_task = asyncio.create_task(daemon.run_forever())
 
@@ -109,6 +112,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         core_state=get_core_state(),
         killswitch=get_killswitch(),
         timezone=settings.timezone,
+        session_factory=get_session_factory(),
+        llm_providers=get_llm_providers(),
+        settings=settings,
     )
     automation_daemon_task = asyncio.create_task(automation_daemon.run_forever())
 

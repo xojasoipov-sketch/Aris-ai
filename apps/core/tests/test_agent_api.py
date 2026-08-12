@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from zet.agents.registry import AgentRegistry
 from zet.api.app import create_app
-from zet.api.deps import get_agent_registry, get_db_session, get_killswitch
+from zet.api.deps import get_agent_registry, get_db_session, get_killswitch, get_llm_providers
+from zet.domain.enums import ModelTier
+from zet.llm.fake import FakeProvider
 from zet.security.killswitch import KillSwitchState
 
 
@@ -243,6 +245,30 @@ class TestAgentStatus:
 
 
 class TestAgentRun:
+    """`run_agent` endi real `ModelRouter` orqali ishlaydi (RoutedLLMProvider).
+
+    Shuning uchun bu klassning `client` fixture'i `get_db_session`ni
+    (real in-memory sqlite `session` bilan) va `get_llm_providers`ni
+    (haqiqiy tarmoqqa chiqmaydigan `FakeProvider` bilan, katalogdagi
+    "google" nomi ostida — TaskClass.NORMAL'ning birinchi nomzodi)
+    almashtiradi.
+    """
+
+    @pytest.fixture()
+    def client(self, registry: AgentRegistry, session: AsyncSession) -> TestClient:
+        app = create_app()
+
+        async def _session_override():
+            yield session
+
+        app.dependency_overrides[get_agent_registry] = lambda: registry
+        app.dependency_overrides[get_killswitch] = KillSwitchState
+        app.dependency_overrides[get_db_session] = _session_override
+        app.dependency_overrides[get_llm_providers] = lambda: {
+            "google": FakeProvider(name="google", tier=ModelTier.T1_FREE)
+        }
+        return TestClient(app, raise_server_exceptions=False)
+
     def _create_active_agent(self, client: TestClient) -> None:
         """ACTIVE agent yaratish yordamchisi."""
         client.post("/api/v1/agents", json=_agent_payload())

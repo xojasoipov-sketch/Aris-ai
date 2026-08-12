@@ -33,7 +33,9 @@ from zet.agents.registry import AgentNotActiveError, AgentNotFoundError, AgentRe
 from zet.agents.runtime import AgentRuntime
 from zet.automation.workflow import WorkflowChain, WorkflowRunner, WorkflowStatus
 from zet.domain.agent import AgentRunResult
+from zet.llm.base import LLMProvider
 from zet.llm.fake import FakeProvider
+from zet.llm.routed_provider import task_class_for_tier
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
@@ -52,11 +54,14 @@ async def run_agent_command(
     tool_registry: ToolRegistry,
     permission_policy: PermissionPolicy,
     timeout_s: int | None = None,
+    provider: LLMProvider | None = None,
 ) -> AgentRunResult:
     """Bitta agent buyrug'ini haqiqiy `AgentRuntime` orqali bajarish va metrikani yozish.
 
-    LLM hali `FakeProvider` bilan (agent API/daemon'dagi bilan bir xil
-    lean naqsh — real `ModelRouter` integratsiyasi alohida vazifa).
+    `provider` berilmasa — `FakeProvider()` (default, testlar va eski
+    chaqiruvchilar uchun o'zgarmagan xatti-harakat). Real LLM uchun
+    chaqiruvchi `RoutedLLMProvider(router)` uzatishi kerak — `model`
+    parametri `agent.model_policy` asosida avtomatik hisoblanadi.
 
     Raises:
         AgentUnavailableError: agent mavjud emas yoki ACTIVE emas.
@@ -68,9 +73,10 @@ async def run_agent_command(
         raise AgentUnavailableError(str(exc)) from exc
 
     runtime = AgentRuntime(
-        provider=FakeProvider(),
+        provider=provider or FakeProvider(),
         tool_registry=tool_registry,
         permission_policy=permission_policy,
+        model=task_class_for_tier(state.spec.model_policy).value if provider else "fake",
     )
     coro = runtime.run(state.spec, command)
     result = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
@@ -96,11 +102,13 @@ class WorkflowExecutor:
         agent_registry: AgentRegistry,
         tool_registry: ToolRegistry,
         permission_policy: PermissionPolicy,
+        provider: LLMProvider | None = None,
     ) -> None:
         self._workflows = workflows
         self._agent_registry = agent_registry
         self._tool_registry = tool_registry
         self._permission_policy = permission_policy
+        self._provider = provider
 
     async def run_to_completion(self, workflow_id: str) -> WorkflowChain:
         """Workflow'ni oxirigacha bajaradi — COMPLETED yoki FAILED holatida qaytaradi.
@@ -151,6 +159,7 @@ class WorkflowExecutor:
                     tool_registry=self._tool_registry,
                     permission_policy=self._permission_policy,
                     timeout_s=step.timeout_s,
+                    provider=self._provider,
                 )
             except AgentUnavailableError as exc:
                 updated = self._workflows.fail_step(workflow_id, index, error=str(exc))

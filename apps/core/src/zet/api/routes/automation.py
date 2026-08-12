@@ -40,6 +40,7 @@ from zet.agents.registry import AgentRegistry
 from zet.api.deps import (
     get_agent_registry,
     get_automation_engine,
+    get_model_router,
     get_permission_policy,
     get_tool_registry,
     get_workflow_executor,
@@ -49,6 +50,8 @@ from zet.automation.executor import AgentUnavailableError, WorkflowExecutor, run
 from zet.automation.scheduler import ScheduleRule, ScheduleStatus
 from zet.automation.triggers import EventTrigger, TriggerCondition, TriggerType
 from zet.automation.workflow import WorkflowChain, WorkflowStatus, WorkflowStep
+from zet.llm.routed_provider import RoutedLLMProvider
+from zet.llm.router import ModelRouter
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
@@ -318,11 +321,13 @@ async def submit_event(
     agent_registry: AgentRegistry = Depends(get_agent_registry),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     permission_policy: PermissionPolicy = Depends(get_permission_policy),
+    router: ModelRouter = Depends(get_model_router),
 ) -> AutomationEventResponse:
     """Hodisa yuborish — mos triggerlarni topadi va HAQIQATDA bajaradi.
 
-    Har bir mos trigger uchun agent haqiqiy `AgentRuntime` orqali
-    ishga tushiriladi (sinxron — javobda barcha natijalar bilan).
+    Har bir mos trigger uchun agent haqiqiy `AgentRuntime` orqali (real
+    `ModelRouter` bilan) ishga tushiriladi (sinxron — javobda barcha
+    natijalar bilan).
     """
     event = AutomationEvent(
         event_type=request.event_type,
@@ -330,6 +335,7 @@ async def submit_event(
         data=request.data,
     )
     actions = engine.process_event(event)
+    provider = RoutedLLMProvider(router)
 
     results: list[ActionResultResponse] = []
     for action in actions:
@@ -340,6 +346,7 @@ async def submit_event(
                 agent_registry=agent_registry,
                 tool_registry=tool_registry,
                 permission_policy=permission_policy,
+                provider=provider,
             )
             results.append(
                 ActionResultResponse(

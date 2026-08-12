@@ -25,6 +25,7 @@ from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
+from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
 from zet.memory.embeddings import OllamaEmbeddingProvider
 from zet.memory.pg_store import PgMemoryStore
@@ -149,19 +150,8 @@ def get_automation_engine() -> AutomationEngine:
     return AutomationEngine()
 
 
-def get_workflow_executor(
-    engine: AutomationEngine = Depends(get_automation_engine),
-    agent_registry: AgentRegistry = Depends(get_agent_registry),
-    tool_registry: ToolRegistry = Depends(get_tool_registry),
-    permission_policy: PermissionPolicy = Depends(get_permission_policy),
-) -> WorkflowExecutor:
-    """So'rov chegarasidagi Workflow Executor — workflow zanjirini haqiqatan bajaradi."""
-    return WorkflowExecutor(
-        workflows=engine.workflows,
-        agent_registry=agent_registry,
-        tool_registry=tool_registry,
-        permission_policy=permission_policy,
-    )
+# `get_workflow_executor()` — pastda, `get_model_router()`dan keyin (Depends
+# bog'liqligi sabab: RoutedLLMProvider request-scoped router talab qiladi).
 
 
 # ── Monitoring / Alerts ───────────────────────────────────────────
@@ -315,6 +305,27 @@ def get_model_router(
 ) -> ModelRouter:
     """So'rov chegarasidagi Model Router (DB sessiyasi so'rovga bog'langan)."""
     return ModelRouter(providers, session, settings)
+
+
+def get_workflow_executor(
+    engine: AutomationEngine = Depends(get_automation_engine),
+    agent_registry: AgentRegistry = Depends(get_agent_registry),
+    tool_registry: ToolRegistry = Depends(get_tool_registry),
+    permission_policy: PermissionPolicy = Depends(get_permission_policy),
+    router: ModelRouter = Depends(get_model_router),
+) -> WorkflowExecutor:
+    """So'rov chegarasidagi Workflow Executor — workflow zanjirini haqiqiy LLM bilan bajaradi.
+
+    Ilgari `FakeProvider()` qattiq kodlangan edi — endi `RoutedLLMProvider`
+    orqali real `ModelRouter`ga ulanadi (agent.model_policy → TaskClass).
+    """
+    return WorkflowExecutor(
+        workflows=engine.workflows,
+        agent_registry=agent_registry,
+        tool_registry=tool_registry,
+        permission_policy=permission_policy,
+        provider=RoutedLLMProvider(router),
+    )
 
 
 # ── Orchestrator ──────────────────────────────────────────────────

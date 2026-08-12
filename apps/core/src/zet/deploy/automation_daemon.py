@@ -16,9 +16,15 @@ Xavfsizlik:
     - Muvaffaqiyatsiz bo'lsa `MAX_ATTEMPTS` marta qayta uriniladi (tiklanish, Bo'lim 9 DoD)
     - Bitta qoida bir daqiqada faqat bir marta ishga tushadi (xotirada dedup)
 
+LLM: `session_factory`/`llm_providers`/`settings` berilsa — har bir fire
+uchun yangi DB sessiya bilan real `ModelRouter` quriladi (`RoutedLLMProvider`
+orqali, `is_autonomous=True`). Berilmasa (default, testlar) — `run_agent_command()`
+o'zining `FakeProvider()` orqaga moslik yo'liga tushadi.
+
 Bog'liq qarorlar:
     Bo'lim 9 — Automation Engine
     A-07 — run tormozlari
+    ADR-0006 — 4 darajali Model Router
 """
 
 from __future__ import annotations
@@ -29,13 +35,20 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from zet.agents.registry import AgentRegistry
 from zet.automation.cron import is_due
 from zet.automation.engine import AutomationEngine
 from zet.automation.executor import AgentUnavailableError, run_agent_command
 from zet.automation.scheduler import ScheduleRule
+from zet.config import Settings
 from zet.core.state import CoreState
+from zet.db.session import session_scope
+from zet.domain.agent import AgentRunResult
+from zet.llm.base import LLMProvider
+from zet.llm.routed_provider import RoutedLLMProvider
+from zet.llm.router import ModelRouter
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
@@ -68,6 +81,9 @@ class AutomationDaemon:
         killswitch: KillSwitchState,
         timezone: str = "Asia/Tashkent",
         tick_seconds: int = DEFAULT_TICK_SECONDS,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+        llm_providers: dict[str, LLMProvider] | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._engine = engine
         self._agent_registry = agent_registry
@@ -77,6 +93,9 @@ class AutomationDaemon:
         self._killswitch = killswitch
         self._tz = ZoneInfo(timezone)
         self._tick_seconds = tick_seconds
+        self._session_factory = session_factory
+        self._llm_providers = llm_providers
+        self._settings = settings
         self._last_fired_minute: dict[str, str] = {}
         self._stop_event = asyncio.Event()
 
@@ -126,6 +145,31 @@ class AutomationDaemon:
 
         return fired
 
+    async def _run_once(self, rule: ScheduleRule) -> AgentRunResult:
+        """Qoidani bir marta bajaradi — sozlangan bo'lsa yangi DB sessiya bilan real LLM."""
+        if self._session_factory is None:
+            return await run_agent_command(
+                rule.agent_name,
+                rule.command,
+                agent_registry=self._agent_registry,
+                tool_registry=self._tool_registry,
+                permission_policy=self._permission_policy,
+            )
+
+        async with session_scope(self._session_factory) as session:
+            provider: LLMProvider | None = None
+            if self._llm_providers is not None and self._settings is not None:
+                router = ModelRouter(self._llm_providers, session, self._settings)
+                provider = RoutedLLMProvider(router, is_autonomous=True)
+            return await run_agent_command(
+                rule.agent_name,
+                rule.command,
+                agent_registry=self._agent_registry,
+                tool_registry=self._tool_registry,
+                permission_policy=self._permission_policy,
+                provider=provider,
+            )
+
     async def _fire(self, rule: ScheduleRule) -> None:
         """Bitta qoidani bajarish — muvaffaqiyatsiz bo'lsa qayta urinish bilan."""
         log.info("automation_daemon.fire", rule_id=rule.id, agent=rule.agent_name)
@@ -133,13 +177,7 @@ class AutomationDaemon:
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                result = await run_agent_command(
-                    rule.agent_name,
-                    rule.command,
-                    agent_registry=self._agent_registry,
-                    tool_registry=self._tool_registry,
-                    permission_policy=self._permission_policy,
-                )
+                result = await self._run_once(rule)
             except AgentUnavailableError as exc:
                 log.warning("automation_daemon.agent_unavailable", rule_id=rule.id, error=str(exc))
                 return
