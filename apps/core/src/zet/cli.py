@@ -292,14 +292,14 @@ async def _with_memory_store(fn):
     CLI va API bir xil ma'lumotni ko'rishi uchun (ikkalasi ham DB'ga
     yozadi) — `z run`dagi bilan bir xil naqsh.
     """
-    from zet.api.deps import get_or_create_owner, get_session_factory
+    from zet.api.deps import get_embedding_provider, get_or_create_owner, get_session_factory
     from zet.db.session import session_scope
     from zet.memory.pg_store import PgMemoryStore
 
     settings = get_settings()
     async with session_scope(get_session_factory()) as session:
         owner = await get_or_create_owner(session, external_id=settings.owner_id)
-        store = PgMemoryStore(session, owner_id=owner.id)
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
         return await fn(store)
 
 

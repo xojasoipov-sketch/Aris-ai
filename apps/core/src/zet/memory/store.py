@@ -13,7 +13,6 @@ Qoidalar:
 
 from __future__ import annotations
 
-import math
 import uuid
 from datetime import UTC, datetime
 
@@ -26,6 +25,8 @@ from zet.domain.memory import (
     MemoryQuery,
     MemorySearchResult,
 )
+from zet.memory.scoring import cosine_similarity as _cosine_similarity
+from zet.memory.scoring import hybrid_score, keyword_score
 
 log = structlog.get_logger(__name__)
 
@@ -266,36 +267,21 @@ class MemoryStore:
         now = now or datetime.now(tz=UTC)
         return entry.expires_at <= now
 
-    def _compute_similarity(self, query_text: str, entry: MemoryEntry) -> float:
-        """O'xshashlik hisoblash.
+    def _compute_similarity(
+        self, query_text: str, entry: MemoryEntry, *, query_embedding: list[float] | None = None
+    ) -> float:
+        """O'xshashlik hisoblash — kalit-so'z, `query_embedding` berilsa vektor bilan ham.
 
-        Oddiy strategiya:
-        1. Matn substring match → 0.8
-        2. Tag match → 0.7
-        3. Embedding cosine similarity (agar mavjud bo'lsa)
-        4. Aks holda → 0.0
+        Bu do'kon sinxron (test/prototiplash uchun) — haqiqiy embedding
+        hisoblash (Ollama, tarmoq) `PgMemoryStore`da bo'ladi. Chaqiruvchi
+        oldindan hisoblangan `query_embedding`ni uzatsa, mavjud
+        `entry.embedding` bilan solishtiriladi (hybrid).
         """
-        score = 0.0
-
-        # Substring match (case-insensitive)
-        query_lower = query_text.lower()
-        content_lower = entry.content.lower()
-        summary_lower = (entry.summary or "").lower()
-
-        if query_lower in content_lower:
-            score = max(score, 0.8)
-        elif query_lower in summary_lower:
-            score = max(score, 0.75)
-
-        # So'zlar bo'yicha partial match
-        query_words = set(query_lower.split())
-        content_words = set(content_lower.split())
-        if query_words and content_words:
-            overlap = len(query_words & content_words)
-            word_score = overlap / max(len(query_words), 1) * 0.7
-            score = max(score, word_score)
-
-        return score
+        kw_score = keyword_score(query_text, entry.content, entry.summary)
+        vector_score: float | None = None
+        if query_embedding is not None and entry.embedding is not None:
+            vector_score = _cosine_similarity(query_embedding, entry.embedding)
+        return hybrid_score(keyword=kw_score, vector=vector_score)
 
     @staticmethod
     def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -303,14 +289,4 @@ class MemoryStore:
 
         Bo'sh yoki uzunligi farqli vektorlar uchun 0.0 qaytaradi.
         """
-        if not a or not b or len(a) != len(b):
-            return 0.0
-
-        dot = sum(x * y for x, y in zip(a, b, strict=True))
-        norm_a = math.sqrt(sum(x * x for x in a))
-        norm_b = math.sqrt(sum(x * x for x in b))
-
-        if norm_a == 0.0 or norm_b == 0.0:
-            return 0.0
-
-        return dot / (norm_a * norm_b)
+        return _cosine_similarity(a, b)

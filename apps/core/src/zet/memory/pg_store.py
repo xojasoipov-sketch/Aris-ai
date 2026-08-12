@@ -34,6 +34,8 @@ from zet.domain.memory import (
     MemoryQuery,
     MemorySearchResult,
 )
+from zet.memory.embeddings import EmbeddingProvider
+from zet.memory.scoring import cosine_similarity, hybrid_score, keyword_score
 
 log = structlog.get_logger(__name__)
 
@@ -74,9 +76,16 @@ class PgMemoryStore:
     vazifasi.
     """
 
-    def __init__(self, session: AsyncSession, *, owner_id: uuid.UUID) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        owner_id: uuid.UUID,
+        embedder: EmbeddingProvider | None = None,
+    ) -> None:
         self._session = session
         self._owner_id = owner_id
+        self._embedder = embedder
 
     async def add(
         self,
@@ -90,10 +99,18 @@ class PgMemoryStore:
         trust_level: str = "owner",
         now: datetime | None = None,
     ) -> MemoryEntry:
-        """Yangi xotira yozuvi qo'shish. TTL avtomatik hisoblanadi."""
+        """Yangi xotira yozuvi qo'shish. TTL avtomatik hisoblanadi.
+
+        `embedding` berilmasa va `embedder` sozlangan bo'lsa — vektor
+        avtomatik hisoblanadi (fail-open: Ollama ulanmagan bo'lsa ham
+        yozuv oddiy saqlanadi, faqat embedding'siz).
+        """
         now = now or datetime.now(tz=UTC)
         ttl = LAYER_TTL.get(layer)
         expires_at = now + timedelta(seconds=ttl) if ttl is not None else None
+
+        if embedding is None and self._embedder is not None:
+            embedding = await self._embedder.embed(content)
 
         row = MemoryEntryRow(
             owner_id=self._owner_id,
@@ -128,13 +145,19 @@ class PgMemoryStore:
         tags: list[str] | None = None,
         embedding: list[float] | None = None,
     ) -> MemoryEntry | None:
-        """Yozuvni yangilash (versiya oshadi)."""
+        """Yozuvni yangilash (versiya oshadi).
+
+        `content` o'zgarsa va `embedding` aniq berilmasa — `embedder`
+        sozlangan bo'lsa vektor yangi matn uchun qayta hisoblanadi.
+        """
         row = await self._get_row(entry_id)
         if row is None:
             return None
 
         if content is not None:
             row.content = content
+            if embedding is None and self._embedder is not None:
+                embedding = await self._embedder.embed(content)
         if summary is not None:
             row.summary = summary
         if tags is not None:
@@ -166,7 +189,12 @@ class PgMemoryStore:
         *,
         now: datetime | None = None,
     ) -> list[MemorySearchResult]:
-        """Xotiradan qidirish — substring/so'z-overlap o'xshashligi bilan."""
+        """Xotiradan qidirish — kalit-so'z + vektor (hybrid, `embedder` sozlangan bo'lsa).
+
+        `embedder` yo'q yoki so'rov vektorini hisoblab bo'lmasa (Ollama
+        ulanmagan) — faqat kalit-so'z balliga tushadi (fail-open, avvalgi
+        xatti-harakat bilan bir xil).
+        """
         now = now or datetime.now(tz=UTC)
         stmt = select(MemoryEntryRow).where(
             MemoryEntryRow.owner_id == self._owner_id,
@@ -178,13 +206,25 @@ class PgMemoryStore:
         result = await self._session.execute(stmt)
         rows = result.scalars().all()
 
+        query_embedding: list[float] | None = None
+        if self._embedder is not None:
+            query_embedding = await self._embedder.embed(query.text)
+
         candidates: list[tuple[MemoryEntryRow, float]] = []
         for row in rows:
             if not query.include_expired and row.expires_at is not None and row.expires_at <= now:
                 continue
             if query.tags and not any(t in (row.tags or []) for t in query.tags):
                 continue
-            similarity = _compute_similarity(query.text, row)
+
+            kw_score = keyword_score(query.text, row.content, row.summary)
+            vector_score: float | None = None
+            if query_embedding is not None and row.embedding is not None:
+                row_vector = row.embedding.get("v")
+                if row_vector:
+                    vector_score = cosine_similarity(query_embedding, row_vector)
+
+            similarity = hybrid_score(keyword=kw_score, vector=vector_score)
             if similarity >= query.min_similarity:
                 candidates.append((row, round(similarity, 4)))
 
@@ -257,28 +297,6 @@ class PgMemoryStore:
         if row.expires_at is not None and row.expires_at <= datetime.now(tz=UTC):
             return None
         return row
-
-
-def _compute_similarity(query_text: str, row: MemoryEntryRow) -> float:
-    """`MemoryStore._compute_similarity` bilan bir xil oddiy strategiya."""
-    score = 0.0
-    query_lower = query_text.lower()
-    content_lower = row.content.lower()
-    summary_lower = (row.summary or "").lower()
-
-    if query_lower in content_lower:
-        score = max(score, 0.8)
-    elif query_lower in summary_lower:
-        score = max(score, 0.75)
-
-    query_words = set(query_lower.split())
-    content_words = set(content_lower.split())
-    if query_words and content_words:
-        overlap = len(query_words & content_words)
-        word_score = overlap / max(len(query_words), 1) * 0.7
-        score = max(score, word_score)
-
-    return score
 
 
 __all__ = ["PgMemoryStore"]

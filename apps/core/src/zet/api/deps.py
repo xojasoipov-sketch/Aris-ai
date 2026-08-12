@@ -26,6 +26,7 @@ from zet.deploy.schedule import DailyScheduleManager
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.router import ModelRouter
+from zet.memory.embeddings import OllamaEmbeddingProvider
 from zet.memory.pg_store import PgMemoryStore
 from zet.monitoring.alerts import AlertManager
 from zet.monitoring.notify_bridge import AlertNotificationBridge
@@ -225,23 +226,42 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
 # ── Xotira ────────────────────────────────────────────────────────
 
 
+@lru_cache(maxsize=1)
+def get_embedding_provider() -> OllamaEmbeddingProvider:
+    """Global embedding provayder (singleton) — mahalliy Ollama, tashqi kalit shart emas.
+
+    Ilgari `memory_entries.embedding` ustuni hech qachon to'ldirilmasdi —
+    qidiruv faqat kalit-so'z edi (gap-analysis). Ollama ulanmagan bo'lsa
+    ham xato ko'tarilmaydi — `embed()` shunchaki `None` qaytaradi va
+    qidiruv/yozish kalit-so'z rejimida davom etadi (fail-open, ADR-0007).
+    """
+    settings = get_settings()
+    return OllamaEmbeddingProvider(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_embed_model,
+    )
+
+
 async def get_memory_store(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_config),
+    embedder: OllamaEmbeddingProvider = Depends(get_embedding_provider),
 ) -> PgMemoryStore:
     """So'rov chegarasidagi DB-backed xotira do'koni.
 
     Ilgari bu funksiya doim in-memory `MemoryStore()` qaytarardi —
     ma'lumotlar restart'da yo'qolardi (gap-analysis #5). Endi har bir
     so'rov `PgMemoryStore` orqali haqiqiy jadvalga yozadi/o'qiydi;
-    ma'lumotlar restart'dan keyin ham saqlanadi.
+    ma'lumotlar restart'dan keyin ham saqlanadi. `embedder` orqali
+    semantik (vektor) qidiruv ham qo'shiladi — Ollama ulanmagan bo'lsa
+    kalit-so'z rejimiga tushadi.
 
     Testlarda `app.dependency_overrides[get_memory_store]` orqali
     sinxron `MemoryStore()` bilan almashtirilishi mumkin — routerlar
     ikkalasini ham qo'llab-quvvatlaydi (`_maybe_await`).
     """
     owner = await get_or_create_owner(session, external_id=settings.owner_id)
-    return PgMemoryStore(session, owner_id=owner.id)
+    return PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
 
 
 # ── Agentlar ──────────────────────────────────────────────────────

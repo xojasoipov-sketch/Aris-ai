@@ -22,6 +22,25 @@ def store(session: AsyncSession, owner: Owner) -> PgMemoryStore:
     return PgMemoryStore(session, owner_id=owner.id)
 
 
+class _FakeEmbedder:
+    """Oldindan belgilangan matn->vektor xaritasi; noma'lum matn uchun `None`."""
+
+    def __init__(self, vectors: dict[str, list[float]]) -> None:
+        self._vectors = vectors
+        self.calls: list[str] = []
+
+    async def embed(self, text: str) -> list[float] | None:
+        self.calls.append(text)
+        return self._vectors.get(text)
+
+
+class _AlwaysNoneEmbedder:
+    """Ollama ulanmaganini simulyatsiya qiladi — har doim `None`."""
+
+    async def embed(self, text: str) -> list[float] | None:
+        return None
+
+
 class TestAdd:
     async def test_add_returns_entry(self, store: PgMemoryStore) -> None:
         entry = await store.add(layer=MemoryLayer.KNOWLEDGE, content="Python haqida")
@@ -159,3 +178,108 @@ class TestCount:
         entry = await store.add(layer=MemoryLayer.KNOWLEDGE, content="a")
         await store.delete(entry.id)
         assert await store.count() == 0
+
+
+class TestEmbeddingIntegration:
+    """`embedder` sozlangan bo'lsa vektor avtomatik hisoblanadi/ishlatiladi."""
+
+    async def test_add_computes_and_stores_embedding(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        embedder = _FakeEmbedder({"Mushuklar haqida": [1.0, 0.0]})
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
+
+        entry = await store.add(layer=MemoryLayer.KNOWLEDGE, content="Mushuklar haqida")
+
+        assert entry.embedding == [1.0, 0.0]
+        assert embedder.calls == ["Mushuklar haqida"]
+
+    async def test_explicit_embedding_skips_provider_call(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        embedder = _FakeEmbedder({})
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
+
+        entry = await store.add(layer=MemoryLayer.KNOWLEDGE, content="matn", embedding=[0.5, 0.5])
+
+        assert entry.embedding == [0.5, 0.5]
+        assert embedder.calls == []
+
+    async def test_add_survives_provider_returning_none(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        """Ollama ulanmagan bo'lsa ham (fail-open) yozuv saqlanadi, embedding'siz."""
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=_AlwaysNoneEmbedder())
+
+        entry = await store.add(layer=MemoryLayer.KNOWLEDGE, content="matn")
+
+        assert entry.embedding is None
+
+    async def test_update_recomputes_embedding_for_new_content(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        embedder = _FakeEmbedder({"eski": [1.0, 0.0], "yangi": [0.0, 1.0]})
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
+
+        entry = await store.add(layer=MemoryLayer.TASK, content="eski")
+        assert entry.embedding == [1.0, 0.0]
+
+        updated = await store.update(entry.id, content="yangi")
+        assert updated is not None
+        assert updated.embedding == [0.0, 1.0]
+
+    async def test_search_finds_semantically_close_without_keyword_overlap(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        """Kalit-so'z mos kelmasa ham, semantik yaqin bo'lsa yuqori reytingda chiqadi."""
+        vectors = {
+            "Mushuklar mustaqil hayvonlar": [1.0, 0.0],
+            "Itlar sodiq hayvonlar": [0.0, 1.0],
+            "Pisiylar haqida gap": [0.95, 0.05],  # so'rov — "mushuk" so'zi yo'q
+        }
+        embedder = _FakeEmbedder(vectors)
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
+
+        await store.add(layer=MemoryLayer.KNOWLEDGE, content="Mushuklar mustaqil hayvonlar")
+        await store.add(layer=MemoryLayer.KNOWLEDGE, content="Itlar sodiq hayvonlar")
+
+        results = await store.search(MemoryQuery(text="Pisiylar haqida gap", min_similarity=0.1))
+
+        assert len(results) >= 1
+        assert "Mushuklar" in results[0].entry.content
+
+    async def test_search_falls_back_to_keyword_when_embedder_returns_none(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        """Ollama qidiruv vaqtida ulanmagan bo'lsa ham — kalit-so'z bo'yicha ishlaydi."""
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=_AlwaysNoneEmbedder())
+        await store.add(layer=MemoryLayer.KNOWLEDGE, content="Python dasturlash")
+
+        results = await store.search(MemoryQuery(text="Python", min_similarity=0.5))
+
+        assert len(results) == 1
+
+    async def test_search_without_embedder_unaffected(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        """`embedder=None` (default) — avvalgi xatti-harakat o'zgarmaydi."""
+        store = PgMemoryStore(session, owner_id=owner.id)
+        await store.add(layer=MemoryLayer.KNOWLEDGE, content="Python dasturlash")
+
+        results = await store.search(MemoryQuery(text="Python", min_similarity=0.5))
+
+        assert len(results) == 1
+
+    async def test_search_ignores_entries_without_stored_embedding(
+        self, session: AsyncSession, owner: Owner
+    ) -> None:
+        """Eski (embedding'siz) yozuvlar semantik so'rovda ham qidiruvdan tushib qolmaydi."""
+        embedder = _FakeEmbedder({"so'rov matni": [1.0, 0.0]})
+        store = PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
+
+        # Embedder'siz qo'shilgan — embedding yo'q
+        no_embed_store = PgMemoryStore(session, owner_id=owner.id)
+        await no_embed_store.add(layer=MemoryLayer.KNOWLEDGE, content="so'rov matni ustida")
+
+        results = await store.search(MemoryQuery(text="so'rov matni", min_similarity=0.5))
+        assert len(results) == 1  # kalit-so'z orqali baribir topiladi

@@ -31,6 +31,7 @@ from zet.api.deps import (
     get_automation_engine,
     get_core_state,
     get_daily_schedule_manager,
+    get_embedding_provider,
     get_engine,
     get_killswitch,
     get_llm_providers,
@@ -128,6 +129,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     notifier = get_notifier()
     if hasattr(notifier, "aclose"):
         await notifier.aclose()
+    await get_embedding_provider().aclose()
     await get_engine().dispose()
 
 
