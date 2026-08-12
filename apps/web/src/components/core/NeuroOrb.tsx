@@ -45,7 +45,7 @@ const PARAMS: Record<
   }
 > = {
   idle: { speed: 0.24, noise: 0.05, bright: 0.85, morph: 0, scatter: 0, squeeze: 1, wave: 0 },
-  listening: { speed: 0.16, noise: 0.05, bright: 1.05, morph: 0, scatter: 0, squeeze: 1, wave: 1 },
+  listening: { speed: 0.16, noise: 0.05, bright: 0.95, morph: 0, scatter: 0, squeeze: 1, wave: 0.55 },
   thinking: { speed: 0.55, noise: 0.17, bright: 1.15, morph: 0, scatter: 0, squeeze: 0.92, wave: 0 },
   speaking: { speed: 0, noise: 0.045, bright: 1.0, morph: 1, scatter: 0, squeeze: 1, wave: 0.35 },
   searching: { speed: 0.3, noise: 0.06, bright: 1.0, morph: 0, scatter: 1, squeeze: 1, wave: 0 },
@@ -163,7 +163,7 @@ void main() {
   p += dir * nz * uNoise;
 
   // listening: amplitudaga bog'liq gorizontal to'lqin halqalari
-  p += dir * sin(p.y * 9.0 - uTime * 5.0) * uWave * uLevel * 0.1;
+  p += dir * sin(p.y * 9.0 - uTime * 5.0) * uWave * uLevel * 0.07;
 
   // searching: fazali radial tarqalish-qaytish
   float sc = pow(max(0.0, sin(uTime * 1.4 + aSeed * 6.2831)), 3.0);
