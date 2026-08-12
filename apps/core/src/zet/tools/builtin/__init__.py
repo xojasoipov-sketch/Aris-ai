@@ -39,6 +39,7 @@ from zet.tools.builtin.youtube import (
     YouTubeSearchTool,
     YouTubeVideoStatsTool,
 )
+from zet.tools.builtin.youtube_publish import YouTubePublishTool
 from zet.tools.registry import ToolRegistry
 
 
@@ -50,6 +51,9 @@ def build_default_registry(
     github_token: str | None = None,
     web_search_api_key: str | None = None,
     youtube_api_key: str | None = None,
+    youtube_oauth_client_id: str | None = None,
+    youtube_oauth_client_secret: str | None = None,
+    youtube_oauth_refresh_token: str | None = None,
     telegram_bot_token: str | None = None,
     instagram_access_token: str | None = None,
     instagram_business_account_id: str | None = None,
@@ -95,6 +99,13 @@ def build_default_registry(
     registry.register(YouTubeSearchTool(api_key=youtube_api_key))
     registry.register(YouTubeChannelStatsTool(api_key=youtube_api_key))
     registry.register(YouTubeVideoStatsTool(api_key=youtube_api_key))
+    registry.register(
+        YouTubePublishTool(
+            client_id=youtube_oauth_client_id,
+            client_secret=youtube_oauth_client_secret,
+            refresh_token=youtube_oauth_refresh_token,
+        )
+    )
     registry.register(TelegramChannelStatsTool(token=telegram_bot_token))
     registry.register(TelegramChannelPostTool(token=telegram_bot_token))
     registry.register(

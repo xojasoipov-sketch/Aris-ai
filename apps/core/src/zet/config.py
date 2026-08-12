@@ -131,6 +131,17 @@ class Settings(BaseSettings):
     Credentials → API key). Bepul kvota 10 000 unit/kun. Kalit bo'lmasa —
     `youtube.search`/`youtube.channel_stats`/`youtube.video_stats` stub rejim."""
 
+    # ── YouTube Publish (OAuth 2.0, Bo'lim 7 — WRITE) ──────────────────
+    youtube_oauth_client_id: SecretStr | None = None
+    """OAuth 2.0 Client ID (Google Cloud Console → Credentials → OAuth Client)."""
+
+    youtube_oauth_client_secret: SecretStr | None = None
+    """OAuth 2.0 Client Secret (Desktop app type)."""
+
+    youtube_oauth_refresh_token: SecretStr | None = None
+    """Refresh token — `scripts/youtube_oauth.py` orqali bir marta olinadi.
+    Uchtasi ham bo'lmasa — `youtube.publish` stub rejimda ishlaydi."""
+
     # ── Ovoz (Bo'lim 5, V-18) ─────────────────────────────────────────
     elevenlabs_api_key: SecretStr | None = None
     """ElevenLabs API kaliti (Scribe STT + Multilingual v2 TTS). Bo'lmasa —

@@ -112,6 +112,21 @@ def get_tool_registry() -> ToolRegistry:
         youtube_api_key=(
             settings.youtube_api_key.get_secret_value() if settings.youtube_api_key else None
         ),
+        youtube_oauth_client_id=(
+            settings.youtube_oauth_client_id.get_secret_value()
+            if settings.youtube_oauth_client_id
+            else None
+        ),
+        youtube_oauth_client_secret=(
+            settings.youtube_oauth_client_secret.get_secret_value()
+            if settings.youtube_oauth_client_secret
+            else None
+        ),
+        youtube_oauth_refresh_token=(
+            settings.youtube_oauth_refresh_token.get_secret_value()
+            if settings.youtube_oauth_refresh_token
+            else None
+        ),
         telegram_bot_token=(
             settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else None
         ),

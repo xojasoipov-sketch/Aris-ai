@@ -64,6 +64,7 @@ SMM_AGENT_SPEC = AgentSpec(
         "youtube.search",
         "youtube.channel_stats",
         "youtube.video_stats",
+        "youtube.publish",
         "telegram.channel_stats",
         "telegram.channel_post",
         "instagram.account_stats",
