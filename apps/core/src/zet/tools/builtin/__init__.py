@@ -16,7 +16,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from zet.devices.camera import CameraProvider
+from zet.devices.desktop import DesktopProvider
 from zet.tools.builtin.camera import CameraSnapshotTool
+from zet.tools.builtin.desktop_tools import (
+    DesktopKeyPressTool,
+    DesktopMouseClickTool,
+    DesktopScreenshotTool,
+    DesktopTypeTextTool,
+)
 from zet.tools.builtin.github import GitHubReadTool, GitHubWriteTool
 from zet.tools.builtin.instagram import (
     InstagramAccountStatsTool,
@@ -58,6 +65,7 @@ def build_default_registry(
     instagram_access_token: str | None = None,
     instagram_business_account_id: str | None = None,
     camera_provider: CameraProvider | None = None,
+    desktop_provider: DesktopProvider | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
 
@@ -83,6 +91,10 @@ def build_default_registry(
             (17-raqamli). Token bilan birga bo'lishi kerak.
         camera_provider: `camera.snapshot` uchun ulanish (default: `StubCamera`
             — real RTSP/EZVIZ hali ulanmagan).
+        desktop_provider: `desktop.*` tool'lar uchun ulanish (default:
+            `StubDesktop(available=False)` — headless server muhitida). ZET
+            foydalanuvchining mahalliy Mac/Win kompyuterida ishga tushirilsa,
+            `PyAutoGUIDesktop` bilan almashtiriladi.
 
     Returns:
         Ro'yxatga olingan `ToolRegistry`.
@@ -127,6 +139,10 @@ def build_default_registry(
         )
     )
     registry.register(CameraSnapshotTool(provider=camera_provider))
+    registry.register(DesktopScreenshotTool(provider=desktop_provider))
+    registry.register(DesktopTypeTextTool(provider=desktop_provider))
+    registry.register(DesktopKeyPressTool(provider=desktop_provider))
+    registry.register(DesktopMouseClickTool(provider=desktop_provider))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))
     return registry

@@ -86,6 +86,10 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "instagram.recent_media": PermissionLevel.READ,
     "instagram.publish_photo": PermissionLevel.WRITE,
     "camera.snapshot": PermissionLevel.READ,
+    "desktop.screenshot": PermissionLevel.READ,
+    "desktop.type_text": PermissionLevel.EXECUTE,
+    "desktop.key_press": PermissionLevel.EXECUTE,
+    "desktop.mouse_click": PermissionLevel.EXECUTE,
     "shell.exec": PermissionLevel.EXECUTE,
 }
 
