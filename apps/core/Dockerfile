@@ -7,14 +7,16 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# Dependency qatlami — manba o'zgarganda qayta o'rnatilmasin
+# Dependency qatlami — manba o'zgarganda qayta o'rnatilmasin.
+# BuildKit cache mount ISHLATILMAYDI: Railway builder cache id'ga o'z
+# prefiksini talab qiladi va portativlikni buzadi. Qatlam keshi
+# (COPY pyproject/uv.lock alohida qadam) baribir qayta o'rnatishni
+# oldini oladi.
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
-RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 
 FROM python:3.12-slim-bookworm AS runtime
