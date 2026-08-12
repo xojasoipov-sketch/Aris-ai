@@ -292,7 +292,11 @@ async def _with_memory_store(fn):
     CLI va API bir xil ma'lumotni ko'rishi uchun (ikkalasi ham DB'ga
     yozadi) — `z run`dagi bilan bir xil naqsh.
     """
-    from zet.api.deps import get_embedding_provider, get_or_create_owner, get_session_factory
+    # `get_or_create_owner` asl uyidan olinadi: uni `deps` orqali olish
+    # qayta-eksportga tayanadi va u yerda faqat ichki foydalanish uchun
+    # import qilingan.
+    from zet.api.deps import get_embedding_provider, get_session_factory
+    from zet.db.bootstrap import get_or_create_owner
     from zet.db.session import session_scope
     from zet.memory.pg_store import PgMemoryStore
 

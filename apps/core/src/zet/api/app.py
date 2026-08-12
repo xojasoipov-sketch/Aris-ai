@@ -48,6 +48,7 @@ from zet.api.routes import (
     alerts,
     approvals,
     automation,
+    conversation,
     crm,
     health,
     killswitch,
@@ -196,5 +197,6 @@ def create_app() -> FastAPI:
     app.include_router(workspace.router, prefix="/api/v1")
     app.include_router(system.router, prefix="/api/v1")
     app.include_router(voice.router, prefix="/api/v1")
+    app.include_router(conversation.router, prefix="/api/v1")
 
     return app

@@ -157,6 +157,13 @@ export interface IntegrationDto {
 
 /* ── Run (buyruq yuborish) ─────────────────────────────────────── */
 
+export interface ConversationMessageDto {
+  id: string;
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  created_at: string;
+}
+
 export interface RunDto {
   run_id: string;
   trace_id: string;
@@ -185,8 +192,14 @@ export const api = {
   integrations: () => call<IntegrationDto[]>("/integrations"),
 
   /** Buyruqni HAQIQATAN backend'ga yuboradi (ilgari canned javob edi). */
-  run: (message: string) =>
-    call<RunDto>("/run", { method: "POST", body: JSON.stringify({ message }) }),
+  run: (message: string, channel = "web") =>
+    call<RunDto>("/run", { method: "POST", body: JSON.stringify({ message, channel }) }),
+
+  /** Saqlangan suhbat tarixi — ilgari o'ylab topilgan xabarlar edi. */
+  messages: (channel = "web", limit = 50) =>
+    call<ConversationMessageDto[]>(
+      `/conversations/${encodeURIComponent(channel)}/messages?limit=${limit}`,
+    ),
 
   projects: {
     list: () => call<ProjectDto[]>("/projects"),

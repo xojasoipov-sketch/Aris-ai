@@ -25,6 +25,8 @@ from zet.core.state import CoreState
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
+from zet.domain.command import ConversationTurn
+from zet.domain.enums import MessageRole
 from zet.domain.memory import MemoryQuery, MemorySearchResult
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
@@ -420,6 +422,43 @@ async def get_crm(
     """
     owner = await get_or_create_owner(session, external_id=settings.owner_id)
     return PgCRM(session, owner_id=owner.id)
+
+
+async def load_conversation_history(channel: str) -> list[ConversationTurn]:
+    """Kanal suhbatining oxirgi almashuvlari (Z47.1).
+
+    FAIL-OPEN: baza yetib bo'lmasa BO'SH ro'yxat qaytadi va ZET
+    javob berishda davom etadi — tarixsiz, lekin jim qolmasdan.
+    Xotira nosozligi eganing savolini javobsiz qoldirmasligi kerak.
+
+    Sessiya bu yerda, chaqiruv paytida ochiladi. `Depends` orqali
+    ulash butun `/run` route'ini DB'ga bog'lab qo'yardi: baza
+    o'chganda so'rov handler'gacha ham yetib bormay 500 bo'lardi.
+    """
+    try:
+        async with session_scope(get_session_factory()) as session:
+            settings = get_settings()
+            owner = await get_or_create_owner(session, external_id=settings.owner_id)
+            store = ConversationStore(session, owner_id=owner.id)
+            conversation = await store.get_or_create(channel=channel)
+            return await store.recent_history(conversation)
+    except Exception:
+        log.warning("conversation.history_unavailable", channel=channel)
+        return []
+
+
+async def save_conversation_turn(channel: str, *, user_text: str, reply: str) -> None:
+    """Almashuvni saqlaydi — FAIL-OPEN (yuqoridagi izohga qarang)."""
+    try:
+        async with session_scope(get_session_factory()) as session:
+            settings = get_settings()
+            owner = await get_or_create_owner(session, external_id=settings.owner_id)
+            store = ConversationStore(session, owner_id=owner.id)
+            conversation = await store.get_or_create(channel=channel)
+            await store.append(conversation, role=MessageRole.USER, content=user_text)
+            await store.append(conversation, role=MessageRole.ASSISTANT, content=reply)
+    except Exception:
+        log.warning("conversation.save_failed", channel=channel)
 
 
 async def get_workspace(

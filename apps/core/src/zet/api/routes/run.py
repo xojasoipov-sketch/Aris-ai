@@ -14,7 +14,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from zet.api.deps import get_killswitch, get_orchestrator
+from zet.api.deps import (
+    get_killswitch,
+    get_orchestrator,
+    load_conversation_history,
+    save_conversation_turn,
+)
 from zet.core.orchestrator import Orchestrator, RunNotFoundError, RunRecord
 from zet.domain.command import Command
 from zet.security.killswitch import KillSwitchEngagedError, KillSwitchState
@@ -27,6 +32,8 @@ class RunRequest(BaseModel):
 
     message: str = Field(..., min_length=1, max_length=10_000)
     dry_run: bool = False
+    channel: str = Field(default="web", max_length=32)
+    """Suhbat kanali — tarix shu bo'yicha ajratiladi (web/api/tg)."""
 
 
 class RunResponse(BaseModel):
@@ -64,7 +71,14 @@ async def create_run(
     ks: KillSwitchState = Depends(get_killswitch),
     orchestrator: Orchestrator = Depends(get_orchestrator),
 ) -> RunResponse:
-    """Yangi run boshlash — to'liq pipeline."""
+    """Yangi run boshlash — to'liq pipeline, suhbat tarixi bilan.
+
+    TARIX NEGA SHU YERDA. Ilgari bu route tarixsiz `Command` yaratardi
+    va javobni hech qayerga yozmasdi — ya'ni brauzerdagi ZET oldingi
+    gapni umuman eslamasdi ("Tushuntir" kabi ergash buyruq kontekstsiz
+    qolardi). Telegram oqimida esa tarix allaqachon saqlanardi. Bir xil
+    yadro, ikki xil xotira — shu farq yopildi.
+    """
     try:
         ks.check()
     except KillSwitchEngagedError as exc:
@@ -77,7 +91,8 @@ async def create_run(
 
     trace_id = bind_trace()
     try:
-        command = Command(text=request.message, channel="api")
+        history = await load_conversation_history(request.channel)
+        command = Command(text=request.message, channel=request.channel, history=history)
         try:
             record = await orchestrator.start(command, dry_run=request.dry_run)
         except KillSwitchEngagedError as exc:
@@ -85,7 +100,15 @@ async def create_run(
                 status_code=503,
                 detail=f"Emergency stop yoqilgan: {exc}",
             ) from exc
-        return _to_response(record, trace_id)
+
+        response = _to_response(record, trace_id)
+        # Quruq ishga tushirish (`dry_run`) tarixga yozilmaydi — u
+        # sinov, haqiqiy suhbat emas.
+        if not request.dry_run:
+            await save_conversation_turn(
+                request.channel, user_text=request.message, reply=response.message
+            )
+        return response
     finally:
         unbind_trace()
 
