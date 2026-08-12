@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -34,10 +35,22 @@ from zet.domain.memory import (
     MemoryQuery,
     MemorySearchResult,
 )
-from zet.memory.embeddings import EmbeddingProvider
+from zet.memory.embeddings import EMBEDDING_MODEL_KEY, EmbeddingProvider
 from zet.memory.scoring import cosine_similarity, hybrid_score, keyword_score
 
 log = structlog.get_logger(__name__)
+
+
+def _embedding_column(vector: list[float] | None, model_id: str) -> dict[str, Any] | None:
+    """Vektorni model belgisi bilan JSON ustunga tayyorlash.
+
+    Belgi shart: `bge-m3` va `mistral-embed` ikkalasi ham 1024 o'lchamli,
+    ya'ni o'lcham tekshiruvi ularni ajratmaydi, lekin fazolari boshqa.
+    Belgisiz taqqoslash ma'nosiz "o'xshashlik" beradi.
+    """
+    if vector is None:
+        return None
+    return {"v": vector, EMBEDDING_MODEL_KEY: model_id}
 
 
 def _to_domain(row: MemoryEntryRow) -> MemoryEntry:
@@ -87,6 +100,11 @@ class PgMemoryStore:
         self._owner_id = owner_id
         self._embedder = embedder
 
+    @property
+    def _embedder_model_id(self) -> str:
+        """Joriy vektor fazosi belgisi ('unknown' — eski/nomsiz provayder)."""
+        return getattr(self._embedder, "model_id", "unknown")
+
     async def add(
         self,
         *,
@@ -119,7 +137,7 @@ class PgMemoryStore:
             summary=summary,
             tags=tags or [],
             source=source,
-            embedding={"v": embedding} if embedding is not None else None,
+            embedding=_embedding_column(embedding, self._embedder_model_id),
             version=1,
             trust_level=trust_level,
             expires_at=expires_at,
@@ -163,7 +181,7 @@ class PgMemoryStore:
         if tags is not None:
             row.tags = tags
         if embedding is not None:
-            row.embedding = {"v": embedding}
+            row.embedding = _embedding_column(embedding, self._embedder_model_id)
         row.version += 1
 
         await self._session.flush()
@@ -221,7 +239,11 @@ class PgMemoryStore:
             vector_score: float | None = None
             if query_embedding is not None and row.embedding is not None:
                 row_vector = row.embedding.get("v")
-                if row_vector:
+                row_model = row.embedding.get(EMBEDDING_MODEL_KEY)
+                # Boshqa model bilan yozilgan vektor TAQQOSLANMAYDI —
+                # o'lchamlari mos kelsa ham fazolari boshqa. Bunday yozuv
+                # kalit-so'z balli bilan qatnashadi, xolos.
+                if row_vector and row_model == self._embedder_model_id:
                     vector_score = cosine_similarity(query_embedding, row_vector)
 
             similarity = hybrid_score(keyword=kw_score, vector=vector_score)

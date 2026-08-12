@@ -85,6 +85,25 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"
     ollama_embed_model: str = "bge-m3"
+
+    embedding_provider: Literal["auto", "ollama", "gemini", "mistral", "none"] = "auto"
+    """Semantik qidiruv uchun vektor manbasi.
+
+    `auto` — muhitga qarab tanlaydi:
+        prod'da Ollama YO'Q (Railway konteynerida mahalliy model ishlamaydi),
+        shuning uchun Gemini → Mistral → none tartibida kalit bo'yicha;
+        dev'da esa Ollama (ADR-0007 local-first, pulsiz, offline).
+
+    Aniq qiymat berilsa — shu provayder ishlatiladi. Provayderni
+    ALMASHTIRISH eski vektorlarni yaroqsiz qilmaydi, lekin ular boshqa
+    fazoda bo'lgani uchun qidiruvda hisobga olinmaydi (`pg_store`).
+    """
+
+    gemini_embed_model: str = "text-embedding-004"
+    """Gemini embedding modeli (768 o'lcham, ko'p tilli)."""
+
+    mistral_embed_model: str = "mistral-embed"
+    """Mistral embedding modeli (1024 o'lcham)."""
     # T1 — free tier
     google_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None

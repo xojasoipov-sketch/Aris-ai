@@ -42,7 +42,7 @@ from zet.api.deps import (
     get_tool_registry,
     get_tts,
 )
-from zet.api.middleware import TraceMiddleware
+from zet.api.middleware import TokenAuthMiddleware, TraceMiddleware
 from zet.api.routes import (
     agent,
     alerts,
@@ -167,7 +167,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Middleware
+    # Middleware — oxirgi qo'shilgan BIRINCHI ishlaydi (Starlette stack).
+    # Token tekshiruvi trace'dan keyin qo'shiladi, ya'ni rad etilgan
+    # so'rov ham trace_id oladi — 401'larni log'da kuzatish uchun.
+    app.add_middleware(TokenAuthMiddleware, settings=settings)
     app.add_middleware(TraceMiddleware)
 
     # Routerlar

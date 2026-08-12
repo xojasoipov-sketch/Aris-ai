@@ -43,6 +43,21 @@ class TriggerType(StrEnum):
     SYSTEM = "system"
     """Tizim hodisasi."""
 
+    WATCHER = "watcher"
+    """Kuzatuv — metrika o'zgarganda (`watcher.py` chiqargan hodisa).
+
+    Bu triggerlar `watch.<metric>` turidagi hodisalarga mos keladi.
+    """
+
+    AGENT_HANDOFF = "agent_handoff"
+    """Navbat — boshqa agent ishini tugatganda (`agent.completed` hodisasi).
+
+    `WorkflowChain`dan farqi: zanjir OLDINDAN tuzilgan va qat'iy; handoff
+    esa REAKTIV — "agent X muvaffaqiyatli tugadi" degan hodisaga shart
+    qo'yib, keyingi agentni ulash mumkin. Zanjirni qayta yozmasdan yangi
+    bo'g'in qo'shiladi.
+    """
+
 
 class TriggerCondition(BaseModel, frozen=True):
     """Trigger sharti — qachon ishga tushishi kerak.

@@ -1,7 +1,18 @@
 """Automation Engine — markaziy avtomatlashtirish dvigatel (Bo'lim 9).
 
-Scheduler, Trigger va Workflow komponentlarini birlashtiradi.
+Scheduler, Trigger, Watcher va Workflow komponentlarini birlashtiradi.
 Hodisalarni qabul qiladi va mos triggerlarni ishga tushiradi.
+
+Agentning "uyg'onish" xususiyatlari (yangi zip) shu yerda uchrashadi:
+    1. Vaqt      → `Scheduler` (cron)
+    2. Xodisa    → `TriggerRegistry` (webhook / tashqi hodisa)
+    3. Kuzatuv   → `WatcherRegistry` (metrikani o'zi o'lchaydi)
+    4. Navbat    → `TriggerType.AGENT_HANDOFF` (agent tugagach keyingisi)
+    5. Mustaqillik → `automation/goal.py` (maqsad tsikli)
+
+Watcher ham, handoff ham oxir-oqibat `AutomationEvent` chiqaradi va
+`process_event()` dan o'tadi — ya'ni beshta xususiyat uchun bitta
+xavfsizlik yo'li bor, beshta emas.
 
 Xavfsizlik:
     - Har bir avtonom run: budjet 40% chegara (ADR-0006)
@@ -17,58 +28,15 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import structlog
-from pydantic import BaseModel, Field
 
+from zet.automation.events import AutomationAction, AutomationEvent
 from zet.automation.scheduler import Scheduler, ScheduleRule
 from zet.automation.triggers import EventTrigger, TriggerRegistry
+from zet.automation.watcher import MetricRegistry, WatcherRegistry, WatchRule
 from zet.automation.workflow import WorkflowChain, WorkflowRunner, WorkflowStep
 
 log = structlog.get_logger(__name__)
-
-
-class AutomationEvent(BaseModel, frozen=True):
-    """Avtomatlashtirish hodisasi.
-
-    Engine ga kiritiladi va mos triggerlar qidiriladi.
-    """
-
-    event_type: str = Field(min_length=1)
-    """Hodisa turi (masalan: 'motion_detected', 'budget_warning')."""
-
-    source: str = ""
-    """Hodisa manbasi (masalan: 'camera.cam1', 'budget.daily')."""
-
-    data: dict[str, str] = Field(default_factory=dict)
-    """Hodisa ma'lumotlari (key-value)."""
-
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    """Hodisa vaqti."""
-
-
-class AutomationAction(BaseModel, frozen=True):
-    """Engine chiqishi — bajarilishi kerak bo'lgan harakat.
-
-    Engine haqiqiy agentlarni BAJARMAYDI — faqat nima qilish kerakligini qaytaradi.
-    Orchestrator bu amallarni bajaradi.
-    """
-
-    agent_name: str
-    """Ishga tushiriladigan agent."""
-
-    command: str = ""
-    """Agent buyrug'i."""
-
-    trigger_id: str = ""
-    """Ishga tushirgan trigger ID."""
-
-    trigger_name: str = ""
-    """Trigger nomi (log uchun)."""
-
-    event_type: str = ""
-    """Hodisa turi."""
 
 
 class AutomationEngine:
@@ -82,6 +50,8 @@ class AutomationEngine:
         self.scheduler = Scheduler()
         self.triggers = TriggerRegistry()
         self.workflows = WorkflowRunner()
+        self.watchers = WatcherRegistry()
+        self.metrics = MetricRegistry()
         self._event_log: list[AutomationEvent] = []
 
     def add_schedule(self, rule: ScheduleRule) -> ScheduleRule:
@@ -91,6 +61,21 @@ class AutomationEngine:
     def add_trigger(self, trigger: EventTrigger) -> EventTrigger:
         """Trigger qo'shish."""
         return self.triggers.add(trigger)
+
+    def add_watch(self, rule: WatchRule) -> WatchRule:
+        """Kuzatuv qoidasi qo'shish (3-xususiyat)."""
+        return self.watchers.add(rule)
+
+    async def poll_watchers(self) -> list[AutomationAction]:
+        """Barcha kuzatuv qoidalarini o'lchash va signal bergani uchun amal qaytarish.
+
+        Watcher hodisa ishlab chiqaradi, hodisa esa oddiy trigger yo'lidan
+        o'tadi — shu sabab watcher uchun alohida xavfsizlik yo'li yo'q.
+        """
+        actions: list[AutomationAction] = []
+        for event in await self.watchers.poll(self.metrics):
+            actions.extend(self.process_event(event))
+        return actions
 
     def create_workflow(
         self,
@@ -157,6 +142,7 @@ class AutomationEngine:
             "schedules": self.scheduler.stats,
             "triggers": self.triggers.stats,
             "workflows": self.workflows.stats,
+            "watchers": self.watchers.stats,
             "events_processed": {"total": len(self._event_log)},
         }
 
@@ -164,3 +150,6 @@ class AutomationEngine:
     def event_count(self) -> int:
         """Qayta ishlangan hodisalar soni."""
         return len(self._event_log)
+
+
+__all__ = ["AutomationAction", "AutomationEngine", "AutomationEvent"]

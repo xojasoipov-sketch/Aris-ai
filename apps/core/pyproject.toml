@@ -121,6 +121,7 @@ addopts = "-q --strict-markers --strict-config"
 markers = [
     "integration: haqiqiy Postgres/Redis talab qiladi",
     "live: haqiqiy LLM API chaqiradi (pul sarflaydi) — default o'chirilgan",
+    "no_auto_auth: TestClient'ga avtomatik Authorization header QO'SHILMAYDI (auth testlari)",
 ]
 filterwarnings = ["error"]
 

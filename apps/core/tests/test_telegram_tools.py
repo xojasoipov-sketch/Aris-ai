@@ -114,6 +114,7 @@ class TestTelegramChannelStatsTool:
         assert result.success is False
         assert "nojson" in (result.error or "").lower() or "502" in (result.error or "")
 
+
 # ── Channel post (WRITE) ───────────────────────────────────────────
 
 

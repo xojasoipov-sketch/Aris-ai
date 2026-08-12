@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+import structlog
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -27,7 +28,13 @@ from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
-from zet.memory.embeddings import OllamaEmbeddingProvider
+from zet.memory.embeddings import (
+    EmbeddingProvider,
+    GeminiEmbeddingProvider,
+    MistralEmbeddingProvider,
+    NullEmbeddingProvider,
+    OllamaEmbeddingProvider,
+)
 from zet.memory.pg_store import PgMemoryStore
 from zet.monitoring.alerts import AlertManager
 from zet.monitoring.notify_bridge import AlertNotificationBridge
@@ -49,6 +56,8 @@ else:
     MemoryStoreLike = object
 """`MemoryStore` (in-memory, testlarda) yoki `PgMemoryStore` (DB-backed,
 produksiyada) — ikkalasi ham `api/routes/memory.py`da qo'llab-quvvatlanadi."""
+
+log = structlog.get_logger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -247,25 +256,81 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
 
 
 @lru_cache(maxsize=1)
-def get_embedding_provider() -> OllamaEmbeddingProvider:
-    """Global embedding provayder (singleton) — mahalliy Ollama, tashqi kalit shart emas.
+def get_embedding_provider() -> EmbeddingProvider:
+    """Global embedding provayder (singleton) — muhitga qarab tanlanadi.
 
-    Ilgari `memory_entries.embedding` ustuni hech qachon to'ldirilmasdi —
-    qidiruv faqat kalit-so'z edi (gap-analysis). Ollama ulanmagan bo'lsa
-    ham xato ko'tarilmaydi — `embed()` shunchaki `None` qaytaradi va
-    qidiruv/yozish kalit-so'z rejimida davom etadi (fail-open, ADR-0007).
+    Ilgari bu doim `OllamaEmbeddingProvider` qaytarardi. Lokal ishlarda
+    to'g'ri (ADR-0007 local-first), lekin **Railway'da Ollama yo'q** —
+    ya'ni produksiyada `embed()` har safar `None` qaytarardi va semantik
+    qidiruv jimgina o'chiq turardi. Z39.2 bulut provayderlarini qo'shdi.
+
+    Fail-open o'zgarmaydi: provayder ishlamasa `embed()` xato ko'tarmasdan
+    `None` qaytaradi, qidiruv/yozish kalit-so'z rejimida davom etadi.
     """
     settings = get_settings()
-    return OllamaEmbeddingProvider(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_embed_model,
+    provider = _resolve_embedding_provider(settings)
+    log.info(
+        "embeddings.provider_selected",
+        configured=settings.embedding_provider,
+        resolved=provider.model_id,
     )
+    return provider
+
+
+def _resolve_embedding_provider(settings: Settings) -> EmbeddingProvider:
+    """Sozlama va mavjud kalitlarga qarab embedding provayderini tanlash.
+
+    `auto` qoidasi bitta haqiqatdan kelib chiqadi: **bulutda Ollama yo'q**.
+    Railway konteynerida mahalliy model ishlamaydi, shu sabab prod'da
+    bulut kaliti qidiriladi; dev'da esa Ollama (ADR-0007 local-first).
+
+    Tanlov TARMOQQA BOG'LIQ EMAS — faqat konfiguratsiyaga qaraydi.
+    Shunday bo'lgani uchun bir ishga tushishda provayder o'zgarmaydi va
+    barcha yozuvlar bitta vektor fazosida qoladi.
+    """
+    choice = settings.embedding_provider
+    google = settings.google_api_key
+    mistral = settings.mistral_api_key
+
+    if choice == "auto":
+        if not settings.is_prod:
+            choice = "ollama"
+        elif google is not None:
+            choice = "gemini"
+        elif mistral is not None:
+            choice = "mistral"
+        else:
+            log.warning("embeddings.no_cloud_key_in_prod")
+            choice = "none"
+
+    if choice == "gemini" and google is not None:
+        return GeminiEmbeddingProvider(
+            api_key=google.get_secret_value(),
+            model=settings.gemini_embed_model,
+        )
+    if choice == "mistral" and mistral is not None:
+        return MistralEmbeddingProvider(
+            api_key=mistral.get_secret_value(),
+            model=settings.mistral_embed_model,
+        )
+    if choice == "ollama":
+        return OllamaEmbeddingProvider(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_embed_model,
+        )
+
+    if choice not in {"none", "ollama"}:
+        # Provayder so'ralgan, lekin kaliti yo'q — jimgina boshqasiga
+        # o'tib ketmaymiz, chunki bu vektor fazosini bildirmasdan
+        # almashtirardi. Semantik qidiruv ochiq ravishda o'chadi.
+        log.warning("embeddings.key_missing", requested=choice)
+    return NullEmbeddingProvider()
 
 
 async def get_memory_store(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_config),
-    embedder: OllamaEmbeddingProvider = Depends(get_embedding_provider),
+    embedder: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> PgMemoryStore:
     """So'rov chegarasidagi DB-backed xotira do'koni.
 
