@@ -244,7 +244,13 @@ class TestMessageHandler:
 
     @pytest.mark.asyncio()
     async def test_handle_voice(self, handler: MessageHandler) -> None:
-        """Ovozli xabar — STT natijasi ko'rsatiladi."""
+        """Ovozli xabar — STT natijasi Orchestrator o'rniga echo'ga uzatiladi.
+
+        Orchestrator ulanmagan bo'lsa (default HandlerContext'da), STT
+        matn "Qabul qilindi" echo'siga uzatiladi (avvalgi Bo'lim 5 lean
+        naqshi bilan orqaga mos — Orchestrator ulanmagan holatda ham
+        voice qabul qilinganini foydalanuvchi ko'radi).
+        """
         input_ = TelegramInput(
             input_type=InputType.VOICE,
             user_id=123,
@@ -252,7 +258,7 @@ class TestMessageHandler:
             voice_data=b"fake_audio_data",
         )
         result = await handler.handle(input_)
-        assert "Ovoz aniqlandi" in result.text
+        assert "Qabul qilindi" in result.text
         assert "Aniqlangan matn" in result.text
 
     @pytest.mark.asyncio()
@@ -756,3 +762,131 @@ class TestTelegramConfig:
             _env_file=None,  # type: ignore[call-arg]
         )
         assert s.telegram_owner_id_set == {123456789}
+
+
+# ── Orchestrator/TTS integratsiyasi (Z25.1) ──────────────────────
+
+
+class _FakeTTS(StubTTS):
+    """Sinov TTS — matnni yozib olib, aniqlanadigan audio qaytaradi."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def synthesize(self, text: str, *, language: str = "uz") -> TTSResult:
+        self.calls.append(text)
+        return TTSResult(audio_data=b"MP3-FAKE", audio_format="mp3", text=text)
+
+
+class TestOrchestratorRunnerWiring:
+    """`_run_and_reply` — Orchestrator ulanganda haqiqiy natija qaytaradi.
+
+    Ilgari `_handle_text` doim echo qaytarardi ("Core pipeline ulangan
+    emas"). Endi `HandlerContext.orchestrator_runner` factory berilsa,
+    text/voice ikkalasi ham unga uzatiladi.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_text_uses_orchestrator_runner(self) -> None:
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        received: list[str] = []
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            received.append(text)
+            return OrchestratorRunResult(text=f"Bajarildi: {text}", ok=True, run_id="r-1")
+
+        handler = MessageHandler(HandlerContext(orchestrator_runner=_runner))
+        input_ = TelegramInput(
+            input_type=InputType.TEXT, user_id=123, chat_id=123, text="Bugun 15:00 uchrashuv"
+        )
+        result = await handler.handle(input_)
+
+        assert received == ["Bugun 15:00 uchrashuv"]
+        assert "Bajarildi" in result.text
+        assert result.voice_data is None  # reply_with_voice=False (default)
+
+    @pytest.mark.asyncio()
+    async def test_voice_pipeline_stt_then_orchestrator_then_tts(self) -> None:
+        """Voice → STT → Orchestrator → TTS to'liq zanjir."""
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        forwarded: list[str] = []
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            forwarded.append(text)
+            return OrchestratorRunResult(text=f"Vazifa qabul: {text}", ok=True)
+
+        tts = _FakeTTS()
+        handler = MessageHandler(
+            HandlerContext(
+                stt=StubSTT("Salom, brifing tayyorla"), tts=tts, orchestrator_runner=_runner
+            )
+        )
+        input_ = TelegramInput(
+            input_type=InputType.VOICE,
+            user_id=123,
+            chat_id=123,
+            voice_data=b"fake-ogg",
+        )
+        result = await handler.handle(input_)
+
+        # STT natijasi Orchestrator'ga uzatildi
+        assert forwarded == ["Salom, brifing tayyorla"]
+        # Matn ham, audio ham qaytdi
+        assert "Vazifa qabul" in result.text
+        assert result.voice_data == b"MP3-FAKE"
+        # TTS HTML teg'siz toza matnni oldi
+        assert tts.calls
+        assert "<" not in tts.calls[0]
+
+    @pytest.mark.asyncio()
+    async def test_orchestrator_exception_surfaced_as_error(self) -> None:
+        async def _runner(_text: str) -> object:
+            raise RuntimeError("LLM tarmoq xatosi")
+
+        handler = MessageHandler(HandlerContext(orchestrator_runner=_runner))  # type: ignore[arg-type]
+        input_ = TelegramInput(input_type=InputType.TEXT, user_id=123, chat_id=123, text="test")
+        result = await handler.handle(input_)
+        assert "Xato" in result.text
+        assert "LLM tarmoq xatosi" in result.text
+
+    @pytest.mark.asyncio()
+    async def test_stt_error_returns_friendly_message(self) -> None:
+        class _BrokenSTT(StubSTT):
+            async def transcribe(self, *args, **kwargs):  # type: ignore[override, no-untyped-def]
+                raise RuntimeError("kalit yo'q")
+
+        handler = MessageHandler(HandlerContext(stt=_BrokenSTT()))
+        input_ = TelegramInput(
+            input_type=InputType.VOICE, user_id=123, chat_id=123, voice_data=b"data"
+        )
+        result = await handler.handle(input_)
+        assert "transkripsiya" in result.text.lower()
+        assert "kalit" in result.text
+
+    @pytest.mark.asyncio()
+    async def test_tts_error_does_not_block_text_reply(self) -> None:
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        class _BrokenTTS(StubTTS):
+            async def synthesize(self, text: str, *, language: str = "uz") -> TTSResult:
+                raise RuntimeError("TTS xatosi")
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            return OrchestratorRunResult(text=f"OK: {text}", ok=True)
+
+        handler = MessageHandler(
+            HandlerContext(stt=StubSTT("test"), tts=_BrokenTTS(), orchestrator_runner=_runner)
+        )
+        result = await handler.handle(
+            TelegramInput(
+                input_type=InputType.VOICE,
+                user_id=123,
+                chat_id=123,
+                voice_data=b"x",
+            )
+        )
+        # Matn keldi, audio yo'q — lekin butun so'rov halok bo'lmadi
+        assert "OK" in result.text
+        assert result.voice_data is None

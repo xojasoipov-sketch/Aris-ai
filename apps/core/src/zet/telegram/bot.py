@@ -31,12 +31,14 @@ from zet.telegram.handlers import (
     HandlerContext,
     InputType,
     MessageHandler,
+    OrchestratorRunner,
     TelegramInput,
     TelegramOutput,
 )
 from zet.telegram.middleware import OwnerMiddleware
 from zet.telegram.notifier import Notifier, StubNotifier
 from zet.voice.stt import STTProvider, StubSTT
+from zet.voice.tts import TTSProvider
 
 log = structlog.get_logger(__name__)
 
@@ -57,20 +59,32 @@ class ZetBot:
         token: str = "",
         owner_ids: set[int] | None = None,
         stt: STTProvider | None = None,
+        tts: TTSProvider | None = None,
         notifier: Notifier | None = None,
+        orchestrator_runner: OrchestratorRunner | None = None,
     ) -> None:
         """
         Args:
             token: Telegram bot token (prod uchun kerak)
             owner_ids: ruxsat etilgan Telegram user_id lar
             stt: STT provayder (None = StubSTT)
+            tts: TTS provayder — ovozli javob uchun (None → faqat matn)
             notifier: bildirishnoma yuboruvchi (None = StubNotifier)
+            orchestrator_runner: matn/ovoz → real agent bajarilishi. None
+                bo'lsa handler avvalgi Bo'lim 5 lean echo qaytaradi.
         """
         self._token = token
         self._owner_middleware = OwnerMiddleware(owner_ids or set())
         self._stt = stt or StubSTT()
+        self._tts = tts
         self._notifier = notifier or StubNotifier()
-        self._handler = MessageHandler(HandlerContext(stt=self._stt))
+        self._handler = MessageHandler(
+            HandlerContext(
+                stt=self._stt,
+                tts=tts,
+                orchestrator_runner=orchestrator_runner,
+            )
+        )
         self._running = False
 
         log.info(
@@ -182,10 +196,11 @@ class ZetBot:
         return InputType.TEXT
 
     async def start(self) -> None:
-        """Botni ishga tushirish (stub — haqiqiy polling emas).
+        """Botni ishga tushirish.
 
-        Bo'lim 5 lean: faqat holat o'zgarishi.
-        Haqiqiy aiogram polling prod da qo'shiladi.
+        Token bo'lsa — haqiqiy long-polling loopini (TelegramPoller) fon
+        task sifatida ishga tushiradi va darhol qaytadi (chaqiruvchi kutmaydi).
+        Tokensiz — stub rejimda ishlaydi (test/dev).
         """
         if self._running:
             log.warning("bot.already_running")
@@ -193,14 +208,36 @@ class ZetBot:
 
         if not self._token:
             log.warning("bot.no_token", msg="Token berilmagan — stub rejimda ishlaydi")
+            self._running = True
+            log.info("bot.started", mode="stub")
+            return
 
+        # Kech (deferred) import — polling.py ZetBot'ga bog'liq (TYPE_CHECKING)
+        from zet.telegram.polling import TelegramPoller
+
+        self._poller = TelegramPoller(token=self._token, bot=self)
+        self._poller_task = __import__("asyncio").create_task(self._poller.run_forever())
         self._running = True
-        log.info("bot.started", mode="stub" if not self._token else "ready")
+        log.info("bot.started", mode="polling")
 
     async def stop(self) -> None:
-        """Botni to'xtatish."""
+        """Botni to'xtatish — polling loopini yopadi va HTTP klientni tozalaydi."""
         if not self._running:
             return
+
+        poller = getattr(self, "_poller", None)
+        poller_task = getattr(self, "_poller_task", None)
+        if poller is not None:
+            poller.stop()
+        if poller_task is not None:
+            poller_task.cancel()
+            import asyncio
+            import contextlib
+
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await poller_task
+        if poller is not None:
+            await poller.aclose()
 
         self._running = False
         log.info("bot.stopped")

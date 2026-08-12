@@ -390,17 +390,47 @@ def get_tts() -> TTSProvider:
 def get_telegram_bot() -> object:
     """Global Telegram bot (singleton).
 
-    ZetBot qaytaradi — turini `object` qilish tsiklik importdan saqlanish uchun.
-    STT `get_stt()` orqali ulanadi (ElevenLabs Scribe yoki StubSTT).
+    ZetBot qaytaradi — turini `object` qilish tsiklik importdan saqlanish
+    uchun. STT/TTS `get_stt()`/`get_tts()` orqali ulanadi (ElevenLabs yoki
+    Stub*). `orchestrator_runner` — har xabar uchun yangi DB sessiya bilan
+    yangi `Orchestrator` quradi (`Orchestrator` request-scoped, ega bir
+    vaqtda faqat bitta chatga xabar yozadi, konkurrentlik muammosi yo'q).
     """
+    from zet.core.orchestrator import Orchestrator
+    from zet.db.session import session_scope
+    from zet.domain.command import Command
     from zet.telegram.bot import ZetBot
+    from zet.telegram.handlers import OrchestratorRunResult
 
     settings = get_settings()
     token = settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else ""
+
+    async def _runner(text: str) -> OrchestratorRunResult:
+        async with session_scope(get_session_factory()) as session:
+            router = ModelRouter(get_llm_providers(), session, settings)
+            orchestrator = Orchestrator(
+                router=router,
+                tool_registry=get_tool_registry(),
+                permission_policy=get_permission_policy(),
+                approval_service=get_approval_service(),
+                killswitch=get_killswitch(),
+                run_store=get_run_store(),
+                budget_usd=settings.run_max_usd,
+                max_steps=settings.run_max_steps,
+            )
+            command = Command(text=text, channel="telegram")
+            record = await orchestrator.start(command)
+            return OrchestratorRunResult(
+                text=record.result_summary or record.error or "(bo'sh natija)",
+                ok=record.error is None,
+                run_id=str(record.run_id),
+            )
 
     return ZetBot(
         token=token,
         owner_ids=settings.telegram_owner_id_set,
         stt=get_stt(),
+        tts=get_tts(),
         notifier=get_notifier(),
+        orchestrator_runner=_runner,
     )

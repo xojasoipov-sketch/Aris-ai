@@ -21,14 +21,43 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import re as _re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Final
 
 import structlog
 
 from zet.voice.stt import STTProvider
+from zet.voice.tts import TTSProvider
 
 log = structlog.get_logger(__name__)
+
+# Orchestrator har bir so'rov uchun yangi DB sessiyada quriladi — shu tufayli
+# HandlerContext'ga tayyor Orchestrator emas, uni yaratuvchi factory beriladi.
+# Bu ZetBot va boshqa chaqiruvchilar Orchestrator hayotini kuzatishi kerakligini
+# yashiradi (masalan async context manager).
+OrchestratorRunner = Callable[[str], Awaitable["OrchestratorRunResult"]]
+"""`text` → run natijasi. Muvaffaqiyat/xato — ikkalasi ham `OrchestratorRunResult`da."""
+
+
+@dataclass(frozen=True)
+class OrchestratorRunResult:
+    """`Orchestrator.start()` natijasining Telegram uchun sodda ko'rinishi.
+
+    Voice/text handler bir xil formatga suyaniladi — javob TTS orqali
+    ovozga ham o'girilishi mumkin (`text` — asosiy manba).
+    """
+
+    text: str
+    """Foydalanuvchiga ko'rsatiladigan matn (ovozga ham beriladi)."""
+
+    ok: bool = True
+    """Muvaffaqiyatlimi (True) yoki xato (False)."""
+
+    run_id: str | None = None
+    """`RunStore`dagi ID — approval kelsa `resume(run_id)` uchun."""
 
 
 class InputType(StrEnum):
@@ -98,6 +127,15 @@ class HandlerContext:
     stt: STTProvider | None = None
     """STT provayder (voice uchun)."""
 
+    tts: TTSProvider | None = None
+    """TTS provayder — ovozli javob uchun (yo'q bo'lsa faqat matn qaytadi)."""
+
+    orchestrator_runner: OrchestratorRunner | None = None
+    """Matn/ovozdan olingan buyruqni real Orchestrator orqali bajaruvchi factory."""
+
+    reply_with_voice: bool = False
+    """`True` bo'lsa har matn javobga TTS qo'shiladi (voice kirish uchun avtomatik)."""
+
     processed: list[TelegramInput] = field(default_factory=list)
     """Qayta ishlangan kirishlar ro'yxati (test uchun)."""
 
@@ -138,62 +176,91 @@ class MessageHandler:
                 return await self._handle_photo(input_)
             case InputType.DOCUMENT:
                 return await self._handle_document(input_)
-            case _:
-                log.warning("handler.unknown_type", input_type=input_.input_type)
+            case _:  # pragma: no cover — mypy: barcha InputType qamrab olingan
+                log.warning(  # type: ignore[unreachable]
+                    "handler.unknown_type", input_type=input_.input_type
+                )
                 return TelegramOutput(text="❓ Bu turdagi kirish hali qo'llab-quvvatlanmaydi.")
 
     async def _handle_text(self, input_: TelegramInput) -> TelegramOutput:
-        """Matnli xabarni qayta ishlash."""
+        """Matnli xabarni qayta ishlash — Orchestrator orqali."""
         text = input_.text or ""
         if not text.strip():
             return TelegramOutput(text="❓ Bo'sh xabar.")
 
-        log.info(
-            "handler.text",
-            user_id=input_.user_id,
-            text_length=len(text),
-        )
-
-        # Bo'lim 5 lean: Core pipeline chaqiruvi o'rniga echo
-        # To'liq integratsiya Bo'lim 7 da
-        return TelegramOutput(
-            text=(
-                f"✅ <b>Qabul qilindi</b>\n\n"
-                f"📝 <code>{_escape_html(text[:500])}</code>\n\n"
-                f"⏳ Core pipeline ulangan emas (Bo'lim 7)"
-            ),
-        )
+        log.info("handler.text", user_id=input_.user_id, text_length=len(text))
+        return await self._run_and_reply(text, voice_reply=self._ctx.reply_with_voice)
 
     async def _handle_voice(self, input_: TelegramInput) -> TelegramOutput:
-        """Ovozli xabarni qayta ishlash — STT → matn → Core."""
+        """Ovozli xabarni qayta ishlash — STT → Orchestrator → TTS (agar mavjud bo'lsa)."""
         if input_.voice_data is None:
             return TelegramOutput(text="❌ Ovoz ma'lumoti topilmadi.")
 
         if self._ctx.stt is None:
             return TelegramOutput(text="❌ STT provayder sozlanmagan.")
 
-        log.info(
-            "handler.voice",
-            user_id=input_.user_id,
-            audio_size=len(input_.voice_data),
-        )
+        log.info("handler.voice", user_id=input_.user_id, audio_size=len(input_.voice_data))
 
-        # STT — ovozdan matn
-        stt_result = await self._ctx.stt.transcribe(
-            input_.voice_data,
-            audio_format="ogg",
-        )
+        try:
+            stt_result = await self._ctx.stt.transcribe(input_.voice_data, audio_format="ogg")
+        except Exception as exc:
+            log.warning("handler.voice_stt_failed", error=str(exc))
+            return TelegramOutput(text=f"❌ Ovozni transkripsiya qilib bo'lmadi: {exc}")
 
-        # Matnni Core ga yuborish (lean: echo)
-        return TelegramOutput(
-            text=(
-                f"🎤 <b>Ovoz aniqlandi</b>\n\n"
-                f"📝 <code>{_escape_html(stt_result.text[:500])}</code>\n"
-                f"🌐 Til: {stt_result.language}, "
-                f"ishonch: {stt_result.confidence:.0%}\n\n"
-                f"⏳ Core pipeline ulangan emas (Bo'lim 7)"
-            ),
-        )
+        if not stt_result.text.strip():
+            return TelegramOutput(
+                text=f"❌ Ovozdan matn ajratib bo'lmadi (til={stt_result.language})."
+            )
+
+        # Voice kirish → default javob ham voice (agent gapiradi, ega gapirdi-ku)
+        return await self._run_and_reply(stt_result.text, voice_reply=True)
+
+    async def _run_and_reply(self, text: str, *, voice_reply: bool) -> TelegramOutput:
+        """Buyruqni Orchestrator orqali bajaradi va (kerak bo'lsa) TTS qo'shadi.
+
+        Orchestrator ulanmagan bo'lsa (test/lean rejim) — echo qaytaradi
+        (avvalgi Bo'lim 5 lean xatti-harakati bilan orqaga mos).
+        """
+        if self._ctx.orchestrator_runner is None:
+            reply_text = (
+                f"✅ <b>Qabul qilindi</b>\n\n"
+                f"📝 <code>{_escape_html(text[:500])}</code>\n\n"
+                f"⏳ Core pipeline ulangan emas"
+            )
+            return await self._maybe_add_voice(reply_text, voice_reply=voice_reply)
+
+        try:
+            result = await self._ctx.orchestrator_runner(text)
+        except Exception as exc:
+            log.warning("handler.orchestrator_failed", error=str(exc))
+            return TelegramOutput(text=f"❌ Xato: {_escape_html(str(exc)[:400])}")
+
+        # Muvaffaqiyatli natija — matn (agent chiqishi) + ixtiyoriy TTS
+        emoji = "✅" if result.ok else "⚠️"
+        reply_text = f"{emoji} {_escape_html(result.text[:3500])}"
+        return await self._maybe_add_voice(reply_text, voice_reply=voice_reply)
+
+    async def _maybe_add_voice(self, text: str, *, voice_reply: bool) -> TelegramOutput:
+        """TTS sozlangan va `voice_reply=True` bo'lsa — audio ham qo'shadi.
+
+        Matnni TTSga uzatishdan oldin HTML teglarini olib tashlaymiz —
+        ovoz "<b>" ni o'qib berishi ma'nisiz.
+        """
+        if not voice_reply or self._ctx.tts is None:
+            return TelegramOutput(text=text)
+
+        clean_for_speech = _strip_html(text)
+        if not clean_for_speech.strip():
+            return TelegramOutput(text=text)
+
+        try:
+            tts_result = await self._ctx.tts.synthesize(clean_for_speech)
+            voice_bytes: bytes | None = tts_result.audio_data
+        except Exception as exc:
+            log.warning("handler.tts_failed", error=str(exc))
+            voice_bytes = None
+
+        return TelegramOutput(text=text, voice_data=voice_bytes)
 
     async def _handle_command(self, input_: TelegramInput) -> TelegramOutput:
         """Bot buyrug'ini qayta ishlash (/start, /help, /status)."""
@@ -319,3 +386,12 @@ class MessageHandler:
 def _escape_html(text: str) -> str:
     """HTML maxsus belgilarni almashtrish."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_TAG_RE: Final = _re.compile(r"<[^>]+>")
+
+
+def _strip_html(text: str) -> str:
+    """HTML teglarni olib tashlaydi va entity'larni ochadi — TTS uchun toza matn."""
+    without_tags: str = _TAG_RE.sub("", text)
+    return without_tags.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").strip()
