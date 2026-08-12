@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from zet.api import deps as api_deps
@@ -11,8 +13,17 @@ from zet.telegram.notifier import StubNotifier
 
 
 @pytest.fixture(autouse=True)
-def _clear_caches() -> None:
-    """Har test o'z holatidan boshlaydi (lru_cache singleton'lar tozalanadi)."""
+def _clear_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Har test o'z holatidan boshlaydi (lru_cache singleton'lar tozalanadi).
+
+    `Settings` `.env` faylini CWD'dan nisbiy o'qiydi (`env_file=".env"`) —
+    ega mashinasida haqiqiy `.env` bo'lsa (kalitlar bilan), "sozlanmagan"
+    holatni tekshiruvchi testlar shu fayldan "sizib chiqqan" qiymatlarni
+    olardi. `tmp_path`ga CWD'ni almashtirib, bu testlar `.env`dan mustaqil
+    bo'lishini kafolatlaymiz — faqat monkeypatch qilingan env var'larga
+    tayanadi.
+    """
+    monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
     api_deps.get_notifier.cache_clear()
     yield

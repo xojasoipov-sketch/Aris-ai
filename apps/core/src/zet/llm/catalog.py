@@ -72,7 +72,7 @@ _T1: Final[tuple[ModelSpec, ...]] = (
     ModelSpec(
         key="google:gemini-flash",
         provider="google",
-        model="gemini-2.0-flash",
+        model="gemini-flash-latest",
         tier=ModelTier.T1_FREE,
         supports_vision=True,
         free_rpd=1500,
