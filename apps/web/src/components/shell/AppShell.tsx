@@ -86,11 +86,38 @@ function SoundToggle() {
   );
 }
 
+/* Mobil bottom-tab-bar — sidebar lg dan past ekranlarda shu bilan almashadi */
+function MobileTabBar({ pathname }: { pathname: string }) {
+  const TABS = [NAV[0], NAV[1], NAV[5], NAV[9], NAV[11]] as const;
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-[var(--border-hairline)] bg-[var(--bg-elevated)] lg:hidden">
+      {TABS.map(({ href, label, icon: I }) => {
+        const active = pathname === href;
+        return (
+          <Link
+            key={href}
+            href={href}
+            onClick={() => sound.play("tick")}
+            className={`flex flex-1 flex-col items-center gap-0.5 border-t-2 py-2 text-[10px] ${
+              active
+                ? "border-[var(--accent-blue)] text-[var(--text-primary)]"
+                : "border-transparent text-[var(--text-muted)]"
+            }`}
+          >
+            <I size={18} strokeWidth={1.5} className={active ? "text-[var(--accent-blue)]" : ""} />
+            {label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 function StatusBar() {
   const now = useNow();
   const uptime = useUptime();
   return (
-    <footer className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-6 py-1.5 text-xs">
+    <footer className="fixed inset-x-0 bottom-0 z-40 hidden items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-6 py-1.5 text-xs lg:flex">
       <div className="flex items-center gap-2">
         <span className="pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-[var(--status-online)]" />
         <span className="text-[var(--text-secondary)]">Tizim onlayn</span>
@@ -118,7 +145,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen">
       {/* ── Sidebar ── */}
-      <aside className="fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-[var(--border-hairline)] bg-[var(--bg-elevated)] pb-9">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-56 flex-col border-r border-[var(--border-hairline)] bg-[var(--bg-elevated)] pb-9 lg:flex">
         {/* ZET wordmark — nuqtali halqa logo */}
         <Link href="/" className="flex items-center gap-3 px-5 py-5">
           <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden>
@@ -178,7 +205,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       {/* ── Asosiy qism ── */}
-      <div className="ml-56 flex min-h-screen flex-1 flex-col pb-9">
+      <div className="flex min-h-screen flex-1 flex-col pb-16 lg:ml-56 lg:pb-9">
         <header className="sticky top-0 z-30 flex items-center justify-between gap-6 border-b border-[var(--border-hairline)] bg-[rgba(5,6,8,0.85)] px-8 py-3">
           <div className="flex max-w-md flex-1 items-center gap-2.5 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-4 py-2">
             <Search size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
@@ -201,6 +228,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <StatusBar />
+      <MobileTabBar pathname={pathname} />
     </div>
   );
 }
