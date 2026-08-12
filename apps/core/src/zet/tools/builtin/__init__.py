@@ -30,6 +30,7 @@ from zet.tools.builtin.instagram import (
     InstagramPublishPhotoTool,
     InstagramRecentMediaTool,
 )
+from zet.tools.builtin.memory_search import MemorySearchTool, SearchFn
 from zet.tools.builtin.note_list import NoteListTool
 from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteWriteTool
@@ -70,6 +71,7 @@ def build_default_registry(
     instagram_business_account_id: str | None = None,
     camera_provider: CameraProvider | None = None,
     desktop_provider: DesktopProvider | None = None,
+    memory_search_fn: SearchFn | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
 
@@ -98,6 +100,11 @@ def build_default_registry(
             (17-raqamli). Token bilan birga bo'lishi kerak.
         camera_provider: `camera.snapshot` uchun ulanish (default: `StubCamera`
             — real RTSP/EZVIZ hali ulanmagan).
+        memory_search_fn: berilsa — `memory.search` uzoq muddatli xotiradan
+            qidiradi. Berilmasa tool baribir ro'yxatda turadi, lekin
+            chaqirilganda ochiq xato beradi: Planner uni ko'rib turgani
+            ma'qul, aks holda ega haqidagi savolga yo'q eslatma fayllarini
+            qidirib reja tuzadi (jonli tekshiruvda aynan shunday bo'ldi).
         desktop_provider: `desktop.*` tool'lar uchun ulanish (default:
             `StubDesktop(available=False)` — headless server muhitida). ZET
             foydalanuvchining mahalliy Mac/Win kompyuterida ishga tushirilsa,
@@ -108,6 +115,7 @@ def build_default_registry(
     """
     registry = ToolRegistry()
     registry.register(TimeNowTool())
+    registry.register(MemorySearchTool(search_fn=memory_search_fn))
     registry.register(NoteWriteTool(notes_dir=notes_dir))
     registry.register(NoteReadTool(notes_dir=notes_dir))
     registry.register(NoteListTool(notes_dir=notes_dir))

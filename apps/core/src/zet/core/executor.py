@@ -230,18 +230,35 @@ class Executor:
                     f"Budjet tugadi: {self._spent_usd:.4f}/{self._budget_usd:.4f} USD"
                 )
 
-            # Dependency tekshiruvi
+            # Dependency tekshiruvi.
+            #
+            # Fikrlash qadami ISTISNO. U javob yozadigan qadam va uni
+            # o'tkazib yuborish egani javobsiz qoldiradi. Jonli misol:
+            # Planner "Men kimman?" savoliga o'ylab topilgan
+            # `note.read("user_profile")` qadamini qo'ydi, u yiqildi va
+            # javob qadami "dependency_not_ready" bo'lib ishga tushmadi —
+            # ega mutlaqo hech narsa ko'rmadi. Tool qadami uchun to'siq
+            # o'z kuchida qoladi: yo'q ma'lumot ustida tool ishlatish
+            # noto'g'ri natija beradi.
             if not ctx.is_step_ready(step):
-                log.warning(
-                    "executor.dependency_not_ready",
+                if step.tool_name is not None:
+                    log.warning(
+                        "executor.dependency_not_ready",
+                        step=step.position,
+                        depends_on=step.depends_on,
+                    )
+                    ctx.record(
+                        step.position,
+                        StepResult(
+                            step, status=StepStatus.SKIPPED, error="Dependency bajarilmagan"
+                        ),
+                    )
+                    continue
+                log.info(
+                    "executor.thinking_step_proceeds_without_deps",
                     step=step.position,
                     depends_on=step.depends_on,
                 )
-                ctx.record(
-                    step.position,
-                    StepResult(step, status=StepStatus.SKIPPED, error="Dependency bajarilmagan"),
-                )
-                continue
 
             # Qadamni bajarish
             result = await self._execute_step(step, ctx, trust=trust, dry_run=dry_run)
@@ -270,7 +287,16 @@ class Executor:
         if self._router is None:
             return ""
 
-        prior = [ctx.results[pos].text for pos in sorted(ctx.results) if pos in ctx.results]
+        # Yiqilgan qadam ham kontekstga kiradi — javob halol bo'lsin.
+        # Aks holda tool yiqilganda LLM buni bilmaydi va ega "hammasi
+        # joyida" degan taassurot oladi yoki javob umuman bo'sh chiqadi.
+        prior: list[str] = []
+        for pos in sorted(ctx.results):
+            prior_result = ctx.results[pos]
+            if prior_result.status is StepStatus.DONE:
+                prior.append(prior_result.text)
+            elif prior_result.error:
+                prior.append(f"[{pos}-qadam bajarilmadi: {prior_result.error}]")
 
         recalled: list[str] = []
         if self._recall is not None and self._command_text:

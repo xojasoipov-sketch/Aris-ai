@@ -68,7 +68,11 @@ INTENT_TOOL_SCHEMA: dict[str, object] = {
             "description": "Buyruq noaniqlik darajasi",
         },
         "clarification_question": {
-            "type": ["string", "null"],
+            # `["string", "null"]` EMAS. Bu to'g'ri JSON Schema, lekin Cohere
+            # uni rad etadi ("Array 'type' is unsupported for this model") va
+            # provayder HAR chaqiruvda yiqilardi. Maydon `required` ro'yxatida
+            # emas, ya'ni "yo'q" degani `null` bilan bir xil ma'noni beradi.
+            "type": "string",
             "description": "Agar ambiguity=high bo'lsa, foydalanuvchiga savol",
         },
         "confidence": {

@@ -25,7 +25,7 @@ from zet.core.state import CoreState
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
-from zet.domain.memory import MemoryQuery
+from zet.domain.memory import MemoryQuery, MemorySearchResult
 from zet.llm.base import LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.routed_provider import RoutedLLMProvider
@@ -93,6 +93,24 @@ def get_config() -> Settings:
 # ── Tool Registry ──────────────────────────────────────────────────
 
 
+async def _memory_search_fn(
+    query: str, limit: int, min_similarity: float
+) -> list[MemorySearchResult]:
+    """`memory.search` tooli uchun qidiruv — o'z sessiyasini ochadi.
+
+    Tool registry global singleton, xotira esa DB sessiyasiga bog'liq.
+    Shu sabab sessiya bu yerda, chaqiruv payti ochiladi — registry
+    qurilganda emas.
+    """
+    async with session_scope(get_session_factory()) as session:
+        settings = get_settings()
+        owner = await get_or_create_owner(session, external_id=settings.owner_id)
+        memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+        return await memory.search(
+            MemoryQuery(text=query, limit=limit, min_similarity=min_similarity)
+        )
+
+
 @lru_cache(maxsize=1)
 def get_tool_registry() -> ToolRegistry:
     """Global tool registry (singleton) — barcha builtin toollar bilan.
@@ -154,6 +172,7 @@ def get_tool_registry() -> ToolRegistry:
         ),
         instagram_business_account_id=settings.instagram_business_account_id or None,
         camera_provider=camera_provider,
+        memory_search_fn=_memory_search_fn,
     )
 
 

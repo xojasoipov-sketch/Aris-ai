@@ -29,6 +29,17 @@ QOIDALAR:
 8. `expected_outcome` — qadam muvaffaqiyatini tekshirish uchun.
 9. Agar vazifa juda murakkab bo'lsa, uni kichik qismlarga bo'l.
 
+EGA HAQIDAGI SAVOLLAR:
+Ega o'zi haqida so'rasa (kim ekani, nima ish qilishi, qaysi loyihalar,
+odatlari, afzalliklari) — ZET buni UZOQ MUDDATLI XOTIRADA saqlaydi.
+- Fikrlash qadami (tool'siz qadam) xotirani AVTOMATIK eslaydi, ya'ni
+  oddiy shaxsiy savolga BITTA tool'siz qadam yetarli.
+- Aniq va batafsil qidiruv kerak bo'lsa — `memory.search` toolidan
+  foydalan.
+- Eslatma fayllarida (`note.read`) ega profilini QIDIRMA. Bunday fayl
+  yo'q; o'ylab topilgan nom qadamni yiqitadi va javob umuman
+  yozilmaydi.
+
 CHEKLOVLAR:
 - Maksimal qadamlar soni: {max_steps}
 - Mavjud toollar: {available_tools}
@@ -57,8 +68,14 @@ PLANNER_TOOL_SCHEMA: dict[str, object] = {
                         "description": "Qadam tavsifi",
                     },
                     "tool_name": {
-                        "type": ["string", "null"],
-                        "description": "Ishlatiladigan tool nomi (null — faqat LLM fikrlashi)",
+                        # `["string", "null"]` EMAS — Cohere array-tipni rad
+                        # etadi va provayder har chaqiruvda yiqilardi. Maydon
+                        # `required`da yo'q, ya'ni tushirib qoldirish = null.
+                        "type": "string",
+                        "description": (
+                            "Ishlatiladigan tool nomi. Faqat LLM fikrlashi "
+                            "bo'lsa — maydonni umuman qo'shmang."
+                        ),
                     },
                     "tool_params": {
                         "type": "object",
@@ -79,7 +96,7 @@ PLANNER_TOOL_SCHEMA: dict[str, object] = {
                         "description": "Kirish ma'lumoti manbasi",
                     },
                     "expected_outcome": {
-                        "type": ["string", "null"],
+                        "type": "string",
                         "description": "Kutilgan natija tavsifi",
                     },
                     "depends_on": {

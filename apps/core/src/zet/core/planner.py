@@ -253,5 +253,8 @@ class Planner:
         parts.append("")
         parts.append("Iltimos, create_plan tool'ini qayta chaqiring va xatolarni to'g'rilang.")
         if plan is not None and any("tool mavjud emas" in e for e in errors):
-            parts.append("Faqat mavjud toollarni ishlating yoki tool_name=null qo'ying.")
+            parts.append(
+                "Faqat mavjud toollarni ishlating yoki `tool_name` maydonini "
+                "umuman qo'shmang (fikrlash qadami)."
+            )
         return "\n".join(parts)
