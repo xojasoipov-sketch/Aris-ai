@@ -42,6 +42,29 @@ class PlannerError(Exception):
     """Reja yaratishda xato."""
 
 
+_MODALITY_CLASSES = frozenset({TaskClass.VISION, TaskClass.SPEECH})
+"""Vazifa MAZMUNI rasm/ovoz bo'lgan sinflar."""
+
+
+def _planning_task_class(task_class: TaskClass) -> TaskClass:
+    """Reja tuzish uchun model sinfini tanlaydi.
+
+    `vision`/`speech` — vazifaning MAZMUNI haqida, reja tuzish haqida
+    emas. Planner prompti sof matn (`_build_user_prompt`), rasm yoki
+    ovoz unga umuman kirmaydi; rasmni tool o'zi ko'radi.
+
+    Ilgari bu sinf to'g'ridan-to'g'ri routerga uzatilardi va ega video
+    havolasi yuborganda reja tuzish bosqichi yiqilardi:
+
+        "Reja tuzib bo'lmadi: vision uchun provayder topilmadi —
+         google:gemini-flash: RateLimitError; anthropic:haiku: sozlanmagan"
+
+    Ya'ni ZET matn model bilan reja yozishi mumkin edi, lekin vision
+    zanjiri bo'sh bo'lgani uchun butun buyruq yiqildi.
+    """
+    return TaskClass.NORMAL if task_class in _MODALITY_CLASSES else task_class
+
+
 _PLAN_TOOL = ToolSpec(
     name="create_plan",
     description="Buyruqdan yaratilgan bajarish rejasi",
@@ -89,7 +112,7 @@ class Planner:
         Raises:
             PlannerError: LLM reja yasa olmadi
         """
-        effective_task_class = task_class or intent.task_class
+        effective_task_class = _planning_task_class(task_class or intent.task_class)
         if not available_tools and tool_specs:
             available_tools = [spec.name for spec in tool_specs]
 

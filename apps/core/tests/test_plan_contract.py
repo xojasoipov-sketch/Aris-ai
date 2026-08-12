@@ -27,8 +27,8 @@ from typing import Any
 import pytest
 
 from zet.core.executor import Executor
-from zet.core.planner import Planner
-from zet.domain.enums import PermissionLevel, StepStatus
+from zet.core.planner import Planner, _planning_task_class
+from zet.domain.enums import PermissionLevel, StepStatus, TaskClass
 from zet.domain.plan import Plan, PlanStep
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
@@ -204,3 +204,32 @@ class TestContractErrorDoesNotCrashTheRun:
         ctx = await executor.execute_plan(plan)
 
         assert ctx.results[0].retries == 0
+
+
+class TestPlanningDoesNotRequireAVisionModel:
+    """Reja tuzish sof matn — rasm/ovoz modeli talab qilinmasin.
+
+    Ega video havolasi yuborganda Intent uni `vision` deb belgiladi va
+    reja tuzish bosqichi "vision uchun provayder topilmadi" bilan
+    yiqildi. Holbuki Planner prompti matn: rasmni tool o'zi ko'radi.
+    """
+
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [
+            (TaskClass.VISION, TaskClass.NORMAL),
+            (TaskClass.SPEECH, TaskClass.NORMAL),
+        ],
+    )
+    def test_modality_classes_are_downgraded(
+        self, given: TaskClass, expected: TaskClass
+    ) -> None:
+        assert _planning_task_class(given) == expected
+
+    @pytest.mark.parametrize(
+        "task_class",
+        [TaskClass.SIMPLE, TaskClass.NORMAL, TaskClass.COMPLEX, TaskClass.CODING],
+    )
+    def test_text_classes_are_untouched(self, task_class: TaskClass) -> None:
+        """Murakkab vazifa kuchsiz modelga tushib qolmasin."""
+        assert _planning_task_class(task_class) == task_class
