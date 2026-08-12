@@ -1,16 +1,24 @@
 "use client";
 
-/** Buyruq paneli — dashboard'ning ish quroli (sifat standarti: orb endi
- * qahramon emas, 44px status-indikator; asosiy element — input).
+/** Buyruq paneli — dashboard'ning ish quroli (Z46.2).
  *
- * Holat mashinasi + tovushlar saqlanadi; javob pastda oddiy matn bloki
- * sifatida chiqadi (kontsept-art markaziy sahna YO'Q).
+ * ILGARI NIMA BO'LGAN. Dashboard'ning bosh ish quroli SOXTA edi:
+ *
+ *     const DEMO_REPLY = "SMM agent kanal statistikasini yig'yapti…";
+ *
+ * Har qanday buyruqqa 2200 ms "o'ylash" pauzasidan keyin AYNAN shu
+ * bitta jumla harfma-harf yozilardi. Backend'ga hech narsa bormasdi.
+ *
+ * Endi `POST /run` orqali haqiqiy buyruq yuboriladi va ZET'ning
+ * haqiqiy javobi ko'rsatiladi. Xato bo'lsa — xato ochiq aytiladi,
+ * jimgina soxta javob emas.
  */
 
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
+import { api } from "@/lib/api";
 import { CommandInput } from "@/components/ui/CommandInput";
 import { Panel } from "@/components/ui/primitives";
 import {
@@ -28,37 +36,48 @@ const TO_ORB: Record<AssistantState, OrbState> = {
   notification: "searching",
 };
 
-const DEMO_REPLY =
-  "SMM agent kanal statistikasini yig'yapti — tayyor bo'lganda xabar beraman.";
-
 export function CommandBar() {
   const { state, send } = useAssistant("sleep");
   const [input, setInput] = useState("");
   const [reply, setReply] = useState("");
+  const [failed, setFailed] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const aliveRef = useRef(true);
 
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  useEffect(() => {
+    aliveRef.current = true;
+    const pending = timers.current;
+    return () => {
+      aliveRef.current = false;
+      pending.forEach(clearTimeout);
+    };
+  }, []);
 
   const submit = useCallback(() => {
-    if (!input.trim() || state === "thinking") return;
+    const message = input.trim();
+    if (!message || state === "thinking") return;
     if (state === "sleep" || state === "minimized") send("WAKE");
     setReply("");
+    setFailed(false);
     send("SUBMIT");
-    timers.current.push(
-      setTimeout(() => {
-        send("RESPOND");
-        let i = 0;
-        const typer = setInterval(() => {
-          i += 2;
-          setReply(DEMO_REPLY.slice(0, i));
-          if (i >= DEMO_REPLY.length) {
-            clearInterval(typer);
-            timers.current.push(setTimeout(() => send("DONE"), 500));
-          }
-        }, 22);
-      }, 2200),
-    );
     setInput("");
+
+    void (async () => {
+      const res = await api.run(message);
+      // Javob kelguncha komponent yopilgan bo'lishi mumkin.
+      if (!aliveRef.current) return;
+
+      send("RESPOND");
+      if (res.ok) {
+        setReply(res.data.message || "(bo'sh javob)");
+      } else {
+        // Xatoni SOXTA javob bilan yashirmaymiz — ega nima
+        // bo'lganini bilishi kerak.
+        setFailed(true);
+        setReply(res.error);
+      }
+      timers.current.push(setTimeout(() => send("DONE"), 400));
+    })();
   }, [input, state, send]);
 
   return (
@@ -118,11 +137,12 @@ export function CommandBar() {
             transition={{ duration: 0.25, ease: "easeOut" }}
             className="overflow-hidden"
           >
-            <p className="mt-3 border-t border-[var(--border-hairline)] pt-3 text-sm leading-relaxed text-[var(--text-primary)]">
+            <p
+              className={`mt-3 border-t border-[var(--border-hairline)] pt-3 text-sm leading-relaxed ${
+                failed ? "text-[var(--status-alert)]" : "text-[var(--text-primary)]"
+              }`}
+            >
               {reply}
-              {state === "speaking" ? (
-                <span className="pulse-dot ml-0.5 inline-block h-3.5 w-[2px] bg-[var(--accent-blue)] align-middle" />
-              ) : null}
             </p>
           </motion.div>
         ) : null}

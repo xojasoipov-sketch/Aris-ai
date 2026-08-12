@@ -10,12 +10,12 @@
  * real /route endpoint keyin ulanadi.
  */
 
-import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Waveform } from "@/components/assistant/Waveform";
 import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
+import { api } from "@/lib/api";
 import { AgentStatusChip } from "@/components/ui/AgentStatusChip";
 import { CommandInput } from "@/components/ui/CommandInput";
 import {
@@ -38,23 +38,7 @@ interface Msg {
   text: string;
 }
 
-const DEMO_REPLIES = [
-  "SMM agent kanal statistikasini yig'di: oxirgi hafta +340 a'zo, eng yaxshi post — seshanba kungi video.",
-  "Bugungi jadval: 3 vazifa kutmoqda, 08:00 briefing tayyorlandi. Birinchisidan boshlaymi?",
-  "Developer agent PR #42'ni ko'rib chiqdi — 2 ta izoh qoldirdi, CI yashil.",
-];
-
 /* Selektor pill — model/kontekst/tool ko'rsatkichi (hozircha statik) */
-function SelectorPill({ label, value }: { label: string; value: string }) {
-  return (
-    <button className="flex items-center gap-1.5 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-3.5 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--border-active)] hover:text-[var(--text-primary)]">
-      <span className="text-[var(--text-muted)]">{label}:</span>
-      <span className="text-[var(--text-primary)]">{value}</span>
-      <ChevronDown size={13} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-    </button>
-  );
-}
-
 export default function AiChatPage() {
   const { state, send } = useAssistant("listening");
   const [messages, setMessages] = useState<Msg[]>([
@@ -65,7 +49,15 @@ export default function AiChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const nextId = useRef(2);
 
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    const pending = timers.current;
+    return () => {
+      aliveRef.current = false;
+      pending.forEach(clearTimeout);
+    };
+  }, []);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, state]);
@@ -79,38 +71,28 @@ export default function AiChatPage() {
     setInput("");
     send("SUBMIT");
 
-    const reply = DEMO_REPLIES[Math.floor(Math.random() * DEMO_REPLIES.length)];
-    timers.current.push(
-      setTimeout(() => {
-        send("RESPOND");
-        const msgId = nextId.current++;
-        setMessages((m) => [...m, { id: msgId, role: "assistant", text: "" }]);
-        let i = 0;
-        const typer = setInterval(() => {
-          i += 2;
-          setMessages((m) =>
-            m.map((msg) => (msg.id === msgId ? { ...msg, text: reply.slice(0, i) } : msg)),
-          );
-          if (i >= reply.length) {
-            clearInterval(typer);
-            timers.current.push(setTimeout(() => send("DONE"), 500));
-          }
-        }, 24);
-      }, 2400),
-    );
+    void (async () => {
+      const res = await api.run(text);
+      if (!aliveRef.current) return;
+
+      send("RESPOND");
+      setMessages((m) => [
+        ...m,
+        {
+          id: nextId.current++,
+          role: "assistant",
+          // Xato SOXTA javob bilan yashirilmaydi.
+          text: res.ok ? res.data.message || "(bo'sh javob)" : `Xato: ${res.error}`,
+        },
+      ]);
+      timers.current.push(setTimeout(() => send("DONE"), 400));
+    })();
   }, [input, state, send]);
 
   const voiceActive = state === "listening" || state === "speaking";
 
   return (
     <div className="mx-auto flex h-[calc(100vh-8.5rem)] max-w-3xl flex-col px-6 py-4">
-      {/* Model/kontekst selektorlar */}
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <SelectorPill label="Model" value="T1 · Gemini Flash" />
-        <SelectorPill label="Xotira" value="To'liq" />
-        <SelectorPill label="Tool" value="24 ta" />
-      </div>
-
       {/* Orb + waveform */}
       <div className="flex flex-col items-center">
         <button

@@ -1,10 +1,19 @@
 "use client";
 
-/** Sozlamalar (/settings) — FAZA 4 speci: bo'limlar, accent-color picker
- * (haqiqiy ishlaydi — --accent-blue ni almashtiradi), toggle'lar.
+/** Sozlamalar (/settings) — TEKSHIRILGAN holat bilan (Z46.2).
  *
- * Xavfsizlik: integratsiyalarda faqat sozlangan/sozlanmagan HOLAT (bool)
- * ko'rsatiladi — hech qanday sir (SecretStr) frontend'ga chiqmaydi.
+ * ILGARI NIMA BO'LGAN. Integratsiya holati sahifa faylida QO'LDA
+ * yozilgan massiv edi va har bir yozuvda `configured` bayrog'i
+ * qo'lda `true`/`false` qilib qo'yilgandi. Ya'ni sahifa "Telegram
+ * bot — Sozlangan" deb ko'rsatardi, hech qanday tekshiruvsiz: kalit
+ * o'chirilgan bo'lsa ham xuddi shu yozuv chiqaverardi.
+ *
+ * Endi `GET /integrations` orqali `.env`dagi HAQIQIY holat keladi.
+ * Sirning O'ZI baribir chiqmaydi — faqat bor/yo'qligi va sababi.
+ *
+ * Ikkita o'lik toggle ("Tungi rejim", "Bildirishnomalar") olib
+ * tashlandi: ular holatga yozardi-yu, qiymat HECH QAYERDA o'qilmasdi
+ * — bosish hech narsani o'zgartirmasdi.
  */
 
 import { motion } from "motion/react";
@@ -12,26 +21,17 @@ import { useState } from "react";
 
 import { SettingsRow as Row, Toggle } from "@/components/ui/forms";
 import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
+import { api } from "@/lib/api";
 import { sound } from "@/lib/sound";
+import { useResource } from "@/lib/useResource";
 
 /* Accent variantlari — master tizim default: #4C8DFF */
 const ACCENTS = ["#4C8DFF", "#22C55E", "#F59E0B", "#EC4899", "#A78BFA", "#EF4444"] as const;
 
-const INTEGRATIONS = [
-  { name: "Telegram bot", configured: true },
-  { name: "ElevenLabs (ovoz)", configured: true },
-  { name: "Google Gemini (T1)", configured: true },
-  { name: "Mistral (T1)", configured: true },
-  { name: "YouTube Data API", configured: false },
-  { name: "Instagram Graph API", configured: false },
-  { name: "GitHub", configured: false },
-] as const;
-
 export default function SettingsPage() {
   const [accent, setAccent] = useState<string>(ACCENTS[0]);
   const [soundOn, setSoundOn] = useState(true);
-  const [nightMode, setNightMode] = useState(true);
-  const [notifs, setNotifs] = useState(true);
+  const integrations = useResource(() => api.integrations(), 30_000);
 
   const applyAccent = (c: string) => {
     setAccent(c);
@@ -65,9 +65,6 @@ export default function SettingsPage() {
                 ))}
               </div>
             </Row>
-            <Row label="Tungi rejim">
-              <Toggle on={nightMode} onChange={setNightMode} />
-            </Row>
             <Row label="UI zichligi">
               <span className="text-sm text-[var(--text-secondary)]">Qulay</span>
             </Row>
@@ -87,9 +84,6 @@ export default function SettingsPage() {
                 }}
               />
             </Row>
-            <Row label="Bildirishnomalar">
-              <Toggle on={notifs} onChange={setNotifs} />
-            </Row>
             <Row label="Til">
               <span className="text-sm text-[var(--text-secondary)]">O'zbekcha</span>
             </Row>
@@ -108,23 +102,34 @@ export default function SettingsPage() {
             </span>
           </div>
           <div className="mt-2">
-            {INTEGRATIONS.map((i) => (
-              <Row key={i.name} label={i.name}>
-                <div className="flex items-center gap-2">
-                  <StatusDot
-                    color={i.configured ? "var(--status-online)" : "var(--status-offline)"}
-                  />
-                  <span
-                    className="text-xs"
-                    style={{
-                      color: i.configured ? "var(--status-online)" : "var(--text-muted)",
-                    }}
-                  >
-                    {i.configured ? "Sozlangan" : "Sozlanmagan"}
-                  </span>
-                </div>
-              </Row>
-            ))}
+            {integrations.state.kind === "loading" ? (
+              <p className="py-3 text-xs text-[var(--text-muted)]">Tekshirilmoqda…</p>
+            ) : null}
+            {integrations.state.kind === "error" ? (
+              <p className="py-3 text-xs text-[var(--status-alert)]">
+                Holatni o&apos;qib bo&apos;lmadi: {integrations.state.message}
+              </p>
+            ) : null}
+            {integrations.state.kind === "ready"
+              ? integrations.state.data.map((i) => (
+                  <Row key={i.key} label={i.label}>
+                    <div className="flex items-center gap-2">
+                      <StatusDot
+                        color={i.configured ? "var(--status-online)" : "var(--status-offline)"}
+                      />
+                      <span
+                        className="text-xs"
+                        style={{
+                          color: i.configured ? "var(--status-online)" : "var(--text-muted)",
+                        }}
+                        title={i.detail}
+                      >
+                        {i.configured ? "Sozlangan" : i.detail || "Sozlanmagan"}
+                      </span>
+                    </div>
+                  </Row>
+                ))
+              : null}
           </div>
         </Panel>
 
