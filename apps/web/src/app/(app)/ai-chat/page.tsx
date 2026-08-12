@@ -115,14 +115,14 @@ export default function AiChatPage() {
       <div className="flex flex-col items-center">
         <button
           aria-label="ZET holati"
-          className="relative h-[260px] w-[260px] cursor-pointer outline-none"
+          className="relative h-[150px] w-[150px] cursor-pointer outline-none"
           onClick={() => {
             if (state === "sleep") send("WAKE");
           }}
         >
           <NeuroOrb state={TO_ORB[state]} className="absolute inset-0" />
         </button>
-        <Waveform active={voiceActive} width={300} height={40} className="-mt-3" />
+        <Waveform active={voiceActive} width={240} height={32} className="-mt-1" />
       </div>
 
       {/* Chat oqimi */}

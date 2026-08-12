@@ -98,7 +98,6 @@ function MobileTabBar({ pathname }: { pathname: string }) {
           <Link
             key={href}
             href={href}
-            onClick={() => sound.play("tick")}
             className={`flex flex-1 flex-col items-center gap-0.5 border-t-2 py-2 text-[10px] ${
               active
                 ? "border-[var(--accent-blue)] text-[var(--text-primary)]"
@@ -185,7 +184,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Link
                 key={href}
                 href={href}
-                onClick={() => sound.play("tick")}
                 className={`flex items-center gap-3 border-l-2 py-2 pl-3.5 pr-3 text-sm transition-colors ${
                   active
                     ? "border-[var(--accent-blue)] bg-[var(--surface-hover)] text-[var(--text-primary)]"

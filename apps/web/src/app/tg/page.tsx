@@ -57,7 +57,7 @@ function ChatTab() {
       <div className="flex flex-1 flex-col items-center justify-center">
         <button
           aria-label="ZET"
-          className="h-52 w-52"
+          className="h-40 w-40"
           onClick={() => {
             haptic("light");
             sound.play(listening ? "sleep" : "wake");
