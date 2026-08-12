@@ -88,6 +88,17 @@ export interface AgentDto {
   total_tool_calls: number;
 }
 
+/** POST /agents/{name}/run javobi (backend `AgentRunResponse`ga mos). */
+export interface AgentRunResultDto {
+  agent_name: string;
+  success: boolean;
+  output: string;
+  sources: string[];
+  tool_calls_count: number;
+  steps_count: number;
+  error: string | null;
+}
+
 /** GET /automation/stats javobi — bo'lim → o'lchov → son. */
 export type AutomationStatsDto = Record<string, Record<string, number>>;
 
@@ -255,6 +266,21 @@ export const api = {
 
   /** Haqiqiy agentlar — ilgari dashboard'da 5 ta QOTIRILGAN agent turardi. */
   agents: () => call<AgentDto[]>("/agents"),
+
+  agent: {
+    /** Bitta agentga vazifa berish — javob HAQIQIY LLM natijasi. */
+    run: (name: string, task: string) =>
+      call<AgentRunResultDto>(`/agents/${encodeURIComponent(name)}/run`, {
+        method: "POST",
+        body: JSON.stringify({ task }),
+      }),
+    /** V-11 lifecycle: activate | pause | disable | archive | ... */
+    setStatus: (name: string, action: string, reason = "") =>
+      call<AgentDto>(`/agents/${encodeURIComponent(name)}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ action, reason }),
+      }),
+  },
 
   automationStats: () => call<AutomationStatsDto>("/automation/stats"),
 

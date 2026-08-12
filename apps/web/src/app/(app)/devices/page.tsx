@@ -11,27 +11,25 @@
  * "Ulanmagan" — bu xato EMAS, kutilgan holat (docs/11 §2.1).
  */
 
-import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { motion } from "motion/react";
+import { useEffect, useState } from "react";
 
-import {
-  ApprovalCard,
-  AuditRow,
-  ConnectionBadge,
-  KillSwitchButton,
-  type ApprovalInfo,
-  type AuditOutcome,
-} from "@/components/ui/devices";
+import { ConnectionBadge, KillSwitchButton } from "@/components/ui/devices";
 import { Button, Panel, Eyebrow } from "@/components/ui/primitives";
 import { Tabs } from "@/components/ui/Tabs";
 import { api } from "@/lib/api";
+import { useResource } from "@/lib/useResource";
 import { sound } from "@/lib/sound";
+
+const DISABLED_HINT =
+  "Bu amallar ZET o'z Mac/Win kompyuteringizda ishga tushirilganda faollashadi — " +
+  "serverda `desktop.*` tool'lari hech qayerga bormaydi.";
 
 /* ── Hotkey builder (docs/11 §2.3) ────────────────────────────── */
 
 const MODIFIERS = ["ctrl", "cmd", "alt", "shift"] as const;
 
-function HotkeyBuilder({ onSubmit }: { onSubmit: (keys: string[]) => void }) {
+function HotkeyBuilder() {
   const [mods, setMods] = useState<string[]>([]);
   const [key, setKey] = useState("");
 
@@ -70,12 +68,7 @@ function HotkeyBuilder({ onSubmit }: { onSubmit: (keys: string[]) => void }) {
           Natija: <span className="text-[var(--text-primary)]">{combo.join("+")}</span>
         </div>
       ) : null}
-      <Button
-        variant="primary"
-        className="mt-3"
-        disabled={!key.trim()}
-        onClick={() => onSubmit(combo)}
-      >
+      <Button variant="primary" className="mt-3" disabled title={DISABLED_HINT}>
         Yuborish
       </Button>
     </div>
@@ -84,59 +77,27 @@ function HotkeyBuilder({ onSubmit }: { onSubmit: (keys: string[]) => void }) {
 
 /* ── Kompyuter tab ────────────────────────────────────────────── */
 
-interface AuditEntry {
-  time: string;
-  tool: string;
-  detail: string;
-  outcome: AuditOutcome;
-  latencyMs?: number;
-}
-
 function ComputerTab() {
-  const [pending, setPending] = useState<ApprovalInfo | null>(null);
-  const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [text, setText] = useState("");
   const [coords, setCoords] = useState<{ x: number; y: number } | null>(null);
 
-  /* Amal so'rovi → approval karta (V-32: EXECUTE hech qachon to'g'ridan-to'g'ri emas).
-   * Backend ulanmagan holatda ham oqim ko'rinadi (demo approval). */
-  const requestAction = useCallback(
-    (tool: string, reason: string, preview: Record<string, unknown>) => {
-      sound.play("approval");
-      setPending({
-        id: `local-${Date.now()}`,
-        toolName: tool,
-        reason,
-        preview,
-        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
-      });
-    },
-    [],
-  );
-
-  const decide = useCallback(
-    (approved: boolean) => {
-      if (!pending) return;
-      const now = new Date().toLocaleTimeString("uz-UZ", { hour12: false });
-      setAudit((cur) => [
-        {
-          time: now,
-          tool: pending.toolName,
-          detail: Object.values(pending.preview).map(String).join(" "),
-          outcome: approved ? "done" : "rejected",
-          // Kechikish O'LCHANMAYDI: bu sahifadagi amal hali haqiqiy
-          // qurilmaga bormaydi. Ilgari bu yerda
-          // `Math.floor(80 + Math.random() * 200)` turardi — audit
-          // jurnaliga o'ylab topilgan millisekund yozilardi.
-          latencyMs: undefined,
-        },
-        ...cur.slice(0, 19),
-      ]);
-      sound.play(approved ? "success" : "error");
-      setPending(null);
-    },
-    [pending],
-  );
+  /* SOXTA TASDIQ OQIMI OLIB TASHLANDI (Z48.4).
+   *
+   * Ilgari "Yuborish" bosilganda tasdiq kartasi chiqardi, tasdiqlangach
+   * esa "Amallar tarixi"ga `done` deb YOZILARDI — holbuki hech qanday
+   * amal bajarilmagan edi. Server headless, `desktop.*` tool'lari
+   * `StubDesktop(available=False)` bilan ishlaydi va hech qayerga
+   * bormaydi.
+   *
+   * Bu soxta tugmadan ham yomonroq: audit jurnali bajarilmagan amalni
+   * "bajarildi" deb YOZIB QO'YARDI. Audit yozuvi yolg'on bo'lsa, undan
+   * hech qanday foyda qolmaydi.
+   *
+   * Maydonlar qoldirildi (koordinata, matn, hotkey — ular haqiqiy
+   * ma'lumot tayyorlaydi), lekin yuborish O'CHIRILGAN: ZET eganing o'z
+   * kompyuterida ishga tushirilib, `desktop.*` haqiqiy provayderga
+   * ulanmaguncha bu amallar mumkin emas.
+   */
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
@@ -200,16 +161,7 @@ function ComputerTab() {
               placeholder="Yoziladigan matn..."
               className="mt-2 w-full resize-none rounded-lg border border-[var(--border-hairline)] bg-transparent p-2.5 text-sm outline-none focus:border-[var(--accent-blue)]"
             />
-            <Button
-              variant="primary"
-              className="mt-2"
-              disabled={!text.trim()}
-              onClick={() =>
-                requestAction("desktop.type_text", "Kursor joylashuvida matn yozish", {
-                  text: text.slice(0, 60) + (text.length > 60 ? "…" : ""),
-                })
-              }
-            >
+            <Button variant="primary" className="mt-2" disabled title={DISABLED_HINT}>
               Yuborish
             </Button>
           </Panel>
@@ -217,13 +169,7 @@ function ComputerTab() {
           <Panel className="p-4">
             <Eyebrow>Tugma bosish</Eyebrow>
             <div className="mt-2">
-              <HotkeyBuilder
-                onSubmit={(keys) =>
-                  requestAction("desktop.key_press", "Hotkey kombinatsiyasi", {
-                    keys: keys.join("+"),
-                  })
-                }
-              />
+              <HotkeyBuilder />
             </div>
           </Panel>
 
@@ -247,61 +193,32 @@ function ComputerTab() {
             <p className="mt-2 text-[11px] text-[var(--text-muted)]">
               Yoki ekran ko'zgusiga bosing — koordinata avtomatik to'ldiriladi
             </p>
-            <Button
-              variant="primary"
-              className="mt-2"
-              disabled={!coords}
-              onClick={() =>
-                coords &&
-                requestAction("desktop.mouse_click", "Sichqoncha bosish", {
-                  x: coords.x,
-                  y: coords.y,
-                  button: "left",
-                })
-              }
-            >
+            <Button variant="primary" className="mt-2" disabled title={DISABLED_HINT}>
               Yuborish
             </Button>
           </Panel>
         </div>
 
-        {/* Audit log (docs/11 §2.5) */}
-        <Panel className="px-4 py-3">
-          <Eyebrow>Amallar tarixi</Eyebrow>
-          <div className="mt-2">
-            {audit.length === 0 ? (
-              <p className="py-3 text-center text-xs text-[var(--text-muted)]">
-                Hozircha amal yo'q
-              </p>
-            ) : (
-              audit.map((a, i) => <AuditRow key={i} {...a} />)
-            )}
-          </div>
-        </Panel>
+        {/* Audit jurnali OLIB TASHLANDI: u bajarilmagan amalni
+            "bajarildi" deb yozardi. Haqiqiy amallar tarixi ZET run'lari
+            orqali backend'da yuritiladi (`audit_log` jadvali). */}
       </div>
 
-      {/* O'ng: approval zonasi */}
+      {/* O'ng: tasdiq zonasi haqida HALOL izoh.
+          Ilgari bu yerda MAHALLIY tasdiq kartasi chiqardi — hech qanday
+          backend tasdig'i emas edi. */}
       <div className="space-y-4">
-        <AnimatePresence>
-          {pending ? (
-            <ApprovalCard
-              key={pending.id}
-              approval={pending}
-              onApprove={() => decide(true)}
-              onReject={() => decide(false)}
-            />
-          ) : (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <Panel className="p-5 text-center">
-                <Eyebrow>Tasdiq zonasi</Eyebrow>
-                <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                  EXECUTE amallar shu yerda tasdiq kutadi (V-32). Telegram orqali ham
-                  tasdiqlash mumkin — ikkalasi bitta xizmatga yozadi.
-                </p>
-              </Panel>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <Panel className="p-5">
+          <Eyebrow>Tasdiq zonasi</Eyebrow>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
+            EXECUTE amallar tasdiq talab qiladi (V-32) va tasdiq backend&apos;dagi run
+            bilan bog&apos;lanadi — Telegram orqali ham, shu yerda ham bitta xizmatga
+            yoziladi.
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
+            {DISABLED_HINT}
+          </p>
+        </Panel>
       </div>
     </div>
   );
@@ -310,21 +227,47 @@ function ComputerTab() {
 /* ── Telefon tab (docs/11 §3 — Talqin A) ──────────────────────── */
 
 function PhoneTab() {
+  /* ILGARI uchta qatorning HAMMASI qotirilgan edi:
+   *
+   *     ["Bog'langan Telegram", "@ega (owner ID tekshirilgan ✓)"]
+   *     ["Ovozli javob", "Yoqilgan (ElevenLabs)"]
+   *
+   * Ya'ni token umuman sozlanmagan bo'lsa ham "tekshirilgan ✓" va
+   * "Yoqilgan" deb turardi. Endi holat `GET /integrations` dan —
+   * tekshirilgan sozlamadan. */
+  const { state } = useResource(() => api.integrations(), 30_000);
+  const rows = state.kind === "ready" ? state.data : [];
+  const find = (key: string) => rows.find((r) => r.key === key);
+
+  const telegram = find("telegram");
+  const voice = find("elevenlabs");
+
   return (
     <div className="max-w-md">
       <Panel className="p-6">
         <Eyebrow>Telefon</Eyebrow>
         <div className="mt-4 space-y-3 text-sm">
-          {(
-            [
-              ["Bog'langan Telegram", "@ega (owner ID tekshirilgan ✓)"],
-              ["Boshqaruv kanali", "Telegram bot + Mini App"],
-              ["Ovozli javob", "Yoqilgan (ElevenLabs)"],
-            ] as const
-          ).map(([k, v]) => (
-            <div key={k} className="flex items-baseline justify-between gap-4">
-              <span className="text-[var(--text-muted)]">{k}</span>
-              <span className="text-right text-[var(--text-primary)]">{v}</span>
+          {[
+            {
+              label: "Telegram bot",
+              value: telegram?.detail ?? "—",
+              ok: telegram?.configured ?? false,
+            },
+            { label: "Boshqaruv kanali", value: "Telegram bot + Mini App", ok: true },
+            {
+              label: "Ovozli javob",
+              value: voice?.detail ?? "—",
+              ok: voice?.configured ?? false,
+            },
+          ].map(({ label, value, ok }) => (
+            <div key={label} className="flex items-baseline justify-between gap-4">
+              <span className="text-[var(--text-muted)]">{label}</span>
+              <span
+                className="text-right"
+                style={{ color: ok ? "var(--text-primary)" : "var(--text-muted)" }}
+              >
+                {state.kind === "loading" ? "tekshirilmoqda…" : value}
+              </span>
             </div>
           ))}
         </div>
