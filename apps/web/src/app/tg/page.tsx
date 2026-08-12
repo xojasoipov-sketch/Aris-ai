@@ -18,7 +18,10 @@ import { NeuroOrb } from "@/components/core/NeuroOrb";
 import { AgentListItem, ProgressRing } from "@/components/ui/cards";
 import { CommandInput } from "@/components/ui/CommandInput";
 import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
+import { api } from "@/lib/api";
 import { haptic, initTelegramApp } from "@/lib/telegram";
+import { useBackendHealth } from "@/lib/useBackendHealth";
+import { useResource } from "@/lib/useResource";
 import { sound } from "@/lib/sound";
 
 type Tab = "chat" | "agents" | "tasks" | "camera" | "settings";
@@ -31,27 +34,11 @@ const TABS: { id: Tab; icon: typeof Bot; label: string }[] = [
   { id: "settings", icon: Settings, label: "Sozlash" },
 ];
 
-const AGENTS = [
-  { name: "CEO Agent", division: "Strategiya", status: "online" },
-  { name: "SMM Agent", division: "Marketing", status: "working" },
-  { name: "Developer Agent", division: "Texnologiya", status: "online" },
-  { name: "Research Agent", division: "Intellekt", status: "thinking" },
-  { name: "HR Agent", division: "Boshqaruv", status: "offline" },
-] as const;
-
-const TASKS = [
-  { time: "10:00", title: "SMM strategiyani yangilash" },
-  { time: "12:30", title: "Analitika hisobotini tayyorlash" },
-  { time: "14:00", title: "Loyiha ko'rigi" },
-  { time: "16:00", title: "Mijoz uchun taklif tayyorlash" },
-  { time: "18:30", title: "Zaxira nusxasini yaratish" },
-] as const;
-
-const CAMERAS = ["Old eshik", "Hovli", "Garaj", "Ofis"] as const;
-
 function ChatTab() {
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(true);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
   return (
     <div className="flex h-full flex-col items-center justify-between py-6">
       <div className="flex flex-1 flex-col items-center justify-center">
@@ -67,50 +54,116 @@ function ChatTab() {
           <NeuroOrb state={listening ? "listening" : "idle"} className="h-full w-full" />
         </button>
         <p className="mt-2 text-sm text-[var(--text-secondary)]">
-          {listening ? "Eshityapman…" : "Qanday yordam beray?"}
+          {sending
+            ? "O'ylayapman…"
+            : reply || (listening ? "Eshityapman…" : "Qanday yordam beray?")}
         </p>
       </div>
       <CommandInput
         value={input}
         onChange={setInput}
         placeholder="Buyruq yozing…"
+        disabled={sending}
         onSubmit={() => {
+          const text = input.trim();
+          if (!text || sending) return;
           haptic("medium");
           setInput("");
+          setSending(true);
+          setReply("");
+          // Ilgari bu yerda faqat `setInput("")` bor edi — yozilgan
+          // xabar hech qayerga bormay yo'qolardi.
+          void api.run(text, "tg").then((res) => {
+            setReply(res.ok ? res.data.message : `Xato: ${res.error}`);
+            setSending(false);
+          });
         }}
       />
     </div>
   );
 }
 
+/** Backend `AgentStatus` → UI holati.
+ *
+ * "working"/"thinking" ATAYIN yo'q: backend jonli signal bermaydi,
+ * shuning uchun ular o'ylab topilgan holat bo'lardi. Ilgari bu
+ * sahifada aynan shu ikkisi qotirilgan edi. */
+function toUiStatus(status: string): "online" | "offline" | "paused" {
+  if (status === "active") return "online";
+  if (status === "paused") return "paused";
+  return "offline";
+}
+
 function AgentsTab() {
+  const { state } = useResource(() => api.agents(), 20_000);
   return (
     <div className="space-y-3 py-4">
-      <Eyebrow>Faol agentlar</Eyebrow>
+      <Eyebrow>Agentlar</Eyebrow>
       <Panel className="p-2">
-        {AGENTS.map((a) => (
-          <AgentListItem key={a.name} {...a} />
-        ))}
+        {state.kind === "loading" ? (
+          <p className="px-3 py-4 text-xs text-[var(--text-muted)]">Yuklanmoqda…</p>
+        ) : null}
+        {state.kind === "error" ? (
+          <p className="px-3 py-4 text-xs text-[var(--status-alert)]">{state.message}</p>
+        ) : null}
+        {state.kind === "ready" && state.data.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-[var(--text-muted)]">Agent yo&apos;q</p>
+        ) : null}
+        {state.kind === "ready"
+          ? state.data.map((a) => (
+              <AgentListItem
+                key={a.name}
+                name={a.name}
+                division={a.division}
+                status={toUiStatus(a.status)}
+              />
+            ))
+          : null}
       </Panel>
     </div>
   );
 }
 
 function TasksTab() {
+  const { state } = useResource(() => api.tasks.list(), 20_000);
+  const tasks = state.kind === "ready" ? state.data : [];
+  const done = tasks.filter((t) => t.status === "done").length;
+  // Ilgari bu `percent={68}` — qotirilgan son edi.
+  const percent = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+
   return (
     <div className="space-y-4 py-4">
       <div className="flex items-center justify-between">
-        <Eyebrow>Bugungi vazifalar</Eyebrow>
-        <ProgressRing percent={68} size={52} />
+        <Eyebrow>Vazifalar</Eyebrow>
+        {tasks.length ? <ProgressRing percent={percent} size={52} /> : null}
       </div>
       <Panel className="p-2">
-        {TASKS.map((t) => (
+        {state.kind === "loading" ? (
+          <p className="px-3 py-4 text-xs text-[var(--text-muted)]">Yuklanmoqda…</p>
+        ) : null}
+        {state.kind === "error" ? (
+          <p className="px-3 py-4 text-xs text-[var(--status-alert)]">{state.message}</p>
+        ) : null}
+        {state.kind === "ready" && tasks.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-[var(--text-muted)]">Vazifa yo&apos;q</p>
+        ) : null}
+        {tasks.map((t) => (
           <div
-            key={t.time}
+            key={t.id}
             className="flex items-baseline gap-3 rounded-[10px] px-3 py-2.5 transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <span className="data shrink-0 text-xs text-[var(--accent-blue)]">{t.time}</span>
-            <span className="text-sm text-[var(--text-primary)]">{t.title}</span>
+            <span className="data shrink-0 text-[10px] text-[var(--accent-blue)]">
+              {t.status === "done" ? "✓" : t.priority}
+            </span>
+            <span
+              className={`text-sm ${
+                t.status === "done"
+                  ? "text-[var(--text-muted)] line-through"
+                  : "text-[var(--text-primary)]"
+              }`}
+            >
+              {t.title}
+            </span>
           </div>
         ))}
       </Panel>
@@ -121,9 +174,13 @@ function TasksTab() {
 function CameraTab() {
   return (
     <div className="space-y-3 py-4">
-      <Eyebrow>Kameralar</Eyebrow>
-      <div className="grid grid-cols-2 gap-3">
-        {CAMERAS.map((c) => (
+      <Eyebrow>Kamera</Eyebrow>
+      {/* Ilgari to'rtta o'ylab topilgan kamera nomi ("Old eshik",
+          "Hovli", "Garaj", "Ofis") ko'rsatilardi. Sozlamada esa
+          BITTA Hikvision kanali bor xolos — ko'p kamerali ro'yxat
+          shunchaki to'qilgan edi. */}
+      <div className="grid grid-cols-1 gap-3">
+        {["Asosiy kanal"].map((c) => (
           <div
             key={c}
             className="relative aspect-video overflow-hidden rounded-[12px] border border-[var(--border-hairline)] bg-[var(--bg-base)]"
@@ -171,6 +228,7 @@ function SettingsTab() {
 
 export default function TgPage() {
   const [tab, setTab] = useState<Tab>("chat");
+  const health = useBackendHealth();
 
   useEffect(() => {
     initTelegramApp();
@@ -181,9 +239,21 @@ export default function TgPage() {
       {/* Sarlavha */}
       <header className="flex items-center justify-between py-3">
         <span className="text-sm font-semibold tracking-[0.2em] text-[var(--text-primary)]">ZET</span>
+        {/* Ilgari bu QOTIRILGAN yashil "Onlayn" edi — backend o'chiq
+            bo'lsa ham shunday ko'rinardi. Endi haqiqiy tekshiruvdan. */}
         <div className="flex items-center gap-1.5">
-          <StatusDot color="var(--status-online)" />
-          <span className="text-[10px] text-[var(--text-secondary)]">Onlayn</span>
+          <StatusDot
+            color={
+              health === "online"
+                ? "var(--status-online)"
+                : health === "checking"
+                  ? "var(--status-working)"
+                  : "var(--status-alert)"
+            }
+          />
+          <span className="text-[10px] text-[var(--text-secondary)]">
+            {health === "online" ? "Onlayn" : health === "checking" ? "Tekshirilmoqda" : "Aloqa yo'q"}
+          </span>
         </div>
       </header>
 

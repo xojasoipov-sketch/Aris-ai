@@ -124,7 +124,11 @@ function ComputerTab() {
           tool: pending.toolName,
           detail: Object.values(pending.preview).map(String).join(" "),
           outcome: approved ? "done" : "rejected",
-          latencyMs: approved ? Math.floor(80 + Math.random() * 200) : undefined,
+          // Kechikish O'LCHANMAYDI: bu sahifadagi amal hali haqiqiy
+          // qurilmaga bormaydi. Ilgari bu yerda
+          // `Math.floor(80 + Math.random() * 200)` turardi — audit
+          // jurnaliga o'ylab topilgan millisekund yozilardi.
+          latencyMs: undefined,
         },
         ...cur.slice(0, 19),
       ]);
@@ -146,7 +150,11 @@ function ComputerTab() {
                 UNTRUSTED
               </span>
             </div>
-            <Button onClick={() => sound.play("error")}>Yangilash</Button>
+            {/* Ilgari bu tugma `sound.play("error")` chalardi va
+                BOSHQA HECH NARSA qilmasdi. Ekran ko'zgusi uchun
+                manba (`desktop.screenshot`) hali ulanmagan, shuning
+                uchun tugma butunlay olib tashlandi — ishlamaydigan
+                tugma ishlamasligini bildirgani ma'qul. */}
           </div>
           <button
             className="relative flex aspect-video w-full cursor-crosshair items-center justify-center bg-[var(--bg-base)]"
@@ -368,6 +376,13 @@ export default function DevicesPage() {
         <div>
           <h1 className="text-xl font-bold">Qurilmalar</h1>
           <div className="mt-2">
+            {/* QOTIRILGAN "disconnected" — va bu TO'G'RI. Bu belgi
+                backend haqida emas, EGANING KOMPYUTERIDAGI desktop
+                agent haqida ("ZET agentni kompyuteringizda ishga
+                tushiring"). Bunday agent hali umuman yozilmagan,
+                shuning uchun boshqa holat ko'rsatish yolg'on
+                bo'lardi. Agent qo'shilganda bu yerga uning haqiqiy
+                holati ulanadi. */}
             <ConnectionBadge state="disconnected" />
           </div>
         </div>
