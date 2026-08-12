@@ -153,6 +153,34 @@ haqiqiy bo'lishi uchun uchta narsa kerak: jadval + tool + tool'ning DB'ga
 ULANGANLIGI. Shuning uchun `detect_capabilities()` tool'ning ro'yxatda
 turishiga emas, uning `connected` xossasiga qaraydi.
 
+IKKINCHI DARS — "TOOL BOR" ≠ "AGENT UNI CHAQIRA OLADI". Z48.5'da
+yana ikkita jimgina uzilish topildi, ikkalasi ham "ishlayotgandek
+ko'rinib, aslida yolg'on gapiradigan" turdagi:
+
+  1. `operations` agentining `tool_allowlist`i bor-yo'g'i
+     `["web.search", "time.now"]` edi. T02 va T06 aynan shu agentdan
+     boshlanadi; `AgentRuntime` ruxsat etilmagan tool'ni rad etadi,
+     ya'ni agent doskani UMUMAN KO'RMAGAN holda kunlik hisobot yozib
+     yuborardi. Bu vision agentda kamera tool'i yo'qligining takrori
+     (gap-analysis #8) — demak naqsh takrorlanuvchi, tekshirish esa
+     endi testda qulflangan.
+
+  2. Daemon agentni ishga tushirar, natijani faqat LOG'ga yozardi.
+     T06 har kuni 09:20 va 18:40 da ishlab, hech kimga hech narsa
+     aytmasdi. Ega ko'rmaydigan joyga tushgan natija
+     avtomatlashtirish emas — shunchaki sarflangan token.
+
+To'liq zanjir: **jadval → tool → agent allowlist → ruxsat darajasi →
+daemon → yetkazish**. Bittasi uzilsa, retsept "ready" ko'rinadi va
+jimgina hech narsa qilmaydi. Shuning uchun har bir bo'g'in alohida
+testda qulflandi.
+
+JONLI TASDIQ (2026-08-12, production): doskaga uchta haqiqiy vazifa
+qo'yilib `operations` ishga tushirildi — agent `task.pulse` ni chaqirdi
+va bloklangan yuqori muhimlikdagi vazifani "qaror kutilmoqda" deb
+to'g'ri ajratdi. Backend to'liq redeploy qilingandan keyin ham yoqilgan
+T06 jadvallari joyida qoldi.
+
 Qolgan to'rttasi tashqi ulanishga tayanadi: `meeting_link` (T01),
 `telegram.read_groups` (T03), `timed_approval` (T04),
 `instagram.webhook` (T05).
