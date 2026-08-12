@@ -27,14 +27,35 @@ from zet.agents.registry import (
     AgentNotFoundError,
     AgentRegistry,
 )
+from zet.agents.repository import AgentRepository
 from zet.agents.runtime import AgentRuntime
-from zet.api.deps import get_agent_registry, get_permission_policy, get_tool_registry
+from zet.api.deps import (
+    get_agent_registry,
+    get_agent_repository,
+    get_permission_policy,
+    get_tool_registry,
+)
+from zet.domain.agent import AgentState
 from zet.domain.enums import AgentStatus, ModelTier, PermissionLevel, TrustLevel
 from zet.llm.fake import FakeProvider
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
 log = structlog.get_logger(__name__)
+
+
+async def _persist(repo: AgentRepository, state: AgentState) -> None:
+    """Agent holatini DB'ga yozadi — xato bo'lsa faqat log (registry'ga ta'sir qilmaydi).
+
+    DB ulanmagan/mavjud bo'lmagan muhitda ham `AgentRegistry` mustaqil
+    ishlashda davom etishi kerak (fail-open bu yerda — persistensiya
+    ixtiyoriy qulaylik, runtime funksionalligining sharti emas).
+    """
+    try:
+        await repo.save(state)
+    except Exception:
+        log.warning("agent.persist_failed", name=state.spec.name)
+
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -196,6 +217,7 @@ def _get_lifecycle(
 async def create_agent(
     request: AgentCreateRequest,
     registry: AgentRegistry = Depends(get_agent_registry),
+    repo: AgentRepository = Depends(get_agent_repository),
 ) -> AgentResponse:
     """Yangi agent ro'yxatga olish."""
     from zet.domain.agent import AgentSpec
@@ -217,6 +239,7 @@ async def create_agent(
             timeout_s=request.timeout_s,
         )
         state = registry.register(spec)
+        await _persist(repo, state)
         return _state_to_response(state)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -226,6 +249,7 @@ async def create_agent(
 async def factory_create_agent(
     request: FactoryCreateRequest,
     registry: AgentRegistry = Depends(get_agent_registry),
+    repo: AgentRepository = Depends(get_agent_repository),
 ) -> FactoryCreateResponse:
     """Tabiy til buyrug'i bilan agent yaratish (V-10 Factory).
 
@@ -243,6 +267,8 @@ async def factory_create_agent(
         auto_activate=request.auto_activate,
     )
     result = factory.create(factory_request)
+    if result.agent_state is not None:
+        await _persist(repo, result.agent_state)
 
     # Eval natijasini response ga o'girish
     eval_response = None
@@ -303,6 +329,7 @@ async def update_agent_status(
     name: str,
     request: AgentStatusUpdateRequest,
     lifecycle: AgentLifecycle = Depends(_get_lifecycle),
+    repo: AgentRepository = Depends(get_agent_repository),
 ) -> AgentResponse:
     """Agent holatini o'zgartirish (V-11 lifecycle)."""
     action_map = {
@@ -324,6 +351,7 @@ async def update_agent_status(
                 detail=f"Noto'g'ri amal: {request.action}. "
                 f"Mumkin: {', '.join([*action_map, 'disable'])}",
             )
+        await _persist(repo, state)
         return _state_to_response(state)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -338,6 +366,7 @@ async def run_agent(
     registry: AgentRegistry = Depends(get_agent_registry),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     permission_policy: PermissionPolicy = Depends(get_permission_policy),
+    repo: AgentRepository = Depends(get_agent_repository),
 ) -> AgentRunResponse:
     """Agentni ishga tushirish.
 
@@ -362,7 +391,10 @@ async def run_agent(
     result = await runtime.run(state.spec, request.task)
 
     # Metrikalarni yangilash
-    registry.record_run(name, success=result.success, tool_calls=result.tool_calls_count)
+    updated_state = registry.record_run(
+        name, success=result.success, tool_calls=result.tool_calls_count
+    )
+    await _persist(repo, updated_state)
 
     return AgentRunResponse(
         agent_name=result.agent_name,

@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from zet.agents.registry import AgentRegistry
 from zet.api.app import create_app
-from zet.api.deps import get_agent_registry, get_killswitch
+from zet.api.deps import get_agent_registry, get_db_session, get_killswitch
 from zet.security.killswitch import KillSwitchState
 
 
@@ -303,3 +304,68 @@ class TestAgentRun:
             json={"task": ""},
         )
         assert resp.status_code == 422
+
+
+class TestAgentAPIPersistence:
+    """`_persist()` write-through — agentlar real DB'ga ham yoziladi (gap-analysis #1).
+
+    `AgentRegistry` (in-memory) test uchun yangi, `get_db_session` esa real
+    (in-memory sqlite) sessiyaga almashtiriladi — yozuv DB'da ham paydo
+    bo'lishini `AgentRepository` orqali tekshiramiz.
+    """
+
+    @pytest.fixture()
+    def registry(self) -> AgentRegistry:
+        return AgentRegistry()
+
+    @pytest.fixture()
+    def pg_client(self, registry: AgentRegistry, session: AsyncSession) -> TestClient:
+        app = create_app()
+
+        async def _session_override():
+            yield session
+
+        app.dependency_overrides[get_agent_registry] = lambda: registry
+        app.dependency_overrides[get_db_session] = _session_override
+        app.dependency_overrides[get_killswitch] = KillSwitchState
+        return TestClient(app, raise_server_exceptions=False)
+
+    async def test_create_agent_persists_to_db(
+        self, pg_client: TestClient, session: AsyncSession
+    ) -> None:
+        from zet.agents.repository import AgentRepository
+
+        resp = pg_client.post("/api/v1/agents", json=_agent_payload())
+        assert resp.status_code == 201
+
+        loaded = await AgentRepository(session).get("test_agent")
+        assert loaded is not None
+        assert loaded.spec.description == "Test uchun agent"
+
+    async def test_status_update_persists_to_db(
+        self, pg_client: TestClient, session: AsyncSession
+    ) -> None:
+        from zet.agents.repository import AgentRepository
+
+        pg_client.post("/api/v1/agents", json=_agent_payload())
+        pg_client.patch("/api/v1/agents/test_agent/status", json={"action": "start_testing"})
+        pg_client.patch("/api/v1/agents/test_agent/status", json={"action": "activate"})
+
+        loaded = await AgentRepository(session).get("test_agent")
+        assert loaded is not None
+        assert loaded.status.value == "active"
+
+    async def test_run_persists_metrics_to_db(
+        self, pg_client: TestClient, session: AsyncSession
+    ) -> None:
+        from zet.agents.repository import AgentRepository
+
+        pg_client.post("/api/v1/agents", json=_agent_payload())
+        pg_client.patch("/api/v1/agents/test_agent/status", json={"action": "start_testing"})
+        pg_client.patch("/api/v1/agents/test_agent/status", json={"action": "activate"})
+        pg_client.post("/api/v1/agents/test_agent/run", json={"task": "Test vazifa"})
+
+        loaded = await AgentRepository(session).get("test_agent")
+        assert loaded is not None
+        assert loaded.total_runs == 1
+        assert loaded.successful_runs == 1

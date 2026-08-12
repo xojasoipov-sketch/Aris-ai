@@ -13,6 +13,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from zet.agents.registry import AgentRegistry
+from zet.agents.repository import AgentRepository
 from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.state import CoreState
@@ -211,6 +212,23 @@ async def get_memory_store(
     """
     owner = await get_or_create_owner(session, external_id=settings.owner_id)
     return PgMemoryStore(session, owner_id=owner.id)
+
+
+# ── Agentlar ──────────────────────────────────────────────────────
+
+
+def get_agent_repository(
+    session: AsyncSession = Depends(get_db_session),
+) -> AgentRepository:
+    """So'rov chegarasidagi agent DB-persistensiya qatlami.
+
+    Ilgari `db/models/agent.py`dagi jadval hech qachon ishlatilmasdi —
+    Agent Factory orqali yaratilgan agentlar faqat `AgentRegistry`
+    (in-memory) da yashardi, restart'da yo'qolardi (gap-analysis #1).
+    `AgentRegistry`ning o'zi (runtime uchun yagona manba) o'zgarmaydi —
+    bu faqat write-through: har bir o'zgarish shu orqali ham DB'ga yoziladi.
+    """
+    return AgentRepository(session)
 
 
 # ── LLM ────────────────────────────────────────────────────────────

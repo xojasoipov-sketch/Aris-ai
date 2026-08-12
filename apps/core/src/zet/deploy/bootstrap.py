@@ -7,6 +7,7 @@ orqali agentlarni ro'yxatga oladi — mantiq bir joyda, takrorlanmaydi.
 from __future__ import annotations
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = structlog.get_logger(__name__)
 
@@ -30,4 +31,41 @@ def bootstrap_agents() -> int:
     return len(builtin_module.__all__)
 
 
-__all__ = ["bootstrap_agents"]
+async def load_persisted_agents(session: AsyncSession) -> int:
+    """DB'da saqlangan (Factory orqali yaratilgan) agentlarni registry'ga qayta yuklaydi.
+
+    Ilgari Agent Factory orqali yaratilgan har qanday agent faqat
+    in-memory `AgentRegistry`da yashardi — protsess qayta ishga
+    tushganda yo'qolardi (gap-analysis #1). Endi `AgentRepository`
+    orqali DB'ga yozilgan agentlar shu funksiya bilan qayta tiklanadi.
+
+    DB ulanmagan/mavjud bo'lmagan bo'lsa — jim o'tkazib yuboriladi
+    (fail-open: bu ixtiyoriy qulaylik, ilova ishga tushishining sharti
+    emas — builtin agentlar baribir `bootstrap_agents()` bilan mavjud).
+
+    Returns:
+        Registry'ga qo'shilgan (avval mavjud bo'lmagan) agentlar soni.
+    """
+    from zet.agents.repository import AgentRepository
+    from zet.api.deps import get_agent_registry
+
+    registry = get_agent_registry()
+    repo = AgentRepository(session)
+
+    try:
+        persisted = await repo.load_all()
+    except Exception:
+        log.warning("zet.agents_reload_skipped", reason="DB o'qib bo'lmadi")
+        return 0
+
+    added = 0
+    for state in persisted:
+        if not registry.has(state.spec.name):
+            registry.register(state.spec, status=state.status)
+            added += 1
+    if added:
+        log.info("zet.agents_reloaded_from_db", count=added)
+    return added
+
+
+__all__ = ["bootstrap_agents", "load_persisted_agents"]

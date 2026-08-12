@@ -58,7 +58,9 @@ log = structlog.get_logger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Ilova boshlanganda va tugaganda bajariladigan kod."""
-    from zet.deploy.bootstrap import bootstrap_agents
+    from zet.api.deps import get_session_factory
+    from zet.db.session import session_scope
+    from zet.deploy.bootstrap import bootstrap_agents, load_persisted_agents
     from zet.deploy.daemon import DailyScheduleDaemon
 
     settings = get_settings()
@@ -73,6 +75,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         budget_monthly=settings.budget_monthly_usd,
     )
     bootstrap_agents()
+
+    # Agent Factory orqali ilgari yaratilgan (builtin bo'lmagan) agentlarni
+    # DB'dan qayta tiklaydi — DB mavjud bo'lmasa ham ishga tushish davom
+    # etadi (fail-open, gap-analysis #1).
+    try:
+        async with session_scope(get_session_factory()) as session:
+            await load_persisted_agents(session)
+    except Exception:
+        log.warning("zet.agents_reload_failed")
 
     daemon = DailyScheduleDaemon(
         schedule=get_daily_schedule_manager(),
