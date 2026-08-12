@@ -28,6 +28,11 @@ dependencies = [
     "httpx>=0.28",
     # Tool validatsiya
     "jsonschema>=4.23",
+    # Tizim o'lchovlari — `/system` endpoint'i uchun.
+    # Bungacha terminal sahifasi CPU/RAM/GPU foizlarini QOTIRILGAN
+    # matndan ko'rsatardi ("CPU: 24% · RAM: 41%"), ya'ni ega hech
+    # qachon o'lchanmagan sonni haqiqiy deb o'qirdi.
+    "psutil>=6.0",
     # Yordamchi
     "structlog>=24.4",
     "tenacity>=9.0",
