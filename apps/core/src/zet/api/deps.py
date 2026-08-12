@@ -79,6 +79,16 @@ def get_tool_registry() -> ToolRegistry:
     tool ishlamas edi. Endi bitta joyda ro'yxatga olinadi.
     """
     settings = get_settings()
+    camera_provider = None
+    if settings.hikvision_host and settings.hikvision_username and settings.hikvision_password:
+        from zet.devices.hikvision import HikvisionCamera
+
+        camera_provider = HikvisionCamera(
+            host=settings.hikvision_host,
+            username=settings.hikvision_username,
+            password=settings.hikvision_password.get_secret_value(),
+            channel=settings.hikvision_channel,
+        )
     return build_default_registry(
         notes_dir=settings.vault_dir,
         enable_shell=settings.enable_shell,
@@ -90,6 +100,7 @@ def get_tool_registry() -> ToolRegistry:
         web_search_api_key=(
             settings.web_search_api_key.get_secret_value() if settings.web_search_api_key else None
         ),
+        camera_provider=camera_provider,
     )
 
 

@@ -99,6 +99,21 @@ class Settings(BaseSettings):
     """Brave Search API kaliti (bepul qatlam: 2000 so'rov/oy). Bo'lsa —
     `web.search` haqiqiy qidiradi; bo'lmasa — stub rejimda ishlaydi."""
 
+    # ── Kamera (Bo'lim 8) ─────────────────────────────────────────────
+    hikvision_host: str = ""
+    """Hikvision kamera/NVR manzili (masalan '192.168.1.64' yoki '...:80').
+    Bo'lsa (username/password bilan birga) — `camera.snapshot` haqiqiy
+    ISAPI snapshot'ga chiqadi; bo'lmasa — StubCamera ishlaydi."""
+
+    hikvision_username: str = ""
+    """Hikvision ISAPI foydalanuvchi nomi (odatda 'admin')."""
+
+    hikvision_password: SecretStr | None = None
+    """Hikvision ISAPI paroli."""
+
+    hikvision_channel: int = Field(default=1, ge=1)
+    """Kamera kanal raqami (NVR uchun 101, 201, ...; yagona kamera uchun 1)."""
+
     # ── Xavfsizlik ─────────────────────────────────────────────────
     owner_id: str = "owner"
     api_token: SecretStr | None = None
