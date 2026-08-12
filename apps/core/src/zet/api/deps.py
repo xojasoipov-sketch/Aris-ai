@@ -109,6 +109,9 @@ def get_tool_registry() -> ToolRegistry:
         web_search_api_key=(
             settings.web_search_api_key.get_secret_value() if settings.web_search_api_key else None
         ),
+        youtube_api_key=(
+            settings.youtube_api_key.get_secret_value() if settings.youtube_api_key else None
+        ),
         camera_provider=camera_provider,
     )
 

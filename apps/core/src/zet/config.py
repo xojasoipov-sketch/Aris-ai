@@ -114,6 +114,12 @@ class Settings(BaseSettings):
     hikvision_channel: int = Field(default=1, ge=1)
     """Kamera kanal raqami (NVR uchun 101, 201, ...; yagona kamera uchun 1)."""
 
+    # ── YouTube Data API v3 (Bo'lim 7, C-03 #2) ────────────────────────
+    youtube_api_key: SecretStr | None = None
+    """YouTube Data API v3 kaliti (Google Cloud Console → APIs & Services →
+    Credentials → API key). Bepul kvota 10 000 unit/kun. Kalit bo'lmasa —
+    `youtube.search`/`youtube.channel_stats`/`youtube.video_stats` stub rejim."""
+
     # ── Ovoz (Bo'lim 5, V-18) ─────────────────────────────────────────
     elevenlabs_api_key: SecretStr | None = None
     """ElevenLabs API kaliti (Scribe STT + Multilingual v2 TTS). Bo'lmasa —

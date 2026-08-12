@@ -76,6 +76,9 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "note.list": PermissionLevel.READ,
     "github.read": PermissionLevel.READ,
     "github.write": PermissionLevel.WRITE,
+    "youtube.search": PermissionLevel.READ,
+    "youtube.channel_stats": PermissionLevel.READ,
+    "youtube.video_stats": PermissionLevel.READ,
     "camera.snapshot": PermissionLevel.READ,
     "shell.exec": PermissionLevel.EXECUTE,
 }

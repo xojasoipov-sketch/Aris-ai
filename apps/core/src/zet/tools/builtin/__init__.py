@@ -25,6 +25,11 @@ from zet.tools.builtin.shell_exec import ShellExecTool
 from zet.tools.builtin.time_now import TimeNowTool
 from zet.tools.builtin.web_reader import WebReaderTool
 from zet.tools.builtin.web_search import WebSearchTool
+from zet.tools.builtin.youtube import (
+    YouTubeChannelStatsTool,
+    YouTubeSearchTool,
+    YouTubeVideoStatsTool,
+)
 from zet.tools.registry import ToolRegistry
 
 
@@ -35,6 +40,7 @@ def build_default_registry(
     web_reader_stub: bool = True,
     github_token: str | None = None,
     web_search_api_key: str | None = None,
+    youtube_api_key: str | None = None,
     camera_provider: CameraProvider | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
@@ -50,6 +56,8 @@ def build_default_registry(
             chiqadi; bo'lmasa (default) — stub rejim.
         web_search_api_key: berilsa — `web.search` haqiqiy qidiradi (Brave
             Search API); bo'lmasa (default) — stub rejim.
+        youtube_api_key: berilsa — `youtube.search`/`.channel_stats`/`.video_stats`
+            YouTube Data API v3'ga chiqadi; bo'lmasa (default) — stub rejim.
         camera_provider: `camera.snapshot` uchun ulanish (default: `StubCamera`
             — real RTSP/EZVIZ hali ulanmagan).
 
@@ -65,6 +73,9 @@ def build_default_registry(
     registry.register(WebReaderTool(stub=web_reader_stub))
     registry.register(GitHubReadTool(token=github_token))
     registry.register(GitHubWriteTool(token=github_token))
+    registry.register(YouTubeSearchTool(api_key=youtube_api_key))
+    registry.register(YouTubeChannelStatsTool(api_key=youtube_api_key))
+    registry.register(YouTubeVideoStatsTool(api_key=youtube_api_key))
     registry.register(CameraSnapshotTool(provider=camera_provider))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))
