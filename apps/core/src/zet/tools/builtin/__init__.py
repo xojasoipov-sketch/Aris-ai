@@ -18,6 +18,11 @@ from pathlib import Path
 from zet.devices.camera import CameraProvider
 from zet.tools.builtin.camera import CameraSnapshotTool
 from zet.tools.builtin.github import GitHubReadTool, GitHubWriteTool
+from zet.tools.builtin.instagram import (
+    InstagramAccountStatsTool,
+    InstagramPublishPhotoTool,
+    InstagramRecentMediaTool,
+)
 from zet.tools.builtin.note_list import NoteListTool
 from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteWriteTool
@@ -46,6 +51,8 @@ def build_default_registry(
     web_search_api_key: str | None = None,
     youtube_api_key: str | None = None,
     telegram_bot_token: str | None = None,
+    instagram_access_token: str | None = None,
+    instagram_business_account_id: str | None = None,
     camera_provider: CameraProvider | None = None,
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
@@ -66,6 +73,10 @@ def build_default_registry(
         telegram_bot_token: berilsa — `telegram.channel_stats`/`.channel_post`
             Telegram Bot API'siga chiqadi (bot kanaldan administrator bo'lishi
             shart); bo'lmasa — stub.
+        instagram_access_token: berilsa (business_account_id bilan birga) —
+            `instagram.*` tool'lar Meta Graph API'ga chiqadi; aks holda stub.
+        instagram_business_account_id: Instagram Business Account ID
+            (17-raqamli). Token bilan birga bo'lishi kerak.
         camera_provider: `camera.snapshot` uchun ulanish (default: `StubCamera`
             — real RTSP/EZVIZ hali ulanmagan).
 
@@ -86,6 +97,24 @@ def build_default_registry(
     registry.register(YouTubeVideoStatsTool(api_key=youtube_api_key))
     registry.register(TelegramChannelStatsTool(token=telegram_bot_token))
     registry.register(TelegramChannelPostTool(token=telegram_bot_token))
+    registry.register(
+        InstagramAccountStatsTool(
+            access_token=instagram_access_token,
+            ig_user_id=instagram_business_account_id,
+        )
+    )
+    registry.register(
+        InstagramRecentMediaTool(
+            access_token=instagram_access_token,
+            ig_user_id=instagram_business_account_id,
+        )
+    )
+    registry.register(
+        InstagramPublishPhotoTool(
+            access_token=instagram_access_token,
+            ig_user_id=instagram_business_account_id,
+        )
+    )
     registry.register(CameraSnapshotTool(provider=camera_provider))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))

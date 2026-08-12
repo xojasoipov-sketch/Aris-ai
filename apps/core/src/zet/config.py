@@ -114,6 +114,17 @@ class Settings(BaseSettings):
     hikvision_channel: int = Field(default=1, ge=1)
     """Kamera kanal raqami (NVR uchun 101, 201, ...; yagona kamera uchun 1)."""
 
+    # ── Instagram Graph API (Bo'lim 7, C-04) ──────────────────────────
+    instagram_access_token: SecretStr | None = None
+    """Instagram Business/Creator uchun long-lived access token (Meta App
+    Dashboard). Scope: instagram_basic, instagram_content_publish,
+    pages_show_list. Bo'lmasa — `instagram.*` tool'lar stub rejim."""
+
+    instagram_business_account_id: str = ""
+    """Instagram Business Account ID (17-raqamli). Meta Graph API Explorer'da
+    `me/accounts` → `instagram_business_account` orqali olinadi. Bo'sh
+    bo'lsa — stub rejim (token bor bo'lsa ham)."""
+
     # ── YouTube Data API v3 (Bo'lim 7, C-03 #2) ────────────────────────
     youtube_api_key: SecretStr | None = None
     """YouTube Data API v3 kaliti (Google Cloud Console → APIs & Services →

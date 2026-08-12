@@ -115,6 +115,12 @@ def get_tool_registry() -> ToolRegistry:
         telegram_bot_token=(
             settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else None
         ),
+        instagram_access_token=(
+            settings.instagram_access_token.get_secret_value()
+            if settings.instagram_access_token
+            else None
+        ),
+        instagram_business_account_id=settings.instagram_business_account_id or None,
         camera_provider=camera_provider,
     )
 
