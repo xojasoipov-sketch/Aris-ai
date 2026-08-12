@@ -70,23 +70,33 @@ class TestElevenLabsSTT:
 
         request = route.calls[0].request
         assert request.headers["xi-api-key"] == _API_KEY
-        # multipart body: model_id va language_code=uzn ('uz' → 'uzn' aylantirishi)
+        # multipart body: model_id va language_code=uzb ('uz' → 'uzb').
+        # Ilgari bu yerda 'uzn' kutilardi — lekin Scribe uni RAD ETADI
+        # (`Invalid language code received: 'uzn'`), ya'ni test xato
+        # xatti-harakatni qulflab turgan edi. Z43 da tuzatildi.
         body = request.content
         assert b"scribe_v1" in body
-        assert b"uzn" in body
+        assert b"uzb" in body
         assert b"audio.ogg" in body
 
     @respx.mock
-    async def test_language_auto_detect_when_omitted(self) -> None:
+    async def test_uzbek_forced_when_language_omitted(self) -> None:
+        """Til berilmasa AVTOMATIK ANIQLASH emas — o'zbek majburlanadi.
+
+        Ilgari bu test aksini talab qilardi ("language_code qo'shilmaydi").
+        Jonli sinov ko'rsatdiki, avtomatik rejimda Scribe o'zbek nutqini
+        ozarbayjoncha deb o'qiydi va matn butunlay buziladi. Telegram
+        handler tilsiz chaqiradi — ya'ni aynan shu yo'l buzuq edi.
+        """
         route = respx.post(_STT_URL).mock(
-            return_value=httpx.Response(200, json={"text": "hi", "language_code": "eng"})
+            return_value=httpx.Response(200, json={"text": "hi", "language_code": "uzb"})
         )
         stt = ElevenLabsSTT(api_key=_API_KEY)
         await stt.transcribe(b"data")
 
-        # language berilmasa — language_code multipart'ga qo'shilmaydi
         body = route.calls[0].request.content
-        assert b"language_code" not in body
+        assert b"language_code" in body
+        assert b"uzb" in body
 
     @respx.mock
     async def test_http_error_raises_runtime_error(self) -> None:

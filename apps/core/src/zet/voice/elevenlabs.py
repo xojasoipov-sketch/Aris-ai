@@ -41,8 +41,33 @@ _STT_MODEL = "scribe_v1"
 _TTS_MODEL = "eleven_multilingual_v2"
 """O'zbek matnini yaxshi o'qiydigan ko'p tilli TTS modeli (sinab tasdiqlangan)."""
 
-# Uzbek ISO 639-3 kodi (Scribe kutgan format)
-_UZBEK_LANG_CODE = "uzn"
+UZBEK_LANG_CODE = "uzb"
+"""Scribe qabul qiladigan o'zbek tili kodi.
+
+Ilgari bu `"uzn"` (ISO 639-3 "Northern Uzbek") edi va Scribe uni
+**rad etardi**:
+
+    Invalid language code received: 'uzn'.
+    Please leave blank ... or use one of: ... uzb ...
+
+Ya'ni til hech qachon o'rnatilmasdi. Natijada Scribe avtomatik
+aniqlashga tushib, o'zbek nutqini **ozarbayjoncha** deb o'qirdi
+(jonli sinov, 88% ishonch bilan):
+
+    asl:    "Salom, men Umid. Bugun soat uchda mijoz bilan uchrashuv bor"
+    'auto': "Salam, mən Ümid. Bugün suatu xədimi göz bilan oxra şuv bor"
+    'uzb':  "Salom men Umid. Bugun soat uchda mijoz bilan uchrashuv bor"
+
+Ikkala turkiy til lotin yozuvida yaqin bo'lgani uchun avtomatik
+aniqlash ishonchsiz — shuning uchun til ATAYLAB majburlanadi.
+"""
+
+DEFAULT_STT_LANGUAGE = UZBEK_LANG_CODE
+"""ZET bitta egaga tegishli (V-02) va ega o'zbekcha gapiradi.
+
+Shu sabab default — avtomatik aniqlash EMAS, balki o'zbek tili.
+Boshqa tilda gapirish uchun `Settings.stt_language` o'zgartiriladi.
+"""
 
 # Default ovoz — Sarah (bepul rejada mavjud, ayol, ko'p tilli, o'zbekcha
 # aniq va tabiiy o'qiydi — real hisob bilan tasdiqlangan). Rachel eski
@@ -63,10 +88,12 @@ class ElevenLabsSTT(STTProvider):
         self,
         *,
         api_key: str | None = None,
+        default_language: str = DEFAULT_STT_LANGUAGE,
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 60.0,
     ) -> None:
         self._api_key = api_key
+        self._default_language = default_language
         self._client = client
         self._owns_client = client is None
         self._timeout_s = timeout_s
@@ -92,17 +119,17 @@ class ElevenLabsSTT(STTProvider):
         if not self._api_key:
             raise RuntimeError("ElevenLabsSTT: kalit yo'q — ZET_ELEVENLABS_API_KEY sozlanmagan")
 
-        # Til: berilmasa avtomatik aniqlash; 'uz' → 'uzn' (Scribe ISO 639-3 kutadi)
-        lang_code: str | None = None
-        if language:
-            lang_code = _UZBEK_LANG_CODE if language.lower() in {"uz", "uzn"} else language
+        # Til BERILMASA ham avtomatik aniqlashga tushmaymiz — `_default_language`
+        # ishlatiladi. Sabab UZBEK_LANG_CODE docstring'ida: avtomatik aniqlash
+        # o'zbekni ozarbayjoncha deb o'qiydi va matn butunlay buziladi.
+        requested = language or self._default_language
+        # `uz`/`uzn` kabi variantlar Scribe qabul qiladigan `uzb` ga keltiriladi.
+        lang_code = UZBEK_LANG_CODE if requested.lower() in {"uz", "uzn", "uzb"} else requested
 
         files: dict[str, tuple[str, bytes, str]] = {
             "file": (f"audio.{audio_format}", audio_data, f"audio/{audio_format}"),
         }
-        data: dict[str, str] = {"model_id": _STT_MODEL}
-        if lang_code:
-            data["language_code"] = lang_code
+        data: dict[str, str] = {"model_id": _STT_MODEL, "language_code": lang_code}
 
         try:
             response = await self._get_client().post(
@@ -121,7 +148,7 @@ class ElevenLabsSTT(STTProvider):
             raise RuntimeError(f"ElevenLabs STT tarmoq xatosi: {exc}") from exc
 
         text: str = payload.get("text", "")
-        detected_lang: str = payload.get("language_code", lang_code or "uzn")
+        detected_lang: str = payload.get("language_code") or lang_code
         # Scribe har bir so'z uchun ehtimol qaytaradi — o'rtacha olamiz
         words = payload.get("words") or []
         if words:

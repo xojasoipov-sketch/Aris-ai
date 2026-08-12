@@ -45,6 +45,7 @@ from zet.security.permissions import PermissionPolicy
 from zet.telegram.notifier import Notifier, StubNotifier
 from zet.tools.builtin import build_default_registry
 from zet.tools.registry import ToolRegistry
+from zet.voice.azure_tts import AzureTTS
 from zet.voice.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from zet.voice.stt import STTProvider, StubSTT
 from zet.voice.tts import StubTTS, TTSProvider
@@ -463,24 +464,41 @@ def get_orchestrator(
 def get_stt() -> STTProvider:
     """Global STT provayder (singleton).
 
-    ElevenLabs API kaliti bo'lsa — Scribe orqali haqiqiy transkripsiya
-    (o'zbek 99+ til ichida). Bo'lmasa — `StubSTT` (Telegram ovozli xabar
-    qotgan matn qaytadi, ilgari default xatti-harakat).
+    ElevenLabs API kaliti bo'lsa — Scribe orqali haqiqiy transkripsiya.
+    Bo'lmasa — `StubSTT` (Telegram ovozli xabar qotgan matn qaytadi).
+
+    Til `settings.stt_language` dan olinadi (default `uzb`) va Scribe'ga
+    MAJBURAN uzatiladi — avtomatik aniqlash o'zbekni ozarbayjoncha deb
+    o'qib matnni buzadi (`voice/elevenlabs.py` dagi izohga qarang).
     """
     settings = get_settings()
     if settings.elevenlabs_api_key is not None:
-        return ElevenLabsSTT(api_key=settings.elevenlabs_api_key.get_secret_value())
+        return ElevenLabsSTT(
+            api_key=settings.elevenlabs_api_key.get_secret_value(),
+            default_language=settings.stt_language,
+        )
     return StubSTT()
 
 
 @lru_cache(maxsize=1)
 def get_tts() -> TTSProvider:
-    """Global TTS provayder (singleton).
+    """Global TTS provayder (singleton). Tartib: Azure → ElevenLabs → Stub.
 
-    ElevenLabs API kaliti bo'lsa — Multilingual v2 orqali haqiqiy audio
-    (o'zbek matnini yaxshi o'qiydi, `language_code`siz). Bo'lmasa — `StubTTS`.
+    Azure BIRINCHI, chunki faqat unda HAQIQIY o'zbek neyron ovozi bor
+    (`uz-UZ-SardorNeural`). ElevenLabs'da o'zbek TTS umuman yo'q — u
+    o'zbek matnini chet el aksenti bilan o'qiydi (2026-08-12 jonli
+    tekshiruvi: `eleven_v3` 74 tilida ham o'zbek yo'q).
+
+    ElevenLabs zaxira sifatida qoladi: Azure sozlanmagan bo'lsa ovoz
+    butunlay yo'qolgandan ko'ra aksentli bo'lgani ma'qul.
     """
     settings = get_settings()
+    if settings.azure_speech_key is not None and settings.azure_speech_region:
+        return AzureTTS(
+            api_key=settings.azure_speech_key.get_secret_value(),
+            region=settings.azure_speech_region,
+            voice=settings.azure_voice,
+        )
     if settings.elevenlabs_api_key is not None:
         return ElevenLabsTTS(
             api_key=settings.elevenlabs_api_key.get_secret_value(),

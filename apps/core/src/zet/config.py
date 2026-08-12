@@ -209,6 +209,39 @@ class Settings(BaseSettings):
     Uchtasi ham bo'lmasa — `youtube.publish` stub rejimda ishlaydi."""
 
     # ── Ovoz (Bo'lim 5, V-18) ─────────────────────────────────────────
+    stt_language: str = "uzb"
+    """Ovozni qaysi tilda o'qish (ElevenLabs Scribe kodi).
+
+    Default AVTOMATIK ANIQLASH EMAS. Scribe o'zbek nutqini avtomatik
+    rejimda ozarbayjoncha deb o'qiydi (jonli sinov, 88% ishonch) va
+    matn butunlay buziladi — ikkala til lotin yozuvida juda yaqin.
+
+    ZET bitta egaga tegishli (V-02), ega esa o'zbekcha gapiradi, shuning
+    uchun tilni taxmin qilishning ma'nosi yo'q. Boshqa tilda ishlash
+    kerak bo'lsa shu qiymat o'zgartiriladi (masalan `rus`, `eng`).
+    """
+
+    azure_speech_key: SecretStr | None = None
+    """Azure Speech kaliti — HAQIQIY o'zbek neyron ovozi uchun.
+
+    ElevenLabs'da o'zbek TTS yo'q (jonli tekshirilgan): u o'zbek matnini
+    chet el aksenti bilan o'qiydi. Azure'da esa `uz-UZ-SardorNeural` va
+    `uz-UZ-MadinaNeural` — o'zbek fonetikasiga o'rgatilgan ovozlar.
+    Bepul qatlam: oyiga 500 000 belgi.
+
+    Bu kalit bo'lsa TTS Azure'ga o'tadi; bo'lmasa ElevenLabs'da qoladi.
+    """
+
+    azure_speech_region: str = ""
+    """Azure Speech resursi regioni (masalan `westeurope`, `eastus`).
+
+    Endpoint URL'ining bir qismi, shuning uchun kalit bilan birga
+    MAJBURIY — bittasi yetishmasa TTS Azure'ni ishlatmaydi.
+    """
+
+    azure_voice: str = "uz-UZ-SardorNeural"
+    """Azure ovozi. Ayol ovozi uchun: `uz-UZ-MadinaNeural`."""
+
     elevenlabs_api_key: SecretStr | None = None
     """ElevenLabs API kaliti (Scribe STT + Multilingual v2 TTS). Bo'lmasa —
     `StubSTT`/`StubTTS` ishlatiladi (Telegram ovozli xabar qotgan matn qaytadi)."""
