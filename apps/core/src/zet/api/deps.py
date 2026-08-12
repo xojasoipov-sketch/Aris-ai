@@ -16,6 +16,7 @@ from zet.agents.registry import AgentRegistry
 from zet.agents.repository import AgentRepository
 from zet.automation.engine import AutomationEngine
 from zet.automation.executor import WorkflowExecutor
+from zet.business.pg_crm import PgCRM
 from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.state import CoreState
@@ -258,6 +259,24 @@ def get_agent_repository(
     bu faqat write-through: har bir o'zgarish shu orqali ham DB'ga yoziladi.
     """
     return AgentRepository(session)
+
+
+# ── CRM ───────────────────────────────────────────────────────────
+
+
+async def get_crm(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_config),
+) -> PgCRM:
+    """So'rov chegarasidagi DB-backed CRM (Bo'lim 6, C-03).
+
+    Ilgari `business/crm.py`dagi `CRM` hech qanday DB jadvali, route yoki
+    tool bilan bog'lanmagan edi — butunlay o'lik kod (gap-analysis).
+    `docs/04-CONSTRAINTS.md` C-03 CRM'ni birinchi biznes ustuvorlik deb
+    belgilagan; endi shu orqali haqiqiy jadvallarga yoziladi/o'qiladi.
+    """
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+    return PgCRM(session, owner_id=owner.id)
 
 
 # ── LLM ────────────────────────────────────────────────────────────

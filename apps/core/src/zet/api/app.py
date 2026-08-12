@@ -44,6 +44,7 @@ from zet.api.routes import (
     alerts,
     approvals,
     automation,
+    crm,
     health,
     killswitch,
     memory,
@@ -156,6 +157,7 @@ def create_app() -> FastAPI:
     app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
     app.include_router(agent.router, prefix="/api/v1", tags=["agents"])
     app.include_router(automation.router, prefix="/api/v1")
+    app.include_router(crm.router, prefix="/api/v1")
     app.include_router(telegram.router, prefix="/api/v1", tags=["telegram"])
 
     return app
