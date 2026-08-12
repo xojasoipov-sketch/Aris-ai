@@ -227,6 +227,27 @@ export interface ScheduleRuleDto {
   last_run_at: string | null;
 }
 
+/* ── Kamera (Z48.3) ────────────────────────────────────────────── */
+
+export interface CameraInfoDto {
+  configured: boolean;
+  camera_id: string;
+  label: string;
+  /** Sozlanmagan bo'lsa — NIMA qilish kerakligi. */
+  detail: string;
+}
+
+export interface SnapshotDto {
+  camera_id: string;
+  image_b64: string;
+  media_type: string;
+  width: number;
+  height: number;
+  timestamp: string;
+  /** `hikvision` yoki `stub` — manba ochiq ko'rsatiladi. */
+  source: string;
+}
+
 /* ── Chaqiruvlar ───────────────────────────────────────────────── */
 
 export const api = {
@@ -245,6 +266,12 @@ export const api = {
   },
 
   schedules: () => call<ScheduleRuleDto[]>("/automation/schedules"),
+
+  camera: {
+    info: () => call<CameraInfoDto>("/camera"),
+    /** Sozlanmagan bo'lsa backend 503 qaytaradi — stub rasm YO'Q. */
+    snapshot: () => call<SnapshotDto>("/camera/snapshot", { method: "POST" }),
+  },
 
   /** O'lchangan tizim ko'rsatkichlari — soxta CPU/RAM o'rniga. */
   system: () => call<SystemDto>("/system"),

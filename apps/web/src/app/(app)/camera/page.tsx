@@ -1,162 +1,145 @@
 "use client";
 
-/** Kamera (/camera) — FAZA 4 speci: thumbnail grid, katta preview + PTZ,
- * preset ro'yxati, Live/Events/Timeline tab.
+/** Kamera (/camera) — bitta HAQIQIY kamera (Z48.3).
  *
- * Real oqim yo'q (devices/camera.py stub) — har karta "signal kutilmoqda"
- * holatida; Hikvision ulangach camera.snapshot shu grid'ga keladi.
+ * ILGARI NIMA BO'LGAN. Bu sahifadagi hamma narsa o'ylab topilgan edi:
+ *
+ *   · OLTITA kamera nomi — "Old eshik", "Hovli", "Garaj", "Ofis",
+ *     "Ombor", "Turargoh". Sozlamada esa BITTA Hikvision kanali bor.
+ *   · To'rtta preset ("Uy", "Ofis", ...) — hech qayerga ulanmagan.
+ *   · PTZ tugmalari — bosilganda faqat tovush chalardi.
+ *   · Uchta tab ("Jonli", "Voqealar", "Xronologiya") — uchalasi ham
+ *     AYNI bir ekranni ko'rsatardi.
+ *
+ * Ya'ni ega oltita kamerasi bordek va ularni burata oladigandek
+ * ko'rinardi. `camera.snapshot` tooli esa HAQIQATAN ishlardi — faqat
+ * unga interfeysdan yo'l yo'q edi.
+ *
+ * ENDI: bitta kamera, bitta amal — kadr olish. PTZ va presetlar OLIB
+ * TASHLANDI, chunki Hikvision ISAPI PTZ ulanmagan; ular qaytarilishi
+ * uchun avval backend'da haqiqiy boshqaruv bo'lishi kerak.
  */
 
-import {
-  Camera as CameraIcon,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  Circle,
-} from "lucide-react";
+import { Camera as CameraIcon, RefreshCw } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 
-import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
-import { Tabs } from "@/components/ui/Tabs";
+import { EmptyState } from "@/components/ui/forms";
+import { Button, Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
+import { api, type SnapshotDto } from "@/lib/api";
 import { sound } from "@/lib/sound";
-
-const CAMERAS = ["Old eshik", "Hovli", "Garaj", "Ofis", "Ombor", "Turargoh"] as const;
-const TABS = ["Jonli", "Voqealar", "Xronologiya"] as const;
-const PRESETS = ["Uy", "Ofis", "Ombor", "Turargoh"] as const;
-
-function CameraTile({
-  name,
-  active,
-  onClick,
-  large = false,
-}: {
-  name: string;
-  active?: boolean;
-  onClick?: () => void;
-  large?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`relative overflow-hidden rounded-[12px] border text-left transition-colors ${
-        active ? "border-[var(--border-active)]" : "border-[var(--border-hairline)] hover:border-[var(--border-active)]"
-      } ${large ? "aspect-video w-full" : "aspect-video"}`}
-      style={{
-        background:
-          "radial-gradient(ellipse at 30% 20%, rgba(76,141,255,0.05), transparent 60%), var(--bg-base)",
-      }}
-    >
-      <div className="absolute inset-0 flex items-center justify-center">
-        <CameraIcon
-          size={large ? 34 : 22}
-          strokeWidth={1.5}
-          className="text-[var(--text-muted)] opacity-50"
-        />
-      </div>
-      <div className="absolute left-2.5 top-2 flex items-center gap-1.5">
-        <StatusDot color="var(--status-offline)" />
-        <span className="text-[10px] text-[var(--text-secondary)]">{name}</span>
-      </div>
-      <span className="data absolute bottom-2 right-2.5 text-[9px] text-[var(--text-muted)]">
-        signal kutilmoqda
-      </span>
-    </button>
-  );
-}
+import { useResource } from "@/lib/useResource";
 
 export default function CameraPage() {
-  const [selected, setSelected] = useState<(typeof CAMERAS)[number]>(CAMERAS[0]);
-  const [tab, setTab] = useState<(typeof TABS)[number]>(TABS[0]);
+  const info = useResource(() => api.camera.info());
+  const [shot, setShot] = useState<SnapshotDto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const configured = info.state.kind === "ready" && info.state.data.configured;
+
+  const capture = async () => {
+    setBusy(true);
+    setError(null);
+    const res = await api.camera.snapshot();
+    if (res.ok) {
+      setShot(res.data);
+    } else {
+      sound.play("error");
+      setError(res.error);
+    }
+    setBusy(false);
+  };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5 px-6 py-6 lg:px-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Kamera</h1>
-        <Tabs tabs={TABS} value={tab} onChange={setTab} />
-      </div>
+    <div className="mx-auto max-w-3xl space-y-5 px-6 py-6 lg:px-8">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-[var(--text-primary)]">Kamera</h1>
+          <p className="mt-0.5 flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+            <StatusDot
+              color={configured ? "var(--status-online)" : "var(--status-offline)"}
+            />
+            {info.state.kind === "ready"
+              ? info.state.data.label
+              : info.state.kind === "loading"
+                ? "Tekshirilmoqda…"
+                : "Backend bilan aloqa yo'q"}
+          </p>
+        </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_240px]">
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: "easeOut" }} className="space-y-4">
-          {/* Katta preview */}
-          <CameraTile name={selected} large active />
-
-          {/* Grid */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {CAMERAS.map((c) => (
-              <CameraTile
-                key={c}
-                name={c}
-                active={c === selected}
-                onClick={() => {
-                  sound.play("tick");
-                  setSelected(c);
-                }}
+        {configured ? (
+          <Button variant="primary" onClick={() => void capture()} disabled={busy}>
+            <span className="flex items-center gap-2">
+              <RefreshCw
+                size={15}
+                strokeWidth={1.5}
+                className={busy ? "animate-spin" : ""}
+                aria-hidden
               />
-            ))}
-          </div>
-        </motion.div>
+              {busy ? "Olinmoqda…" : "Kadr olish"}
+            </span>
+          </Button>
+        ) : null}
+      </header>
 
-        {/* PTZ + presetlar */}
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.07, duration: 0.35, ease: "easeOut" }} className="space-y-4">
-          <Panel className="p-4">
-            <Eyebrow>Kamera boshqaruvi</Eyebrow>
-            <div className="mx-auto mt-4 grid w-32 grid-cols-3 gap-1.5">
-              <span />
-              <PtzBtn label="Yuqoriga">
-                <ChevronUp size={16} strokeWidth={1.5} />
-              </PtzBtn>
-              <span />
-              <PtzBtn label="Chapga">
-                <ChevronLeft size={16} strokeWidth={1.5} />
-              </PtzBtn>
-              <PtzBtn label="Markaz">
-                <Circle size={12} strokeWidth={1.5} />
-              </PtzBtn>
-              <PtzBtn label="O'ngga">
-                <ChevronRight size={16} strokeWidth={1.5} />
-              </PtzBtn>
-              <span />
-              <PtzBtn label="Pastga">
-                <ChevronDown size={16} strokeWidth={1.5} />
-              </PtzBtn>
-              <span />
-            </div>
-            <p className="mt-3 text-center text-[10px] text-[var(--text-muted)]">
-              PTZ — kamera ulanganda faollashadi
-            </p>
-          </Panel>
+      {!configured && info.state.kind === "ready" ? (
+        <Panel className="p-4">
+          <EmptyState
+            icon={CameraIcon}
+            title="Kamera ulanmagan"
+            hint={info.state.data.detail}
+          />
+        </Panel>
+      ) : null}
 
-          <Panel className="p-4">
-            <Eyebrow>Presetlar</Eyebrow>
-            <div className="mt-2 space-y-1">
-              {PRESETS.map((p) => (
-                <button
-                  key={p}
-                  onClick={() => sound.play("tick")}
-                  className="flex w-full items-center justify-between rounded-[10px] px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-                >
-                  {p}
-                  <ChevronRight size={14} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                </button>
-              ))}
+      {configured ? (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, ease: "easeOut" }}
+        >
+          <Panel className="overflow-hidden p-0">
+            <div
+              className="flex aspect-video items-center justify-center"
+              style={{ background: "var(--bg-base)" }}
+            >
+              {shot ? (
+                // eslint-disable-next-line @next/next/no-img-element -- data: URI, optimallashtirish kerak emas
+                <img
+                  src={`data:${shot.media_type};base64,${shot.image_b64}`}
+                  alt="Kamera kadri"
+                  className="h-full w-full object-contain"
+                />
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-[var(--text-muted)]">
+                  <CameraIcon size={30} strokeWidth={1.5} aria-hidden />
+                  <span className="text-xs">Kadr hali olinmagan</span>
+                </div>
+              )}
             </div>
+
+            {shot ? (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--border-hairline)] px-4 py-2.5">
+                <Eyebrow>{shot.source}</Eyebrow>
+                <span className="data text-[11px] text-[var(--text-muted)]">
+                  {shot.width}×{shot.height}
+                </span>
+                <span className="data text-[11px] text-[var(--text-muted)]">
+                  {new Date(shot.timestamp).toLocaleTimeString("uz-UZ")}
+                </span>
+              </div>
+            ) : null}
           </Panel>
         </motion.div>
-      </div>
+      ) : null}
+
+      {error ? <p className="text-xs text-[var(--status-alert)]">Kadr olinmadi: {error}</p> : null}
+
+      <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
+        Kamerani burash (PTZ) va presetlar hali ulanmagan — backend&apos;da Hikvision ISAPI
+        boshqaruvi yo&apos;q. Ishlamaydigan tugma ko&apos;rsatilmaydi.
+      </p>
     </div>
-  );
-}
-
-function PtzBtn({ children, label }: { children: React.ReactNode; label: string }) {
-  return (
-    <button
-      aria-label={label}
-      onClick={() => sound.play("tick")}
-      className="flex aspect-square items-center justify-center rounded-[10px] border border-[var(--border-hairline)] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-active)] hover:text-[var(--text-primary)]"
-    >
-      {children}
-    </button>
   );
 }
