@@ -2,6 +2,11 @@
 .env
 .env.*
 !.env.example
+# `.env.*` naqshi `!.env.example`dan tashqari HAR narsani yutadi —
+# `.env.web.example` xuddi shu sabab jim tashlab ketilgan edi (Hetzner
+# bootstrap skripti uni topa olmay yiqilgani orqali topildi). Boshqa
+# `*.example` shablon qo'shilsa, shu yerga ham qo'shilishi kerak.
+!infra/hetzner/.env.web.example
 *.key
 *.pem
 *.p12
