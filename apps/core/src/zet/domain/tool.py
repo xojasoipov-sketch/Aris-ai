@@ -42,6 +42,14 @@ class ToolResult(BaseModel, frozen=True):
     latency_ms: int = 0
     """Bajarilish vaqti (millisekundlarda)."""
 
+    retryable: bool = True
+    """Qayta urinish ma'noga egami (faqat `success=False` bo'lganda).
+
+    Kvota tugashi kabi xatolar uchun `False`. Executor qayta urinishlar
+    orasida kutmaydi, ya'ni 429'ni uch marta takrorlash bir soniyaning
+    ichida uchta behuda API chaqiruvi demakdir — jonli log'da aynan
+    shunday ko'rindi (264 ms ichida 3 urinish)."""
+
     metadata: dict[str, Any] = Field(default_factory=dict)
     """Qo'shimcha ma'lumot (debug/audit)."""
 

@@ -32,6 +32,7 @@ from zet.domain.enums import PermissionLevel, StepStatus, TaskClass
 from zet.domain.plan import Plan, PlanStep
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
+from zet.tools.base import Tool, ToolError, ToolQuotaError
 from zet.tools.builtin import build_default_registry
 from zet.tools.registry import ToolRegistry, ToolSignature
 
@@ -233,3 +234,85 @@ class TestPlanningDoesNotRequireAVisionModel:
     def test_text_classes_are_untouched(self, task_class: TaskClass) -> None:
         """Murakkab vazifa kuchsiz modelga tushib qolmasin."""
         assert _planning_task_class(task_class) == task_class
+
+
+class TestQuotaErrorsAreNotRetried:
+    """Kvota xatosini takrorlash — behuda API chaqiruvi.
+
+    Jonli log'da `video.learn` bitta 429'ni 264 ms ichida uch marta
+    takrorladi. Urinishlar orasida kutish yo'q, ya'ni natija oldindan
+    ma'lum edi.
+    """
+
+    class _QuotaTool(Tool):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        @property
+        def name(self) -> str:
+            return "test.quota"
+
+        @property
+        def description(self) -> str:
+            return "Doim kvota xatosi qaytaradi"
+
+        @property
+        def input_schema(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        @property
+        def permission_level(self) -> PermissionLevel:
+            return PermissionLevel.READ
+
+        @property
+        def idempotent(self) -> bool:
+            return True
+
+        async def _execute(self, params: dict[str, Any]) -> Any:
+            self.calls += 1
+            raise ToolQuotaError("kvota tugadi")
+
+    async def test_tool_is_called_once(self) -> None:
+        tool = self._QuotaTool()
+        registry = ToolRegistry()
+        registry.register(tool)
+        plan = Plan(
+            summary="reja",
+            steps=[
+                PlanStep(
+                    position=0,
+                    description="Kvota tooli",
+                    tool_name="test.quota",
+                    permission_required=PermissionLevel.READ,
+                )
+            ],
+        )
+        executor = Executor(
+            registry=registry,
+            policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+        )
+
+        ctx = await executor.execute_plan(plan)
+
+        assert tool.calls == 1
+        assert ctx.results[0].status == StepStatus.FAILED
+        assert "kvota" in (ctx.results[0].error or "")
+
+    async def test_result_is_marked_not_retryable(self) -> None:
+        result = await self._QuotaTool().execute({})
+
+        assert result.success is False
+        assert result.retryable is False
+
+    async def test_ordinary_errors_stay_retryable(self) -> None:
+        """Faqat kvota istisno — vaqtinchalik xatolar avvalgidek qaytariladi."""
+
+        class _FlakyTool(TestQuotaErrorsAreNotRetried._QuotaTool):
+            async def _execute(self, params: dict[str, Any]) -> Any:
+                self.calls += 1
+                raise ToolError("vaqtinchalik nosozlik")
+
+        result = await _FlakyTool().execute({})
+
+        assert result.retryable is True

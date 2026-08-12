@@ -41,7 +41,7 @@ import httpx
 import structlog
 
 from zet.domain.enums import PermissionLevel, TrustLevel
-from zet.tools.base import Tool, ToolError
+from zet.tools.base import Tool, ToolError, ToolQuotaError
 
 log = structlog.get_logger(__name__)
 
@@ -246,8 +246,10 @@ class VideoLearnTool(Tool):
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             if status == 429:
+                # `ToolQuotaError` — Executor darhol qayta urinmaydi.
+                # Kvota xatosini takrorlash 3 ta behuda so'rov demak.
                 msg = "Gemini kvotasi tugadi — biroz kutib qayta urinib ko'ring"
-                raise ToolError(msg) from exc
+                raise ToolQuotaError(msg) from exc
             msg = f"Gemini xatosi: HTTP {status}"
             raise ToolError(msg) from exc
         except httpx.HTTPError as exc:

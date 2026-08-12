@@ -428,6 +428,27 @@ class Executor:
                     retries=attempt,
                 )
 
+            # Kvota/limit — darhol qayta urinish yordam bermaydi.
+            #
+            # Urinishlar orasida kutish yo'q, ya'ni 429'ni takrorlash bir
+            # soniyada uchta behuda so'rov demak. Jonli log'da aynan
+            # shunday ko'rindi: 264 ms ichida 3 urinish, uchchalasi ham
+            # "Gemini kvotasi tugadi".
+            if not tool_result.retryable:
+                log.warning(
+                    "executor.no_retry_quota",
+                    step=step.position,
+                    tool=step.tool_name,
+                    error=tool_result.error,
+                )
+                return StepResult(
+                    step,
+                    status=StepStatus.FAILED,
+                    tool_result=tool_result,
+                    error=tool_result.error,
+                    retries=attempt,
+                )
+
             # Idempotent bo'lmasa — retry qilmaslik
             if not tool.idempotent:
                 log.warning(

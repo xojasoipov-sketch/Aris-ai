@@ -27,6 +27,13 @@ class ToolError(Exception):
     """Tool bajarilishida umumiy xato."""
 
 
+class ToolQuotaError(ToolError):
+    """Tashqi xizmat kvotasi/limiti tugadi.
+
+    Darhol qayta urinish yordam bermaydi — Executor bu xatoni
+    takrorlamaydi."""
+
+
 class ToolTimeoutError(ToolError):
     """Tool belgilangan vaqt ichida yakunlanmadi (A-07)."""
 
@@ -145,13 +152,15 @@ class Tool(ABC):
             )
         except ToolError as exc:
             latency = _now_ms() - start_ms
-            log.warning("tool.error", tool=self.name, error=str(exc))
+            retryable = not isinstance(exc, ToolQuotaError)
+            log.warning("tool.error", tool=self.name, error=str(exc), retryable=retryable)
             return ToolResult(
                 tool_name=self.name,
                 success=False,
                 error=str(exc),
                 trust_level=self.output_trust_level,
                 latency_ms=latency,
+                retryable=retryable,
             )
         except Exception as exc:
             latency = _now_ms() - start_ms
