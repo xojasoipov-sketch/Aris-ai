@@ -1,3 +1,5 @@
+import { GeistMono } from "geist/font/mono";
+import { GeistSans } from "geist/font/sans";
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
@@ -7,7 +9,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#05070D",
+  themeColor: "#050608",
   width: "device-width",
   initialScale: 1,
 };
@@ -16,8 +18,8 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="uz">
-      <body>{children}</body>
+    <html lang="uz" className={`${GeistSans.variable} ${GeistMono.variable}`}>
+      <body className={GeistSans.className}>{children}</body>
     </html>
   );
 }

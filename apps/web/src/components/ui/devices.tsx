@@ -1,13 +1,14 @@
 "use client";
 
-/** Devices sahifasi komponentlari — docs/11 §4.
+/** Devices sahifasi komponentlari v2 — docs/11 §4, CLAUDE.md uslubida.
  * ConnectionBadge · ApprovalCard · AuditRow · KillSwitchButton
+ * Modal — .floating (blur faqat shu yerda ruxsat).
  */
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
-import { Button, GlassPanel, StatusDot, TechLabel } from "@/components/ui/primitives";
+import { Button, Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
 import { sound } from "@/lib/sound";
 
 /* ── Ulanish holati (docs/11 §2.1) ────────────────────────────── */
@@ -20,22 +21,16 @@ const CONN: Record<ConnectionState, { color: string; pulse: boolean; text: strin
     pulse: false,
     text: "Ulanmagan — ZET agentni kompyuteringizda ishga tushiring",
   },
-  connecting: { color: "var(--state-working)", pulse: true, text: "Ulanmoqda..." },
-  connected: { color: "var(--state-online)", pulse: false, text: "Ulangan" },
-  executing: { color: "var(--state-thinking)", pulse: true, text: "Amal bajarilmoqda..." },
-  error: { color: "var(--state-danger)", pulse: false, text: "Xato" },
+  connecting: { color: "var(--status-working)", pulse: true, text: "Ulanmoqda…" },
+  connected: { color: "var(--status-online)", pulse: false, text: "Ulangan" },
+  executing: { color: "var(--accent-blue)", pulse: true, text: "Amal bajarilmoqda…" },
+  error: { color: "var(--status-alert)", pulse: false, text: "Xato" },
 };
 
-export function ConnectionBadge({
-  state,
-  detail,
-}: {
-  state: ConnectionState;
-  detail?: string;
-}) {
+export function ConnectionBadge({ state, detail }: { state: ConnectionState; detail?: string }) {
   const c = CONN[state];
   return (
-    <div className="glass inline-flex items-center gap-2.5 rounded-full px-4 py-2">
+    <div className="inline-flex items-center gap-2.5 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-4 py-2">
       <StatusDot color={c.color} pulse={c.pulse} />
       <span className="text-sm text-[var(--text-primary)]">
         {c.text}
@@ -52,7 +47,7 @@ export interface ApprovalInfo {
   toolName: string;
   reason: string;
   preview: Record<string, unknown>;
-  expiresAt: string; // ISO
+  expiresAt: string;
 }
 
 function useCountdown(expiresAt: string) {
@@ -81,7 +76,6 @@ export function ApprovalCard({
   const ss = Math.floor((leftMs % 60000) / 1000);
   const frac = Math.min(1, leftMs / (ttlMinutes * 60000));
 
-  // Karta paydo bo'lganda diqqat tovushi — "sendan qaror kutilyapti"
   useEffect(() => {
     sound.play("approval");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,26 +83,26 @@ export function ApprovalCard({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.96 }}
-      transition={{ type: "spring", stiffness: 300, damping: 26 }}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ type: "spring", stiffness: 300, damping: 30 }}
     >
-      <GlassPanel glow={!expired} className={`p-5 ${expired ? "opacity-60" : ""}`}>
+      <Panel className={`p-5 ${expired ? "opacity-60" : "!border-[var(--border-active)]"}`}>
         <div className="flex items-center gap-2">
-          <StatusDot color={expired ? "var(--text-muted)" : "var(--state-working)"} pulse={!expired} />
-          <TechLabel className="!text-[var(--state-working)]">
+          <StatusDot color={expired ? "var(--text-muted)" : "var(--status-working)"} pulse={!expired} />
+          <Eyebrow className="!text-[var(--status-working)]">
             {expired ? "Muddat tugadi" : "Tasdiq kutilmoqda"}
-          </TechLabel>
+          </Eyebrow>
         </div>
 
-        <div className="mt-3 font-mono text-sm text-[var(--text-mono)]">{approval.toolName}</div>
+        <div className="data mt-3 text-sm text-[var(--accent-blue)]">{approval.toolName}</div>
         <div className="mt-1 text-sm text-[var(--text-secondary)]">{approval.reason}</div>
 
         {Object.keys(approval.preview).length > 0 ? (
-          <div className="mt-3 rounded-[10px] border border-[var(--border-subtle)] bg-[var(--bg-base)] p-3">
+          <div className="mt-3 rounded-[10px] border border-[var(--border-hairline)] bg-[var(--bg-base)] p-3">
             {Object.entries(approval.preview).map(([k, v]) => (
-              <div key={k} className="flex gap-2 font-mono text-xs">
+              <div key={k} className="data flex gap-2 text-xs">
                 <span className="text-[var(--text-muted)]">{k}:</span>
                 <span className="break-all text-[var(--text-primary)]">{String(v)}</span>
               </div>
@@ -116,20 +110,19 @@ export function ApprovalCard({
           </div>
         ) : null}
 
-        {/* TTL progress + countdown */}
         <div className="mt-4">
           <div className="flex items-center justify-between text-xs">
             <span className="text-[var(--text-muted)]">Muddat</span>
-            <span className="tabular font-mono text-[var(--text-secondary)]">
+            <span className="data text-[var(--text-secondary)]">
               {expired ? "00:00" : `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`}
             </span>
           </div>
-          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]">
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--surface-hover)]">
             <div
               className="h-full rounded-full transition-[width] duration-1000 ease-linear"
               style={{
                 width: `${frac * 100}%`,
-                background: frac < 0.2 ? "var(--state-danger)" : "var(--state-working)",
+                background: frac < 0.2 ? "var(--status-alert)" : "var(--status-working)",
               }}
             />
           </div>
@@ -148,7 +141,7 @@ export function ApprovalCard({
             Muddat tugadi — amalni qayta so'rang
           </div>
         ) : null}
-      </GlassPanel>
+      </Panel>
     </motion.div>
   );
 }
@@ -158,9 +151,9 @@ export function ApprovalCard({
 export type AuditOutcome = "done" | "rejected" | "pending" | "expired";
 
 const AUDIT: Record<AuditOutcome, { color: string; text: string }> = {
-  done: { color: "var(--state-online)", text: "bajarildi" },
-  rejected: { color: "var(--state-danger)", text: "rad etildi" },
-  pending: { color: "var(--state-working)", text: "kutilmoqda" },
+  done: { color: "var(--status-online)", text: "bajarildi" },
+  rejected: { color: "var(--status-alert)", text: "rad etildi" },
+  pending: { color: "var(--status-working)", text: "kutilmoqda" },
   expired: { color: "var(--text-muted)", text: "muddat tugadi" },
 };
 
@@ -179,9 +172,9 @@ export function AuditRow({
 }) {
   const a = AUDIT[outcome];
   return (
-    <div className="flex items-baseline gap-3 border-b border-[var(--border-subtle)] py-2 font-mono text-xs last:border-0">
-      <span className="tabular shrink-0 text-[var(--text-muted)]">[{time}]</span>
-      <span className="shrink-0 text-[var(--text-mono)]">{tool}</span>
+    <div className="data flex items-baseline gap-3 border-b border-[var(--border-hairline)] py-2 text-xs last:border-0">
+      <span className="shrink-0 text-[var(--text-muted)]">[{time}]</span>
+      <span className="shrink-0 text-[var(--accent-blue)]">{tool}</span>
       <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{detail}</span>
       <span className="shrink-0" style={{ color: a.color }}>
         {a.text}
@@ -209,11 +202,11 @@ export function KillSwitchButton({
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        className="flex items-center justify-between rounded-[12px] border border-[var(--state-danger)] bg-[rgba(239,68,68,0.08)] px-4 py-3"
+        className="flex items-center justify-between gap-4 rounded-[var(--radius-card)] border border-[var(--status-alert)] bg-[rgba(239,68,68,0.06)] px-4 py-3"
       >
         <div className="flex items-center gap-2.5">
-          <StatusDot color="var(--state-danger)" pulse />
-          <span className="font-mono text-sm font-semibold tracking-wider text-[var(--state-danger)]">
+          <StatusDot color="var(--status-alert)" pulse />
+          <span className="data text-sm font-medium text-[var(--status-alert)]">
             KILLSWITCH FAOL — barcha amallar to'xtatilgan
           </span>
         </div>
@@ -227,7 +220,7 @@ export function KillSwitchButton({
   return (
     <>
       <Button variant="danger" onClick={() => setConfirming(true)}>
-        ■ Barcha amallarni to'xtatish
+        Barcha amallarni to'xtatish
       </Button>
       <AnimatePresence>
         {confirming ? (
@@ -235,37 +228,36 @@ export function KillSwitchButton({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(5,7,13,0.8)] backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(5,6,8,0.7)]"
             onClick={() => setConfirming(false)}
           >
             <motion.div
-              initial={{ scale: 0.92, y: 8 }}
+              initial={{ scale: 0.96, y: 6 }}
               animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.92, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 380, damping: 28 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
               onClick={(e) => e.stopPropagation()}
+              className="floating w-[380px] p-6"
             >
-              <GlassPanel className="w-[380px] border-[var(--state-danger)] p-6">
-                <TechLabel className="!text-[var(--state-danger)]">Favqulodda to'xtatish</TechLabel>
-                <p className="mt-3 text-sm text-[var(--text-primary)]">
-                  Barcha faol run'lar bir zumda to'xtatiladi. Ishonchingiz komilmi?
-                </p>
-                <div className="mt-5 flex justify-end gap-2">
-                  <Button variant="ghost" onClick={() => setConfirming(false)}>
-                    Bekor qilish
-                  </Button>
-                  <Button
-                    variant="danger"
-                    onClick={() => {
-                      sound.play("killswitch");
-                      setConfirming(false);
-                      onEngage();
-                    }}
-                  >
-                    To'xtatish
-                  </Button>
-                </div>
-              </GlassPanel>
+              <Eyebrow className="!text-[var(--status-alert)]">Favqulodda to'xtatish</Eyebrow>
+              <p className="mt-3 text-sm text-[var(--text-primary)]">
+                Barcha faol run'lar bir zumda to'xtatiladi. Ishonchingiz komilmi?
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => setConfirming(false)}>
+                  Bekor qilish
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    sound.play("killswitch");
+                    setConfirming(false);
+                    onEngage();
+                  }}
+                >
+                  To'xtatish
+                </Button>
+              </div>
             </motion.div>
           </motion.div>
         ) : null}

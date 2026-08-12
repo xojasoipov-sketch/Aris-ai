@@ -1,50 +1,41 @@
 "use client";
 
-/** ZET UI primitivlari — glass panel, tugma, texnik yorliq.
- * ADR-0005 token'laridan boshqa rang YO'Q.
+/** ZET UI primitivlari v2 — CLAUDE.md master tizim.
+ * Panel: hairline chegara + inset highlight, blur YO'Q (blur faqat .floating).
  */
 
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 import type { ComponentProps, ReactNode } from "react";
 
 import { sound } from "@/lib/sound";
 
-/** Glass panel — docs/10 §1 (rgba fon + blur + nozik chegara). */
-export function GlassPanel({
+/** Asosiy karta — .panel (globals.css). */
+export function Panel({
   children,
   className = "",
-  glow = false,
 }: {
   children: ReactNode;
   className?: string;
-  glow?: boolean;
 }) {
-  return (
-    <div
-      className={`glass rounded-[16px] ${glow ? "border-[var(--border-glow)]" : ""} ${className}`}
-    >
-      {children}
-    </div>
-  );
+  return <div className={`panel ${className}`}>{children}</div>;
 }
 
-/** Texnik yorliq — UPPERCASE mono (mockup: "SYSTEM STATUS"). */
-export function TechLabel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`tech-label ${className}`}>{children}</div>;
+/** Eyebrow yorliq — "SYSTEM STATUS" uslubi. */
+export function Eyebrow({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`eyebrow ${className}`}>{children}</div>;
 }
 
 type ButtonVariant = "primary" | "ghost" | "danger";
 
 const BUTTON_STYLES: Record<ButtonVariant, string> = {
-  primary:
-    "bg-[var(--accent-primary)] text-[#05070D] font-semibold hover:brightness-110",
+  primary: "bg-[var(--accent-blue)] text-[#050608] font-medium hover:brightness-110",
   ghost:
-    "bg-transparent border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-glow)]",
+    "bg-transparent border border-[var(--border-hairline)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-active)]",
   danger:
-    "bg-transparent border border-[var(--state-danger)] text-[var(--state-danger)] hover:bg-[var(--state-danger)] hover:text-[#05070D] font-semibold",
+    "bg-transparent border border-[var(--status-alert)] text-[var(--status-alert)] hover:bg-[var(--status-alert)] hover:text-[#050608] font-medium",
 };
 
-/** Tugma — bosilganda "tick" tovushi (har bir buyruq his qilinadi). */
+/** Tugma — spring(300,30), bounce yo'q; bosilganda tick tovushi. */
 export function Button({
   variant = "ghost",
   className = "",
@@ -54,7 +45,8 @@ export function Button({
 }: ComponentProps<"button"> & { variant?: ButtonVariant }) {
   return (
     <motion.button
-      whileTap={{ scale: 0.97 }}
+      whileTap={{ scale: 0.98 }}
+      transition={{ type: "spring", stiffness: 300, damping: 30 }}
       className={`rounded-[10px] px-4 py-2 text-sm transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none ${BUTTON_STYLES[variant]} ${className}`}
       onClick={(e) => {
         sound.play("tick");
@@ -67,18 +59,12 @@ export function Button({
   );
 }
 
-/** Holat nuqtasi — rang semantik token'dan. */
-export function StatusDot({
-  color,
-  pulse = false,
-}: {
-  color: string;
-  pulse?: boolean;
-}) {
+/** Holat nuqtasi — semantik token rangi. */
+export function StatusDot({ color, pulse = false }: { color: string; pulse?: boolean }) {
   return (
     <span
-      className={`inline-block h-2 w-2 rounded-full ${pulse ? "animate-pulse-dot" : ""}`}
-      style={{ background: color, boxShadow: `0 0 8px ${color}` }}
+      className={`inline-block h-1.5 w-1.5 rounded-full ${pulse ? "pulse-dot" : ""}`}
+      style={{ background: color }}
     />
   );
 }

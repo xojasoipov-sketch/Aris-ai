@@ -6,11 +6,11 @@
  * o'chiq bo'lsa jimgina yashirinadi, UI yiqilmaydi.
  */
 
-import { AnimatePresence } from "framer-motion";
+import { AnimatePresence } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 
 import { ApprovalCard } from "@/components/ui/devices";
-import { TechLabel } from "@/components/ui/primitives";
+import { Eyebrow } from "@/components/ui/primitives";
 import { api, type ApprovalDto } from "@/lib/api";
 import { sound } from "@/lib/sound";
 
@@ -38,7 +38,7 @@ export function LiveApprovals() {
 
   return (
     <section className="space-y-3">
-      <TechLabel>Tasdiq kutilmoqda — {approvals.length}</TechLabel>
+      <Eyebrow>Tasdiq kutilmoqda — {approvals.length}</Eyebrow>
       <div className="grid gap-4 md:grid-cols-2">
         <AnimatePresence>
           {approvals.map((a) => (

@@ -1,23 +1,34 @@
 "use client";
 
-/** Assistant hero — dashboard markazi: zarrachali yadro + holat + buyruq paneli.
+/** Assistant hero v2 — markazda <NeuroOrb /> (CLAUDE.md master tizim).
  *
- * To'liq sikl (docs/10 §3.2): sleep → (tap/yozish) → listening → SUBMIT →
- * thinking → RESPOND → speaking → DONE → listening. Har o'tish tovush va
- * zarracha harakati bilan sinxron — "buyruq his qilinadi".
- *
- * Hozircha orchestrator demo rejimda (backend /run endpoint'i Bo'lim 10
- * doirasidan tashqarida) — lekin butun holat oqimi real.
+ * Holat mashinasi (lib/assistant-machine) orb holatiga map qilinadi;
+ * har o'tish tovush bilan sinxron. Demo javob sikli — real orchestrator
+ * SSE keyingi fazada ulanadi.
  */
 
-import { AnimatePresence, motion } from "framer-motion";
+import { Mic, SendHorizontal } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ParticleCore } from "@/components/core/ParticleCore";
-import { IconMic, IconSend } from "@/components/ui/icons";
-import { StatusPill } from "@/components/ui/StatusPill";
-import { STATE_LABEL, useAssistant } from "@/lib/assistant-machine";
+import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
+import { AgentStatusChip } from "@/components/ui/AgentStatusChip";
+import {
+  STATE_LABEL,
+  useAssistant,
+  type AssistantState,
+} from "@/lib/assistant-machine";
 import { sound } from "@/lib/sound";
+
+/* Mashina holati → orb holati */
+const TO_ORB: Record<AssistantState, OrbState> = {
+  sleep: "idle",
+  listening: "listening",
+  thinking: "thinking",
+  speaking: "speaking",
+  minimized: "idle",
+  notification: "searching",
+};
 
 const DEMO_REPLY =
   "Tushundim. SMM agent bugungi kanal statistikasini yig'yapti — tayyor bo'lganda xabar beraman.";
@@ -35,11 +46,9 @@ export function AssistantHero() {
     if (state === "sleep" || state === "minimized") send("WAKE");
     setReply("");
     send("SUBMIT");
-    // Demo javob sikli — keyin real orchestrator SSE bilan almashadi
     timers.current.push(
       setTimeout(() => {
         send("RESPOND");
-        // Harf-baharf yozish effekti
         let i = 0;
         const typeTimer = setInterval(() => {
           i += 2;
@@ -56,56 +65,44 @@ export function AssistantHero() {
 
   return (
     <div className="relative flex flex-col items-center">
-      {/* Yadro — bosilganda uyg'onadi/uxlaydi */}
+      {/* Orb — 440px (spec: 400–500px), bosilganda uyg'onadi */}
       <button
         aria-label={state === "sleep" ? "ZET'ni uyg'otish" : "ZET holati"}
-        className="relative h-[340px] w-[340px] cursor-pointer outline-none"
+        className="relative h-[440px] w-[440px] cursor-pointer outline-none"
         onClick={() => {
           if (state === "sleep" || state === "minimized") send("WAKE");
           else if (state === "listening") send("CANCEL");
         }}
       >
-        {/* Orqa halo — holatga qarab kuchayadi */}
-        <motion.div
-          aria-hidden
-          className="absolute inset-6 rounded-full"
-          animate={{
-            boxShadow:
-              state === "sleep"
-                ? "0 0 60px 0 rgba(56,189,248,0.12)"
-                : state === "thinking"
-                  ? "0 0 140px 24px rgba(56,189,248,0.28)"
-                  : "0 0 100px 12px rgba(56,189,248,0.2)",
-          }}
-          transition={{ duration: 1.2 }}
-        />
-        <ParticleCore state={state} className="absolute inset-0" />
+        <NeuroOrb state={TO_ORB[state]} className="absolute inset-0" />
       </button>
 
-      {/* Holat matni / javob */}
-      <div className="flex min-h-[72px] w-full max-w-lg flex-col items-center gap-3 text-center">
+      {/* Holat matni / javob / chip */}
+      <div className="flex min-h-[64px] w-full max-w-lg flex-col items-center gap-3 text-center">
         <AnimatePresence mode="wait">
           {state === "thinking" ? (
-            <StatusPill key="pill" kind="thinking" />
+            <AgentStatusChip key="chip" kind="thinking" />
           ) : reply && (state === "speaking" || state === "listening") ? (
             <motion.p
               key="reply"
-              initial={{ opacity: 0, y: 6 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
               className="text-sm leading-relaxed text-[var(--text-primary)]"
             >
               {reply}
               {state === "speaking" ? (
-                <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse-dot bg-[var(--accent-cyan)] align-middle" />
+                <span className="pulse-dot ml-0.5 inline-block h-4 w-[2px] bg-[var(--accent-glow)] align-middle" />
               ) : null}
             </motion.p>
           ) : (
             <motion.p
               key={`label-${state}`}
-              initial={{ opacity: 0, y: 6 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
               className="text-sm text-[var(--text-secondary)]"
             >
               {STATE_LABEL[state]}
@@ -115,7 +112,7 @@ export function AssistantHero() {
       </div>
 
       {/* Buyruq paneli */}
-      <div className="glass mt-2 flex w-full max-w-lg items-center gap-2 rounded-full py-1.5 pl-5 pr-1.5">
+      <div className="mt-2 flex w-full max-w-lg items-center gap-2 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] py-1.5 pl-5 pr-1.5">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -125,27 +122,28 @@ export function AssistantHero() {
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
-          placeholder="Buyruq yozing yoki ovoz bilan gapiring..."
+          placeholder="Buyruq yozing yoki ovoz bilan gapiring…"
           className="w-full bg-transparent text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
         />
         <button
           aria-label="Ovozli buyruq"
-          className="rounded-full p-2.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--accent-cyan)]"
+          className="rounded-full p-2.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--accent-blue)]"
           onClick={() => {
             sound.play("listenStart");
             if (state === "sleep") send("WAKE");
           }}
         >
-          <IconMic />
+          <Mic size={18} strokeWidth={1.5} />
         </button>
         <motion.button
           aria-label="Yuborish"
-          whileTap={{ scale: 0.92 }}
-          className="rounded-full bg-[var(--accent-primary)] p-2.5 text-[#05070D] transition-[filter] hover:brightness-110 disabled:opacity-40"
+          whileTap={{ scale: 0.95 }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          className="rounded-full bg-[var(--accent-blue)] p-2.5 text-[#050608] transition-[filter] hover:brightness-110 disabled:opacity-40"
           disabled={!input.trim() || state === "thinking"}
           onClick={submit}
         >
-          <IconSend />
+          <SendHorizontal size={18} strokeWidth={1.5} />
         </motion.button>
       </div>
     </div>

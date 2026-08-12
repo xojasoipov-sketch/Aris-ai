@@ -1,67 +1,70 @@
 "use client";
 
-/** App shell — chap sidebar + yuqori bar + kontent (docs/10 §3.1, §4).
- * Sidebar tartibi mockup bo'yicha: 12 sahifa.
+/** App shell v2 — CLAUDE.md master tizim.
+ * Chap sidebar (faol item: --accent-blue border-left), yuqori bar,
+ * pastki FIXED status-bar (System Online · Uptime · Performance · vaqt).
+ * Ikonlar: lucide-react, strokeWidth 1.5, 18px.
  */
 
-import { motion } from "framer-motion";
+import {
+  BarChart3,
+  Bell,
+  Bot,
+  Calendar,
+  Camera,
+  FileText,
+  FolderKanban,
+  LayoutGrid,
+  ListChecks,
+  MessageSquare,
+  MonitorSmartphone,
+  Search,
+  Settings,
+  Users,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
-import {
-  IconAgents,
-  IconAnalytics,
-  IconAssistant,
-  IconBell,
-  IconCalendar,
-  IconCamera,
-  IconDashboard,
-  IconDevices,
-  IconFiles,
-  IconMessages,
-  IconProjects,
-  IconSearch,
-  IconSettings,
-  IconTasks,
-  IconVolume,
-  IconVolumeOff,
-} from "@/components/ui/icons";
 import { sound } from "@/lib/sound";
 
 const NAV = [
-  { href: "/", label: "Boshqaruv", icon: IconDashboard },
-  { href: "/assistant", label: "AI Yordamchi", icon: IconAssistant },
-  { href: "/agents", label: "Agentlar", icon: IconAgents },
-  { href: "/projects", label: "Loyihalar", icon: IconProjects },
-  { href: "/calendar", label: "Taqvim", icon: IconCalendar },
-  { href: "/tasks", label: "Vazifalar", icon: IconTasks },
-  { href: "/messages", label: "Xabarlar", icon: IconMessages },
-  { href: "/files", label: "Fayllar", icon: IconFiles },
-  { href: "/analytics", label: "Analitika", icon: IconAnalytics },
-  { href: "/devices", label: "Qurilmalar", icon: IconDevices },
-  { href: "/camera", label: "Kamera", icon: IconCamera },
-  { href: "/settings", label: "Sozlamalar", icon: IconSettings },
+  { href: "/", label: "Boshqaruv", icon: LayoutGrid },
+  { href: "/ai-chat", label: "AI Yordamchi", icon: Bot },
+  { href: "/agents", label: "Agentlar", icon: Users },
+  { href: "/projects", label: "Loyihalar", icon: FolderKanban },
+  { href: "/calendar", label: "Taqvim", icon: Calendar },
+  { href: "/tasks", label: "Vazifalar", icon: ListChecks },
+  { href: "/messages", label: "Xabarlar", icon: MessageSquare },
+  { href: "/files", label: "Fayllar", icon: FileText },
+  { href: "/analytics", label: "Analitika", icon: BarChart3 },
+  { href: "/devices", label: "Qurilmalar", icon: MonitorSmartphone },
+  { href: "/camera", label: "Kamera", icon: Camera },
+  { href: "/settings", label: "Sozlamalar", icon: Settings },
 ] as const;
 
-function Clock() {
+/* Pastki status-bar uchun jonli soat + uptime */
+function useNow() {
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
     setNow(new Date());
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
-  if (!now) return <div className="h-10 w-24" />;
-  return (
-    <div>
-      <div className="tabular font-mono text-lg font-semibold text-[var(--text-primary)]">
-        {now.toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-      </div>
-      <div className="text-[11px] text-[var(--text-muted)]">
-        {now.toLocaleDateString("uz-UZ", { day: "numeric", month: "long", year: "numeric" })}
-      </div>
-    </div>
-  );
+  return now;
+}
+
+function useUptime() {
+  const [start] = useState(() => Date.now());
+  const now = useNow();
+  if (!now) return "00:00:00";
+  const s = Math.floor((now.getTime() - start) / 1000);
+  const h = String(Math.floor(s / 3600)).padStart(2, "0");
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const sec = String(s % 60).padStart(2, "0");
+  return `${h}:${m}:${sec}`;
 }
 
 function SoundToggle() {
@@ -70,7 +73,7 @@ function SoundToggle() {
   return (
     <button
       aria-label={on ? "Ovozni o'chirish" : "Ovozni yoqish"}
-      className="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+      className="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
       onClick={() => {
         const next = !on;
         sound.setEnabled(next);
@@ -78,8 +81,34 @@ function SoundToggle() {
         if (next) sound.play("tick");
       }}
     >
-      {on ? <IconVolume /> : <IconVolumeOff />}
+      {on ? <Volume2 size={18} strokeWidth={1.5} /> : <VolumeX size={18} strokeWidth={1.5} />}
     </button>
+  );
+}
+
+function StatusBar() {
+  const now = useNow();
+  const uptime = useUptime();
+  return (
+    <footer className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-6 py-1.5 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-[var(--status-online)]" />
+        <span className="text-[var(--text-secondary)]">Tizim onlayn</span>
+      </div>
+      <div className="data flex items-center gap-6 text-[var(--text-muted)]">
+        <span>
+          Uptime <span className="text-[var(--text-secondary)]">{uptime}</span>
+        </span>
+        <span>
+          Unumdorlik <span className="text-[var(--text-secondary)]">87%</span>
+        </span>
+        <span className="text-[var(--text-secondary)]">
+          {now
+            ? `${now.toLocaleDateString("uz-UZ", { day: "2-digit", month: "2-digit", year: "numeric" })} · ${now.toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+            : ""}
+        </span>
+      </div>
+    </footer>
   );
 }
 
@@ -89,29 +118,30 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen">
       {/* ── Sidebar ── */}
-      <aside className="fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-surface)]">
-        {/* Logo — zarrachali doira + ZET wordmark */}
+      <aside className="fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-[var(--border-hairline)] bg-[var(--bg-elevated)] pb-9">
+        {/* ZET wordmark — nuqtali halqa logo */}
         <Link href="/" className="flex items-center gap-3 px-5 py-5">
-          <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden>
-            {Array.from({ length: 24 }, (_, i) => {
-              const a = (i / 24) * Math.PI * 2;
-              const r = i % 2 === 0 ? 11 : 8;
+          <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden>
+            {Array.from({ length: 20 }, (_, i) => {
+              const a = (i / 20) * Math.PI * 2;
               return (
                 <circle
                   key={i}
-                  cx={14 + r * Math.cos(a)}
-                  cy={14 + r * Math.sin(a)}
+                  cx={14 + 10 * Math.cos(a)}
+                  cy={14 + 10 * Math.sin(a)}
                   r="0.9"
-                  fill="var(--accent-cyan)"
-                  opacity={i % 2 === 0 ? 0.9 : 0.45}
+                  fill="var(--accent-blue)"
+                  opacity={0.35 + 0.65 * ((i % 5) / 5)}
                 />
               );
             })}
           </svg>
-          <span className="text-lg font-bold tracking-[0.2em] text-[var(--text-primary)]">ZET</span>
+          <span className="text-base font-semibold tracking-[0.25em] text-[var(--text-primary)]">
+            ZET
+          </span>
         </Link>
 
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 pb-4">
+        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">
           {NAV.map(({ href, label, icon: I }) => {
             const active = pathname === href;
             return (
@@ -119,34 +149,28 @@ export function AppShell({ children }: { children: ReactNode }) {
                 key={href}
                 href={href}
                 onClick={() => sound.play("tick")}
-                className={`relative flex items-center gap-3 rounded-[10px] px-3 py-2 text-sm transition-colors ${
+                className={`flex items-center gap-3 border-l-2 py-2 pl-3.5 pr-3 text-sm transition-colors ${
                   active
-                    ? "text-[var(--text-primary)]"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+                    ? "border-[var(--accent-blue)] bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                    : "border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 }`}
               >
-                {active ? (
-                  <motion.span
-                    layoutId="nav-active"
-                    className="absolute inset-0 rounded-[10px] bg-[var(--bg-elevated)] ring-1 ring-[var(--border-glow)]"
-                    transition={{ type: "spring", stiffness: 400, damping: 32 }}
-                  />
-                ) : null}
-                <span className={`relative ${active ? "text-[var(--accent-primary)]" : ""}`}>
-                  <I />
-                </span>
-                <span className="relative">{label}</span>
+                <I
+                  size={18}
+                  strokeWidth={1.5}
+                  className={active ? "text-[var(--accent-blue)]" : ""}
+                />
+                {label}
               </Link>
             );
           })}
         </nav>
 
-        {/* Egasi paneli */}
-        <div className="border-t border-[var(--border-subtle)] px-5 py-4">
+        <div className="border-t border-[var(--border-hairline)] px-5 py-3.5">
           <div className="flex items-center gap-2.5">
-            <span className="inline-block h-2 w-2 rounded-full bg-[var(--state-online)]" />
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--status-online)]" />
             <div>
-              <div className="text-sm font-medium text-[var(--text-primary)]">Ega</div>
+              <div className="text-sm text-[var(--text-primary)]">Ega</div>
               <div className="text-[11px] text-[var(--text-muted)]">Onlayn</div>
             </div>
           </div>
@@ -154,13 +178,12 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       {/* ── Asosiy qism ── */}
-      <div className="ml-56 flex min-h-screen flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex items-center justify-between gap-6 border-b border-[var(--border-subtle)] bg-[rgba(5,7,13,0.75)] px-8 py-3 backdrop-blur-md">
-          <Clock />
-          <div className="glass flex max-w-md flex-1 items-center gap-2.5 rounded-full px-4 py-2">
-            <IconSearch className="text-[var(--text-muted)]" />
+      <div className="ml-56 flex min-h-screen flex-1 flex-col pb-9">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-6 border-b border-[var(--border-hairline)] bg-[rgba(5,6,8,0.85)] px-8 py-3">
+          <div className="flex max-w-md flex-1 items-center gap-2.5 rounded-full border border-[var(--border-hairline)] bg-[var(--bg-elevated)] px-4 py-2">
+            <Search size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
             <input
-              placeholder="Istalgan narsani qidiring..."
+              placeholder="Istalgan narsani qidiring…"
               className="w-full bg-transparent text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
             />
           </div>
@@ -168,14 +191,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             <SoundToggle />
             <button
               aria-label="Bildirishnomalar"
-              className="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+              className="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
             >
-              <IconBell />
+              <Bell size={18} strokeWidth={1.5} />
             </button>
           </div>
         </header>
         <main className="flex-1">{children}</main>
       </div>
+
+      <StatusBar />
     </div>
   );
 }

@@ -1,12 +1,20 @@
 "use client";
 
-/** Komponent ko'rgazmasi — har bir UI element izolyatsiyada (docs/10 §6 qadam 2).
- * Bu sahifa faqat development uchun — production nav'da ko'rinmaydi.
+/** Komponent ko'rgazmasi v2 — har element izolyatsiyada (CLAUDE.md audit uchun).
+ * NeuroOrb 6 holati + AgentStatusChip 5 turi shu yerda ko'zdan kechiriladi.
  */
 
 import { useState } from "react";
 
-import { AgentListItem, ProgressRing, Sparkline, StatCard } from "@/components/ui/cards";
+import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
+import { AgentStatusChip, type ChipKind } from "@/components/ui/AgentStatusChip";
+import {
+  AgentListItem,
+  ProgressRing,
+  RadialGauge,
+  Sparkline,
+  StatCard,
+} from "@/components/ui/cards";
 import {
   ApprovalCard,
   AuditRow,
@@ -14,43 +22,56 @@ import {
   KillSwitchButton,
   type ConnectionState,
 } from "@/components/ui/devices";
-import { Button, GlassPanel, TechLabel } from "@/components/ui/primitives";
-import { StatusPill, type PillKind } from "@/components/ui/StatusPill";
+import { Button, Eyebrow, Panel } from "@/components/ui/primitives";
 import { sound } from "@/lib/sound";
 
-const PILLS: PillKind[] = ["thinking", "searching", "solving", "shaping", "listening"];
-const CONN_STATES: ConnectionState[] = [
-  "disconnected",
-  "connecting",
-  "connected",
-  "executing",
-  "error",
-];
+const ORB_STATES: OrbState[] = ["idle", "listening", "thinking", "speaking", "searching", "offline"];
+const CHIPS: ChipKind[] = ["thinking", "solving", "working", "listening", "searching"];
+const CONN_STATES: ConnectionState[] = ["disconnected", "connecting", "connected", "executing", "error"];
 
 export default function ComponentsPage() {
   const [killswitch, setKillswitch] = useState(false);
   const [approvalKey, setApprovalKey] = useState(0);
+  const [orbState, setOrbState] = useState<OrbState>("idle");
 
   return (
     <main className="mx-auto max-w-4xl space-y-10 px-6 py-10">
       <header>
-        <h1 className="text-2xl font-bold">ZET komponent library</h1>
+        <h1 className="text-2xl font-semibold">ZET komponent library</h1>
         <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          docs/10 §3 va docs/11 §4 komponentlari — izolyatsiyada
+          CLAUDE.md master tizim — izolyatsiya ko'rgazmasi
         </p>
       </header>
 
       <section className="space-y-3">
-        <TechLabel>Status pill (docs/10 §3.3)</TechLabel>
+        <Eyebrow>NeuroOrb — 6 holat (bosib almashtiring)</Eyebrow>
+        <div className="flex flex-wrap gap-2">
+          {ORB_STATES.map((s) => (
+            <Button
+              key={s}
+              variant={s === orbState ? "primary" : "ghost"}
+              onClick={() => setOrbState(s)}
+            >
+              {s}
+            </Button>
+          ))}
+        </div>
+        <Panel className="flex items-center justify-center p-4">
+          <NeuroOrb state={orbState} className="h-[300px] w-[300px]" />
+        </Panel>
+      </section>
+
+      <section className="space-y-3">
+        <Eyebrow>AgentStatusChip — bitta shader, 5 variant</Eyebrow>
         <div className="flex flex-wrap gap-3">
-          {PILLS.map((k) => (
-            <StatusPill key={k} kind={k} />
+          {CHIPS.map((k) => (
+            <AgentStatusChip key={k} kind={k} />
           ))}
         </div>
       </section>
 
       <section className="space-y-3">
-        <TechLabel>Stat kartalar</TechLabel>
+        <Eyebrow>Stat kartalar</Eyebrow>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <StatCard label="Loyihalar" value={12} hint="faol" />
           <StatCard label="Agentlar" value={24} hint="onlayn" />
@@ -60,39 +81,40 @@ export default function ComponentsPage() {
       </section>
 
       <section className="space-y-3">
-        <TechLabel>Agent ro'yxati</TechLabel>
-        <GlassPanel className="p-2">
+        <Eyebrow>Radial gauge + ring + sparkline</Eyebrow>
+        <Panel className="flex items-center gap-8 p-4">
+          <RadialGauge percent={24} label="CPU" value="24%" />
+          <RadialGauge percent={68} label="GPU" value="68%" />
+          <ProgressRing percent={68} label="bajarildi" />
+          <Sparkline data={[24, 31, 28, 45, 38, 52, 41, 36, 48, 44, 39, 55]} id="demo" />
+        </Panel>
+      </section>
+
+      <section className="space-y-3">
+        <Eyebrow>Agent ro'yxati</Eyebrow>
+        <Panel className="p-2">
           <AgentListItem name="CEO Agent" division="Strategiya" status="online" />
           <AgentListItem name="SMM Agent" division="Marketing" status="working" />
-          <AgentListItem name="Developer Agent" division="Texnologiya" status="online" />
           <AgentListItem name="Research Agent" division="Intellekt" status="thinking" />
-          <AgentListItem name="Finance Agent" division="Moliya" status="offline" />
           <AgentListItem name="HR Agent" division="Boshqaruv" status="paused" />
-        </GlassPanel>
+        </Panel>
       </section>
 
       <section className="space-y-3">
-        <TechLabel>Progress ring + sparkline</TechLabel>
-        <div className="flex items-center gap-8">
-          <ProgressRing percent={68} label="bajarildi" />
-          <GlassPanel className="p-4">
-            <TechLabel>CPU</TechLabel>
-            <Sparkline data={[24, 31, 28, 45, 38, 52, 41, 36, 48, 44, 39, 55]} />
-          </GlassPanel>
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        <TechLabel>Ulanish holatlari (docs/11 §2.1)</TechLabel>
+        <Eyebrow>Ulanish holatlari</Eyebrow>
         <div className="flex flex-wrap gap-3">
           {CONN_STATES.map((s) => (
-            <ConnectionBadge key={s} state={s} detail={s === "connected" ? "MacBook Pro, macOS" : undefined} />
+            <ConnectionBadge
+              key={s}
+              state={s}
+              detail={s === "connected" ? "MacBook Pro, macOS" : undefined}
+            />
           ))}
         </div>
       </section>
 
       <section className="space-y-3">
-        <TechLabel>Approval karta (docs/11 §2.4)</TechLabel>
+        <Eyebrow>Approval karta</Eyebrow>
         <div className="max-w-md">
           <ApprovalCard
             key={approvalKey}
@@ -117,17 +139,16 @@ export default function ComponentsPage() {
       </section>
 
       <section className="space-y-3">
-        <TechLabel>Audit log (docs/11 §2.5)</TechLabel>
-        <GlassPanel className="px-4 py-2">
+        <Eyebrow>Audit log</Eyebrow>
+        <Panel className="px-4 py-2">
           <AuditRow time="12:04:12" tool="desktop.key_press" detail="ctrl+alt+t" outcome="done" latencyMs={140} />
           <AuditRow time="12:03:55" tool="desktop.type_text" detail="Salom dunyo" outcome="rejected" />
-          <AuditRow time="12:03:31" tool="desktop.mouse_click" detail="x=340 y=220 left" outcome="pending" />
-          <AuditRow time="11:58:02" tool="desktop.screenshot" detail="—" outcome="expired" />
-        </GlassPanel>
+          <AuditRow time="12:03:31" tool="desktop.mouse_click" detail="x=340 y=220" outcome="pending" />
+        </Panel>
       </section>
 
       <section className="space-y-3">
-        <TechLabel>Kill-switch (docs/11 §2.6)</TechLabel>
+        <Eyebrow>Kill-switch</Eyebrow>
         <KillSwitchButton
           engaged={killswitch}
           onEngage={() => setKillswitch(true)}
@@ -136,15 +157,15 @@ export default function ComponentsPage() {
       </section>
 
       <section className="space-y-3">
-        <TechLabel>Tovushlar (lib/sound.ts)</TechLabel>
+        <Eyebrow>Tovushlar (WebAudio sintez)</Eyebrow>
         <div className="flex flex-wrap gap-2">
-          {(["wake", "sleep", "listenStart", "speak", "success", "error", "approval", "notification", "tick", "killswitch"] as const).map(
-            (s) => (
-              <Button key={s} onClick={() => sound.play(s)}>
-                {s}
-              </Button>
-            ),
-          )}
+          {(
+            ["wake", "sleep", "listenStart", "speak", "success", "error", "approval", "notification", "tick", "killswitch"] as const
+          ).map((s) => (
+            <Button key={s} onClick={() => sound.play(s)}>
+              {s}
+            </Button>
+          ))}
           <Button onClick={() => sound.startThinking()}>thinking ▶</Button>
           <Button onClick={() => sound.stopThinking()}>thinking ■</Button>
         </div>

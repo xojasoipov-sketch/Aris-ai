@@ -1,100 +1,58 @@
 @import "tailwindcss";
 
 /* ════════════════════════════════════════════════════════════════
-   ZET design token'lari — docs/adr/ADR-0005-design-tokens.md dan
-   AYNAN ko'chirilgan. O'zgartirish faqat ADR orqali.
+   ZET design token'lari v2 — ega master prompti (ADR-0008).
+   Yagona amaldagi manba: apps/web/CLAUDE.md. O'zgartirish faqat ADR orqali.
    ════════════════════════════════════════════════════════════════ */
 
-/* Fontlar — Google Fonts variable fayllar (lokal, CDN yo'q).
-   Inter: sarlavha + matn · JetBrains Mono: texnik yorliq/terminal */
-@font-face {
-  font-family: "Inter";
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url("/fonts/inter-latin.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
-    U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "Inter";
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url("/fonts/inter-latin-ext.woff2") format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
-    U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
-    U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
-  font-weight: 100 800;
-  font-display: swap;
-  src: url("/fonts/jbmono-latin.woff2") format("woff2");
-}
-
 :root {
-  /* Fon va sirtlar */
-  --bg-base: #05070d;
-  --bg-surface: #0a0e17;
-  --bg-elevated: #0f1420;
-  --border-subtle: #1a2233;
-  --border-glow: rgba(74, 158, 255, 0.25);
+  /* Fon qatlamlari — hech qachon sof #000 emas, doim ko'k-qora tint */
+  --bg-base: #050608;
+  --bg-elevated: #0b0e14;
+  --surface-hover: #14161c;
 
-  /* Akцent */
-  --accent-primary: #4a9eff;
-  --accent-cyan: #38bdf8;
-  --accent-glow: rgba(56, 189, 248, 0.35);
+  /* Chegaralar */
+  --border-hairline: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(90, 160, 255, 0.45);
 
   /* Matn */
-  --text-primary: #e8edf5;
-  --text-secondary: #8a97ad;
-  --text-muted: #4e5a70;
-  --text-mono: #7ba7d9;
+  --text-primary: #f2f4f8;
+  --text-secondary: #8a8f9c;
+  --text-muted: #4b4f58;
 
-  /* Semantik holatlar */
-  --state-online: #22c55e;
-  --state-working: #f59e0b;
-  --state-thinking: #38bdf8;
-  --state-offline: #4e5a70;
-  --state-danger: #ef4444;
+  /* Akцent */
+  --accent-blue: #4c8dff;
+  --accent-glow: #7dd3fc;
+
+  /* Semantik status */
+  --status-online: #22c55e;
+  --status-working: #f59e0b;
+  --status-thinking: #f59e0b; /* working bilan bir rang — animatsiya farqlaydi */
+  --status-offline: #4b4f58;
+  --status-alert: #ef4444;
 
   /* Shakl */
-  --radius-panel: 16px;
-  --radius-card: 12px;
-  --radius-chip: 999px;
-  --glass-bg: rgba(15, 20, 32, 0.6);
-  --glass-blur: 12px;
-
-  /* Shriftlar */
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --radius-card: 15px;
+  --radius-pill: 999px;
 }
 
-/* Tailwind v4 theme mapping — utility klasslar token'lardan oladi */
+/* Tailwind v4 theme mapping */
 @theme inline {
   --color-base: var(--bg-base);
-  --color-surface: var(--bg-surface);
   --color-elevated: var(--bg-elevated);
-  --color-line: var(--border-subtle);
-  --color-line-glow: var(--border-glow);
-  --color-accent: var(--accent-primary);
-  --color-cyan: var(--accent-cyan);
+  --color-hover: var(--surface-hover);
+  --color-hairline: var(--border-hairline);
+  --color-active: var(--border-active);
   --color-ink: var(--text-primary);
   --color-ink-2: var(--text-secondary);
   --color-ink-3: var(--text-muted);
-  --color-ink-mono: var(--text-mono);
-  --color-online: var(--state-online);
-  --color-working: var(--state-working);
-  --color-thinking: var(--state-thinking);
-  --color-offline: var(--state-offline);
-  --color-danger: var(--state-danger);
-  --radius-panel: var(--radius-panel);
+  --color-accent: var(--accent-blue);
+  --color-glow: var(--accent-glow);
+  --color-online: var(--status-online);
+  --color-working: var(--status-working);
+  --color-offline: var(--status-offline);
+  --color-alert: var(--status-alert);
   --radius-card: var(--radius-card);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
 }
 
 /* ── Baza ─────────────────────────────────────────────────────── */
@@ -103,7 +61,6 @@ html,
 body {
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: var(--font-sans);
   min-height: 100%;
 }
 
@@ -115,85 +72,75 @@ body {
 }
 
 ::selection {
-  background: rgba(74, 158, 255, 0.3);
+  background: rgba(76, 141, 255, 0.3);
 }
 
-/* Scrollbar — qorong'i tizimga mos */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--border-subtle) transparent;
+  scrollbar-color: var(--surface-hover) transparent;
 }
 
-/* ── Qayta ishlatiladigan bazalar ─────────────────────────────── */
+/* ── Panel — asosiy karta uslubi (CLAUDE.md: hairline + inset, blur YO'Q) ── */
 
-/* Glass panel (docs/10 §1: rgba(15,20,32,0.6) + blur 12px + nozik chegara) */
-.glass {
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--border-subtle);
+.panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  /* Yuqori qirrada past-opacity ichki yorug'lik chizig'i */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 180ms ease-out;
 }
 
-/* UPPERCASE texnik yorliq (mockup: "SYSTEM STATUS", "ACTIVE AGENTS") */
-.tech-label {
-  font-family: var(--font-mono);
-  font-size: 10px;
+.panel:hover {
+  border-color: var(--border-active);
+}
+
+/* Floating widget / modal uchun ALOHIDA uslub — faqat shu yerda blur */
+.floating {
+  background: rgba(11, 14, 20, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+}
+
+/* Eyebrow label — "SYSTEM STATUS", "ACTIVE AGENTS" */
+.eyebrow {
+  font-size: 10.5px;
   font-weight: 500;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
 
-/* Raqamlar ustunlarda tekis tursin */
-.tabular {
+/* Data raqamlari — yangilanishda sakramaydi */
+.data {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
 }
 
-/* Fokus halqasi — klaviatura foydalanuvchisi uchun ko'rinadigan */
 :focus-visible {
-  outline: 2px solid var(--accent-primary);
+  outline: 2px solid var(--accent-blue);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
-/* ── Animatsiya bazalari ──────────────────────────────────────── */
+/* ── Keyframes (faqat mayda ambient) ──────────────────────────── */
 
 @keyframes pulse-dot {
   0%,
   100% {
     opacity: 1;
-    transform: scale(1);
   }
   50% {
-    opacity: 0.45;
-    transform: scale(0.85);
+    opacity: 0.4;
   }
 }
 
-@keyframes glow-breathe {
-  0%,
-  100% {
-    box-shadow: 0 0 24px 0 var(--accent-glow);
-  }
-  50% {
-    box-shadow: 0 0 48px 6px var(--accent-glow);
-  }
+.pulse-dot {
+  animation: pulse-dot 1.8s ease-in-out infinite;
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-.animate-pulse-dot {
-  animation: pulse-dot 1.6s ease-in-out infinite;
-}
-
-/* Harakat kamaytirish — hurmat qilinadi */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -11,7 +11,7 @@
  * "Ulanmagan" — bu xato EMAS, kutilgan holat (docs/11 §2.1).
  */
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -22,7 +22,7 @@ import {
   type ApprovalInfo,
   type AuditOutcome,
 } from "@/components/ui/devices";
-import { Button, GlassPanel, TechLabel } from "@/components/ui/primitives";
+import { Button, Panel, Eyebrow } from "@/components/ui/primitives";
 import { api } from "@/lib/api";
 import { sound } from "@/lib/sound";
 
@@ -46,10 +46,10 @@ function HotkeyBuilder({ onSubmit }: { onSubmit: (keys: string[]) => void }) {
               sound.play("tick");
               setMods((cur) => (cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]));
             }}
-            className={`rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+            className={`rounded-full border px-3 py-1 data text-xs transition-colors ${
               mods.includes(m)
-                ? "border-[var(--accent-primary)] bg-[rgba(74,158,255,0.15)] text-[var(--accent-primary)]"
-                : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-glow)]"
+                ? "border-[var(--accent-blue)] bg-[rgba(76,141,255,0.15)] text-[var(--accent-blue)]"
+                : "border-[var(--border-hairline)] text-[var(--text-secondary)] hover:border-[var(--border-active)]"
             }`}
           >
             {m}
@@ -61,11 +61,11 @@ function HotkeyBuilder({ onSubmit }: { onSubmit: (keys: string[]) => void }) {
           onChange={(e) => setKey(e.target.value.slice(-1))}
           placeholder="t"
           maxLength={1}
-          className="w-10 rounded-lg border border-[var(--border-subtle)] bg-transparent px-2 py-1 text-center font-mono text-sm outline-none focus:border-[var(--accent-primary)]"
+          className="w-10 rounded-lg border border-[var(--border-hairline)] bg-transparent px-2 py-1 text-center data text-sm outline-none focus:border-[var(--accent-blue)]"
         />
       </div>
       {combo.length > 0 ? (
-        <div className="mt-2 font-mono text-xs text-[var(--text-mono)]">
+        <div className="mt-2 data text-xs text-[var(--accent-blue)]">
           Natija: <span className="text-[var(--text-primary)]">{combo.join("+")}</span>
         </div>
       ) : null}
@@ -137,11 +137,11 @@ function ComputerTab() {
     <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
       <div className="space-y-6">
         {/* Screen mirror (docs/11 §2.2) */}
-        <GlassPanel className="overflow-hidden">
-          <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5">
+        <Panel className="overflow-hidden">
+          <div className="flex items-center justify-between border-b border-[var(--border-hairline)] px-4 py-2.5">
             <div className="flex items-center gap-3">
-              <TechLabel>Ekran ko'zgusi</TechLabel>
-              <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 font-mono text-[9px] tracking-widest text-[var(--text-muted)]">
+              <Eyebrow>Ekran ko'zgusi</Eyebrow>
+              <span className="rounded-full border border-[var(--border-hairline)] px-2 py-0.5 data text-[9px] tracking-widest text-[var(--text-muted)]">
                 UNTRUSTED
               </span>
             </div>
@@ -172,24 +172,24 @@ function ComputerTab() {
               <motion.div
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
-                className="absolute bottom-3 right-3 rounded-lg bg-[var(--bg-elevated)] px-2.5 py-1 font-mono text-xs text-[var(--accent-cyan)]"
+                className="absolute bottom-3 right-3 rounded-lg bg-[var(--bg-elevated)] px-2.5 py-1 data text-xs text-[var(--accent-glow)]"
               >
                 x={coords.x} y={coords.y}
               </motion.div>
             ) : null}
           </button>
-        </GlassPanel>
+        </Panel>
 
         {/* Remote input (docs/11 §2.3) */}
         <div className="grid gap-4 md:grid-cols-3">
-          <GlassPanel className="p-4">
-            <TechLabel>Matn yozish</TechLabel>
+          <Panel className="p-4">
+            <Eyebrow>Matn yozish</Eyebrow>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={3}
               placeholder="Yoziladigan matn..."
-              className="mt-2 w-full resize-none rounded-lg border border-[var(--border-subtle)] bg-transparent p-2.5 text-sm outline-none focus:border-[var(--accent-primary)]"
+              className="mt-2 w-full resize-none rounded-lg border border-[var(--border-hairline)] bg-transparent p-2.5 text-sm outline-none focus:border-[var(--accent-blue)]"
             />
             <Button
               variant="primary"
@@ -203,10 +203,10 @@ function ComputerTab() {
             >
               Yuborish
             </Button>
-          </GlassPanel>
+          </Panel>
 
-          <GlassPanel className="p-4">
-            <TechLabel>Tugma bosish</TechLabel>
+          <Panel className="p-4">
+            <Eyebrow>Tugma bosish</Eyebrow>
             <div className="mt-2">
               <HotkeyBuilder
                 onSubmit={(keys) =>
@@ -216,13 +216,13 @@ function ComputerTab() {
                 }
               />
             </div>
-          </GlassPanel>
+          </Panel>
 
-          <GlassPanel className="p-4">
-            <TechLabel>Sichqoncha</TechLabel>
+          <Panel className="p-4">
+            <Eyebrow>Sichqoncha</Eyebrow>
             <div className="mt-2 flex gap-2">
               {(["x", "y"] as const).map((axis) => (
-                <label key={axis} className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)]">
+                <label key={axis} className="flex items-center gap-1.5 data text-xs text-[var(--text-muted)]">
                   {axis}=
                   <input
                     type="number"
@@ -230,7 +230,7 @@ function ComputerTab() {
                     onChange={(e) =>
                       setCoords((c) => ({ x: c?.x ?? 0, y: c?.y ?? 0, [axis]: Number(e.target.value) }))
                     }
-                    className="w-16 rounded-lg border border-[var(--border-subtle)] bg-transparent px-2 py-1 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent-primary)]"
+                    className="w-16 rounded-lg border border-[var(--border-hairline)] bg-transparent px-2 py-1 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent-blue)]"
                   />
                 </label>
               ))}
@@ -253,12 +253,12 @@ function ComputerTab() {
             >
               Yuborish
             </Button>
-          </GlassPanel>
+          </Panel>
         </div>
 
         {/* Audit log (docs/11 §2.5) */}
-        <GlassPanel className="px-4 py-3">
-          <TechLabel>Amallar tarixi</TechLabel>
+        <Panel className="px-4 py-3">
+          <Eyebrow>Amallar tarixi</Eyebrow>
           <div className="mt-2">
             {audit.length === 0 ? (
               <p className="py-3 text-center text-xs text-[var(--text-muted)]">
@@ -268,7 +268,7 @@ function ComputerTab() {
               audit.map((a, i) => <AuditRow key={i} {...a} />)
             )}
           </div>
-        </GlassPanel>
+        </Panel>
       </div>
 
       {/* O'ng: approval zonasi */}
@@ -283,13 +283,13 @@ function ComputerTab() {
             />
           ) : (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <GlassPanel className="p-5 text-center">
-                <TechLabel>Tasdiq zonasi</TechLabel>
+              <Panel className="p-5 text-center">
+                <Eyebrow>Tasdiq zonasi</Eyebrow>
                 <p className="mt-2 text-xs text-[var(--text-secondary)]">
                   EXECUTE amallar shu yerda tasdiq kutadi (V-32). Telegram orqali ham
                   tasdiqlash mumkin — ikkalasi bitta xizmatga yozadi.
                 </p>
-              </GlassPanel>
+              </Panel>
             </motion.div>
           )}
         </AnimatePresence>
@@ -303,8 +303,8 @@ function ComputerTab() {
 function PhoneTab() {
   return (
     <div className="max-w-md">
-      <GlassPanel className="p-6">
-        <TechLabel>Telefon</TechLabel>
+      <Panel className="p-6">
+        <Eyebrow>Telefon</Eyebrow>
         <div className="mt-4 space-y-3 text-sm">
           {(
             [
@@ -319,13 +319,13 @@ function PhoneTab() {
             </div>
           ))}
         </div>
-        <p className="mt-5 border-t border-[var(--border-subtle)] pt-4 text-xs leading-relaxed text-[var(--text-secondary)]">
+        <p className="mt-5 border-t border-[var(--border-hairline)] pt-4 text-xs leading-relaxed text-[var(--text-secondary)]">
           Telefon — ZET'ning asosiy boshqaruv paneli. Alohida &quot;masofadan
           boshqarish&quot; funksiyasi yo&apos;q — bu ataylab qilingan dizayn qarori
           (docs/11 §3): shaxsiy telefon ekranini kuzatish maxfiylik jihatidan
           alohida tahlil talab qiladi.
         </p>
-      </GlassPanel>
+      </Panel>
     </div>
   );
 }
@@ -389,8 +389,8 @@ export default function DevicesPage() {
             }}
             className={`rounded-full border px-5 py-2 text-sm transition-colors ${
               tab === id
-                ? "border-[var(--accent-primary)] bg-[rgba(74,158,255,0.12)] text-[var(--text-primary)]"
-                : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-glow)]"
+                ? "border-[var(--accent-blue)] bg-[rgba(74,158,255,0.12)] text-[var(--text-primary)]"
+                : "border-[var(--border-hairline)] text-[var(--text-secondary)] hover:border-[var(--border-active)]"
             }`}
           >
             {label}
@@ -399,11 +399,11 @@ export default function DevicesPage() {
       </div>
 
       {killswitch ? (
-        <GlassPanel className="border-[var(--state-danger)] p-4 text-center">
-          <span className="font-mono text-sm font-semibold text-[var(--state-danger)]">
+        <Panel className="border-[var(--status-alert)] p-4 text-center">
+          <span className="data text-sm font-semibold text-[var(--status-alert)]">
             🔴 KILLSWITCH FAOL — barcha yuborish tugmalari o&apos;chirilgan
           </span>
-        </GlassPanel>
+        </Panel>
       ) : null}
 
       <div className={killswitch ? "pointer-events-none opacity-40" : ""}>
