@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from zet.domain.enums import PermissionLevel, TrustLevel
+from zet.domain.enums import PermissionLevel, RiskLevel, TrustLevel
+from zet.tools.builtin.deploy_push import DeployPushTool
 from zet.tools.builtin.note_list import NoteListTool
 from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteWriteTool
@@ -186,6 +187,189 @@ class TestNoteWrite:
             }
         )
         assert result.success is False
+
+
+class TestDeployPush:
+    """deploy.push testlari (F8, BLOCK-3 audit — minimal amalga oshirish).
+
+    Kamrov: faqat lokal fayl generatsiya + preview ko'rsatma. Real
+    hosting/domain YO'Q — har test buni tasdiqlaydi (`deployed=False`,
+    `hosting="NOT_IMPLEMENTED"`).
+    """
+
+    async def test_generates_files_locally(self, tmp_path: Path) -> None:
+        """index.html + style.css yoziladi, haqiqiy fayllar diskda paydo bo'ladi."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {
+                "site_name": "mening-saytim",
+                "files": {
+                    "index.html": "<html><body>Salom</body></html>",
+                    "style.css": "body { color: red; }",
+                },
+            }
+        )
+
+        assert result.success is True
+        assert result.output["deployed"] is False, (
+            "HALOL bo'lishi kerak — real hosting hali yo'q"
+        )
+        assert result.output["hosting"] == "NOT_IMPLEMENTED"
+
+        site_dir = tmp_path / "sites" / "mening-saytim"
+        assert (site_dir / "index.html").read_text() == "<html><body>Salom</body></html>"
+        assert (site_dir / "style.css").read_text() == "body { color: red; }"
+        assert "index.html" in result.output["files_written"][0] or any(
+            "index.html" in f for f in result.output["files_written"]
+        )
+
+    async def test_preview_hint_mentions_http_server(self, tmp_path: Path) -> None:
+        """index.html bo'lsa — lokal server ko'rsatmasi beriladi."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {"site_name": "test", "files": {"index.html": "<html></html>"}}
+        )
+
+        assert "http.server" in result.output["preview_hint"]
+
+    async def test_no_index_html_warns(self, tmp_path: Path) -> None:
+        """index.html bo'lmasa — ochiq ogohlantirish, xato emas."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {"site_name": "test", "files": {"data.json": "{}"}}
+        )
+
+        assert result.success is True
+        assert "topilmadi" in result.output["preview_hint"]
+
+    async def test_path_traversal_in_site_name_rejected(self, tmp_path: Path) -> None:
+        """site_name'da path traversal → rad etiladi."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {"site_name": "../../etc", "files": {"index.html": "x"}}
+        )
+
+        assert result.success is False
+        assert not (tmp_path / "etc").exists()
+
+    async def test_path_traversal_in_file_path_rejected(self, tmp_path: Path) -> None:
+        """fayl yo'lida path traversal → rad etiladi, hech narsa yozilmaydi."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {"site_name": "test", "files": {"../../../etc/passwd": "xavfli"}}
+        )
+
+        assert result.success is False
+        assert not (tmp_path / "etc").exists()
+
+    async def test_disallowed_extension_rejected(self, tmp_path: Path) -> None:
+        """Ruxsat etilmagan kengaytma (masalan .exe) → xato."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {"site_name": "test", "files": {"payload.exe": "binary"}}
+        )
+
+        assert result.success is False
+        assert not (tmp_path / "sites" / "test").exists()
+
+    async def test_empty_files_rejected(self, tmp_path: Path) -> None:
+        """Bo'sh files dict → xato (schema minProperties=1 dan tashqari ichki tekshiruv)."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute({"site_name": "test", "files": {}})
+
+        assert result.success is False
+
+    async def test_file_too_large_rejected(self, tmp_path: Path) -> None:
+        """200 KB dan katta bitta fayl → xato."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {"site_name": "test", "files": {"index.html": "x" * (201 * 1024)}}
+        )
+
+        assert result.success is False
+        assert not (tmp_path / "sites" / "test").exists(), (
+            "Validatsiya yozishdan OLDIN — qisman yozilgan sayt qolib ketmasin"
+        )
+
+    async def test_too_many_files_rejected(self, tmp_path: Path) -> None:
+        """30 tadan ko'p fayl → xato."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        files = {f"page{i}.html": "<html></html>" for i in range(31)}
+        result = await tool.execute({"site_name": "test", "files": files})
+
+        assert result.success is False
+
+    async def test_nested_file_path_creates_subfolder(self, tmp_path: Path) -> None:
+        """assets/style.css kabi ichki yo'l — papka avtomatik yaratiladi."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {
+                "site_name": "test",
+                "files": {
+                    "index.html": "<html></html>",
+                    "assets/style.css": "body{}",
+                },
+            }
+        )
+
+        assert result.success is True
+        assert (tmp_path / "sites" / "test" / "assets" / "style.css").exists()
+
+    async def test_idempotent_overwrite(self, tmp_path: Path) -> None:
+        """Bir xil site_name bilan qayta chaqirilsa — ustidan yoziladi."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        await tool.execute({"site_name": "test", "files": {"index.html": "eski"}})
+        result = await tool.execute({"site_name": "test", "files": {"index.html": "yangi"}})
+
+        assert result.success is True
+        assert (tmp_path / "sites" / "test" / "index.html").read_text() == "yangi"
+
+    async def test_properties(self, tmp_path: Path) -> None:
+        """Tool xususiyatlari to'g'ri — WRITE ruxsat, MEDIUM risk (real hosting yo'q)."""
+        tool = DeployPushTool(sites_dir=tmp_path)
+        assert tool.name == "deploy.push"
+        assert tool.permission_level == PermissionLevel.WRITE
+        assert tool.idempotent is True
+        assert tool.risk_level == RiskLevel.MEDIUM
+
+    async def test_dry_run(self, tmp_path: Path) -> None:
+        """dry_run da hech qanday fayl yozilmaydi."""
+        tool = DeployPushTool(sites_dir=tmp_path / "sites")
+        result = await tool.execute(
+            {"site_name": "test", "files": {"index.html": "x"}},
+            dry_run=True,
+        )
+
+        assert result.success is True
+        assert result.output["dry_run"] is True
+        assert not (tmp_path / "sites" / "test").exists()
+
+    async def test_registered_in_default_registry(self, tmp_path: Path) -> None:
+        """`build_default_registry` orqali `deploy.push` REAL ro'yxatga o'tadi.
+
+        F8 aynan shu gapni yopadi — ilgari tool hech qayerda ro'yxatdan
+        o'tmagan edi (`website`/`deployment` capability'lar unga tayanardi,
+        lekin Planner uni umuman ko'rmasdi).
+        """
+        from zet.tools.builtin import build_default_registry
+
+        registry = build_default_registry(notes_dir=tmp_path / "vault")
+
+        assert "deploy.push" in registry.tool_names()
+        signatures = {s.name for s in registry.tool_signatures()}
+        assert "deploy.push" in signatures
+        assert registry.get("deploy.push").permission_level == PermissionLevel.WRITE
+
+    async def test_sites_dir_defaults_next_to_notes_dir(self, tmp_path: Path) -> None:
+        """`sites_dir` berilmasa — `notes_dir`ning aka-uka papkasi ishlatiladi."""
+        from zet.tools.builtin import build_default_registry
+
+        registry = build_default_registry(notes_dir=tmp_path / "vault")
+        tool = registry.get("deploy.push")
+        result = await tool.execute({"site_name": "test", "files": {"index.html": "x"}})
+
+        assert result.success is True
+        assert (tmp_path / "sites" / "test" / "index.html").exists()
 
 
 class TestNoteRead:

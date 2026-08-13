@@ -76,6 +76,8 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "note.list": PermissionLevel.READ,
     "github.read": PermissionLevel.READ,
     "github.write": PermissionLevel.WRITE,
+    # F8 (BLOCK-3 audit): lokal sayt fayl generatsiya (real hosting yo'q).
+    "deploy.push": PermissionLevel.WRITE,
     "youtube.search": PermissionLevel.READ,
     "youtube.channel_stats": PermissionLevel.READ,
     "youtube.video_stats": PermissionLevel.READ,

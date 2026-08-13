@@ -15,6 +15,7 @@ Tekshiriladi:
 
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from zet.cli import app
@@ -70,3 +71,44 @@ class TestCLI:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "ZET" in result.output
+
+
+class TestDaemonCommand:
+    """F9 (BLOCK-3 audit): `z daemon` to'liq wiring bilan quriladimi.
+
+    Ilgari `DailyScheduleDaemon` `session_factory`/`llm_providers`/
+    `settings`/`notifier`SIZ qurilardi — daemon "muvaffaqiyatli" ishlab,
+    Telegram'ga HECH NARSA yubormasdi. Bu test aynan konstruktorga
+    uzatilgan kwargs'larni ushlab, hammasi berilganini tasdiqlaydi.
+    """
+
+    def test_daemon_wires_session_factory_llm_and_notifier(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import zet.deploy.daemon as daemon_module
+
+        captured: dict[str, object] = {}
+
+        class _StubDaemon:
+            def __init__(self, **kwargs: object) -> None:
+                captured.update(kwargs)
+
+            async def run_forever(self) -> None:
+                return None
+
+        monkeypatch.setattr(daemon_module, "DailyScheduleDaemon", _StubDaemon)
+
+        result = runner.invoke(app, ["daemon"])
+
+        assert result.exit_code == 0, result.output
+        # Ilgari yo'q edi — F9 fix aynan shu uchtasini qo'shdi.
+        assert captured.get("session_factory") is not None, (
+            "session_factory uzatilmagan — daemon real DB'ga yozolmaydi"
+        )
+        assert captured.get("llm_providers") is not None, (
+            "llm_providers uzatilmagan — daemon FakeProvider'ga qaytadi"
+        )
+        assert captured.get("notifier") is not None, (
+            "notifier uzatilmagan — Telegram'ga hech narsa yuborilmaydi"
+        )
+        assert captured.get("settings") is not None

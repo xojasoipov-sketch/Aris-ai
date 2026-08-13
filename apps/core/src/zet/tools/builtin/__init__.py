@@ -39,6 +39,7 @@ from zet.tools.builtin.crm_tools import (
     CRMScope,
     CRMStatsTool,
 )
+from zet.tools.builtin.deploy_push import DeployPushTool
 from zet.tools.builtin.desktop_tools import (
     DesktopKeyPressTool,
     DesktopMouseClickTool,
@@ -94,6 +95,7 @@ from zet.tools.registry import ToolRegistry
 def build_default_registry(
     *,
     notes_dir: Path,
+    sites_dir: Path | None = None,
     enable_shell: bool = False,
     web_reader_stub: bool = True,
     github_token: str | None = None,
@@ -128,6 +130,9 @@ def build_default_registry(
     Args:
         notes_dir: `note.write` tooli uchun eslatmalar papkasi (odatda
             `Settings.vault_dir`).
+        sites_dir: `deploy.push` tooli uchun sayt fayllari papkasi (odatda
+            `Settings.sites_dir`). Berilmasa `notes_dir.parent / "sites"`
+            ishlatiladi (test/lean wiring uchun qulay default).
         enable_shell: `shell.exec` toolini ro'yxatga qo'shish (default:
             o'chirilgan — eng xavfli komponent, faqat aniq yoqilganda).
         web_reader_stub: `web.read` stub rejimida ishlasinmi (default: ha).
@@ -183,6 +188,12 @@ def build_default_registry(
     registry.register(NoteWriteTool(notes_dir=notes_dir, memory_shadow_fn=note_memory_shadow_fn))
     registry.register(NoteReadTool(notes_dir=notes_dir))
     registry.register(NoteListTool(notes_dir=notes_dir))
+    # F8 (BLOCK-3 audit): `sites_dir` berilmasa `notes_dir`ning aka-uka
+    # papkasi ishlatiladi — `website` capability'ning `deploy.push` gap'i
+    # ilgari HECH QAYERDA ro'yxatdan o'tmagan edi.
+    registry.register(
+        DeployPushTool(sites_dir=sites_dir or (notes_dir.parent / "sites"))
+    )
     registry.register(WebSearchTool(api_key=web_search_api_key))
     registry.register(WebReaderTool(stub=web_reader_stub))
     registry.register(GitHubReadTool(token=github_token))

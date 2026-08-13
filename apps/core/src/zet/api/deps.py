@@ -240,6 +240,7 @@ def get_tool_registry() -> ToolRegistry:
         )
     return build_default_registry(
         notes_dir=settings.vault_dir,
+        sites_dir=settings.sites_dir,
         enable_shell=settings.enable_shell,
         # web.read hech qanday kalit talab qilmaydi (faqat tarmoq) va
         # SSRF-himoyalangan (bloklangan host/ichki IP) — gap-analysis #12
@@ -931,6 +932,10 @@ def get_orchestrator(
         run_timeout_s=settings.run_timeout_s,
         concurrency_semaphore=get_run_semaphore(),
         verifier_judge_provider=_build_verifier_judge(router),
+        # F1 (BLOCK-3 audit): AWAITING_APPROVAL'ga o'tganda Telegram inline
+        # tugmali xabar. Token/owner sozlanmasa get_notifier() StubNotifier
+        # qaytaradi — hech qanday tarmoq chaqiruvi bo'lmaydi (fail-open).
+        notifier=get_notifier(),
     )
 
 

@@ -90,6 +90,10 @@ _MEDIUM: Final[frozenset[str]] = frozenset(
         "crm.deal_create",
         # Umumiy vault'ga yozuv — bilim bazasini o'zgartiradi
         "note.write",
+        # Sayt fayllari generatsiyasi — lokal disk yozuvi, real remote
+        # hosting/push HALI yo'q (F8, minimal amalga oshirish). Real
+        # hosting qo'shilsa bu HIGH'ga ko'tarilishi kerak.
+        "deploy.push",
         # Agentning uzoq muddatli xotirasiga — orqaga qaytarish qiyin
         "memory.write",
         # Agent hayoti — qaytariladigan

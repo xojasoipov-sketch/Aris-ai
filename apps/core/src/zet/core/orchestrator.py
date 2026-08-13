@@ -32,6 +32,8 @@ import structlog
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from zet.telegram.notifier import Notifier
+
 from zet.core.executor import (
     ApprovalRequiredError,
     AuditFn,
@@ -205,6 +207,7 @@ class Orchestrator:
         concurrency_semaphore: asyncio.Semaphore | None = None,
         verifier_judge_provider: object | None = None,
         recovery_engine: RecoveryEngine | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         self._router = router
         # Uzoq muddatli xotira — ega profili va oldingi bilimlar javobga
@@ -236,6 +239,13 @@ class Orchestrator:
         # PART 6 recovery: verify_run FAIL bo'lganda tuzatishga urinish.
         # Berilmasa — eski xatti-harakat (darhol FAILED).
         self._recovery_engine = recovery_engine
+        # F1 (BLOCK-3 audit): AWAITING_APPROVAL'ga o'tganda egaga Telegram
+        # inline tugmali xabar yuborish. Berilmasa (test/lean) — eski
+        # xatti-harakat: run pauza holatida qoladi, lekin hech kim
+        # bilmaydi. Inbound tomon (`_approval_runner`, `deps.py`) allaqachon
+        # run_id bo'yicha ishlaydi — bu shu zanjirning YETISHMAYOTGAN
+        # outbound yarmi.
+        self._notifier = notifier
 
     @property
     def approvals(self) -> ApprovalService:
@@ -387,6 +397,9 @@ class Orchestrator:
             # Endi DB'ga yozib qo'yiladi — startup'da load_pending_runs()
             # tiklaydi va ega approve URL'ini keyingi sessiyada ham topadi.
             await self._run_store.persist(record)
+            # F1: egaga Telegram inline tugmali xabar — fail-open (xato
+            # bo'lsa run pauza holatida qoladi, lekin run oqimi buzilmaydi).
+            await self._notify_awaiting_approval(record, exc)
             return record
         except BudgetExhaustedError as exc:
             record.status = RunStatus.FAILED
@@ -467,6 +480,46 @@ class Orchestrator:
         # uchun ko'zga tashlab qo'yilishi zarur.
         await self._run_store.persist(record)
         return record
+
+    async def _notify_awaiting_approval(
+        self, record: RunRecord, exc: ApprovalRequiredError
+    ) -> None:
+        """Egaga Telegram inline tugmali xabar yuboradi (F1, BLOCK-3 audit).
+
+        NEGA. `_approval_runner` (`api/deps.py`) allaqachon `run_id` bo'yicha
+        kutilayotgan tasdiqni topib `approve`/`resume` qila oladi — bu
+        zanjirning INBOUND yarmi ilgari ham ishlagan. Lekin hech qanday
+        production kod yo'li `Notifier.send_approval()`ni chaqirmasdi,
+        ya'ni ega HIGH_RISK qadam to'xtaganini Telegram'da UMUMAN ko'rmasdi
+        — faqat API javobidagi `pending_approval_id` orqali (agar u yerni
+        kim tekshirib tursa). Endi shu OUTBOUND yarmi yopiladi.
+
+        Fail-open: `self._notifier` berilmagan bo'lsa (test/lean wiring)
+        yoki yuborish xato bersa — run holati buzilmaydi, faqat log yozib
+        qo'yiladi (xuddi `_mark_verified_fn` bilan bir xil naqsh).
+        """
+        if self._notifier is None:
+            return
+        try:
+            from zet.telegram.keyboards import ApprovalKeyboard
+
+            run_id_str = str(record.run_id)
+            risk_line = (
+                f"\nRuxsat darajasi: {exc.step.permission_required.value}"
+                if exc.step.permission_required is not None
+                else ""
+            )
+            text = (
+                f"Qadam: {exc.step.description}\n"
+                f"Sabab: {exc.decision.reason}{risk_line}"
+            )
+            keyboard = ApprovalKeyboard.for_run(run_id_str)
+            await self._notifier.send_approval(text, keyboard, run_id=run_id_str)
+        except Exception:
+            log.warning(
+                "orchestrator.notify_awaiting_approval_failed",
+                run_id=str(record.run_id),
+            )
 
     def approve(self, approval_id: uuid.UUID, *, note: str | None = None) -> RunRecord:
         """Tasdiqni qabul qiladi va tegishli qadamni `approved_steps`ga qo'shadi.

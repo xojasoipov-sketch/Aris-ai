@@ -46,6 +46,7 @@ out/
 # ── ZET runtime ma'lumotlari ───────────────────────────────────────
 data/
 vault/
+sites/
 logs/
 *.db
 *.sqlite3

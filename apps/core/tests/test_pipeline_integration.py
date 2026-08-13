@@ -132,6 +132,7 @@ def _make_orchestrator(
     approvals: ApprovalService | None = None,
     run_store: RunStore | None = None,
     killswitch: KillSwitchState | None = None,
+    notifier: object | None = None,
 ) -> Orchestrator:
     from zet.config import Settings
 
@@ -147,6 +148,7 @@ def _make_orchestrator(
         killswitch=killswitch or KillSwitchState(),
         run_store=run_store or RunStore(),
         budget_usd=1.0,
+        notifier=notifier,  # type: ignore[arg-type]
     )
 
 
@@ -413,3 +415,70 @@ class TestOrchestratorAutoPersist:
         assert row is not None, "Orchestrator AWAITING_APPROVAL'da persist chaqirishi kerak edi"
         assert row.command_text == "auto-persist test"
         assert row.status.value == "awaiting_approval"
+
+
+# ══════════════════════════════════════════════════════════════════
+# INTEGRATION TEST 5: F1 — Telegram approval xabari (BLOCK-3 audit gap)
+# ══════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.integration()
+class TestTelegramApprovalNotification:
+    """AWAITING_APPROVAL'ga o'tganda `Notifier.send_approval()` chaqirilishi.
+
+    AUDIT topgan gap (BLOCK-3 checklist F1): `Notifier.send_approval()`/
+    `ApprovalKeyboard` production kodida HECH QAYERDA chaqirilmasdi —
+    faqat testlarda. Owner HIGH_RISK qadam to'xtaganini Telegram'da
+    UMUMAN ko'rmasdi. Bu test aynan shu OUTBOUND yo'lni real
+    `POST /api/v1/run` orqali qulflaydi.
+    """
+
+    async def test_awaiting_approval_sends_telegram_message_with_keyboard(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        from zet.telegram.keyboards import ApprovalKeyboard
+        from zet.telegram.notifier import NotificationType, StubNotifier
+
+        stub_notifier = StubNotifier()
+        orchestrator = _make_orchestrator(
+            session, tmp_path, _approval_script(), notifier=stub_notifier
+        )
+        client = _client_with({get_orchestrator: lambda: orchestrator})
+
+        resp = client.post("/api/v1/run", json={"message": "xavfli amal"})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "awaiting_approval"
+        run_id = data["run_id"]
+
+        # Telegram'ga aynan bitta APPROVAL xabari yuborilgan bo'lishi kerak.
+        approval_notifications = [
+            n for n in stub_notifier.sent if n.type == NotificationType.APPROVAL
+        ]
+        assert len(approval_notifications) == 1, (
+            f"1 ta APPROVAL xabar kutildi, keldi: {len(approval_notifications)}"
+        )
+        notification = approval_notifications[0]
+        assert notification.run_id == run_id
+
+        # Keyboard aynan `_approval_runner` (deps.py) kutayotgan formatda —
+        # callback_data run_id'ga bog'langan, approval_id'ga EMAS (chunki
+        # inbound handler pending_for_run(run_id) orqali topadi).
+        expected = ApprovalKeyboard.for_run(run_id)
+        assert notification.keyboard == expected, (
+            "Keyboard callback_data 'approve:{run_id}'/'reject:{run_id}' "
+            "formatda bo'lishi kerak"
+        )
+
+    async def test_no_notifier_configured_does_not_break_run(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        """Fail-open: `notifier=None` bo'lsa (eski wiring) run baribir ishlaydi."""
+        orchestrator = _make_orchestrator(
+            session, tmp_path, _approval_script(), notifier=None
+        )
+        client = _client_with({get_orchestrator: lambda: orchestrator})
+
+        resp = client.post("/api/v1/run", json={"message": "xavfli amal"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "awaiting_approval"

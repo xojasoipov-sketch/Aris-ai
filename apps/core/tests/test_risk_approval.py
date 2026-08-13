@@ -112,6 +112,8 @@ class TestT3ClassificationTableMedium:
             "crm.contact_create",
             "note.write",
             "memory.write",
+            # F8 (BLOCK-3 audit): lokal fayl generatsiya, real hosting yo'q.
+            "deploy.push",
         ]
         for name in expected:
             assert TOOL_RISK_LEVELS[name] is RiskLevel.MEDIUM, name

@@ -341,6 +341,11 @@ class Settings(BaseSettings):
     """Obsidian vault papkasi — `note.write`/`note.read`/`note.list` shu yerda
     ishlaydi. `ZET_VAULT_DIR` orqali o'z vault'ingizga yo'naltiriladi."""
 
+    sites_dir: Path = _REPO_ROOT / "sites"
+    """`deploy.push` tooli statik sayt fayllarini shu papkaga yozadi (F8,
+    BLOCK-3 audit — MINIMAL: faqat lokal fayl generatsiya, real hosting
+    hali yo'q). `ZET_SITES_DIR` orqali o'zgartiriladi."""
+
     @model_validator(mode="before")
     @classmethod
     def _blank_paths_use_default(cls, data: object) -> object:
@@ -357,7 +362,7 @@ class Settings(BaseSettings):
             key: value
             for key, value in data.items()
             if not (
-                key.lower().removeprefix("zet_") in {"data_dir", "vault_dir"}
+                key.lower().removeprefix("zet_") in {"data_dir", "vault_dir", "sites_dir"}
                 and isinstance(value, str)
                 and not value.strip()
             )

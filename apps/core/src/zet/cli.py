@@ -873,6 +873,14 @@ def daemon() -> None:
 
     Doimiy jarayon — Ctrl+C bilan to'xtatiladi. ADR-0007 bo'yicha
     native service sifatida (launchd/systemd) shu komanda chaqiriladi.
+
+    F9 (BLOCK-3 audit) TUZATILDI: ilgari bu yerda `DailyScheduleDaemon`
+    `session_factory`/`llm_providers`/`settings`/`notifier`SIZ qurilardi
+    — daemon "muvaffaqiyatli" deb log yozardi, lekin real LLM chaqirmasdi
+    (`FakeProvider()` fallback) va Telegram'ga HECH NARSA yubormasdi
+    (`notifier=None`). Endi FastAPI lifespan (`api/app.py`) bilan bir xil
+    to'liq wiring ishlatiladi — `z daemon` va serverning o'zi bir xil
+    natija beradi.
     """
     import asyncio
 
@@ -884,13 +892,19 @@ def daemon() -> None:
         get_core_state,
         get_daily_schedule_manager,
         get_killswitch,
+        get_llm_providers,
+        get_notifier,
         get_permission_policy,
+        get_session_factory,
         get_tool_registry,
     )
     from zet.deploy.bootstrap import bootstrap_agents
     from zet.deploy.daemon import DailyScheduleDaemon
 
     bootstrap_agents()
+
+    notifier = get_notifier()
+    notifier_kind = type(notifier).__name__
 
     d = DailyScheduleDaemon(
         schedule=get_daily_schedule_manager(),
@@ -900,12 +914,24 @@ def daemon() -> None:
         core_state=get_core_state(),
         killswitch=get_killswitch(),
         timezone=settings.timezone,
+        session_factory=get_session_factory(),
+        llm_providers=get_llm_providers(),
+        settings=settings,
+        notifier=notifier,
     )
 
+    telegram_line = (
+        "[green]Telegram: real TelegramNotifier ulangan[/green]"
+        if notifier_kind == "TelegramNotifier"
+        else "[yellow]Telegram: StubNotifier (ZET_TELEGRAM_BOT_TOKEN/"
+        "ZET_TELEGRAM_OWNER_IDS sozlanmagan — xabar hech qayerga "
+        "yuborilmaydi, faqat log)[/yellow]"
+    )
     out.print(
         Panel(
             f"Vaqt mintaqasi: {settings.timezone}\n"
-            f"Vazifalar: {get_daily_schedule_manager().stats['enabled']} yoqilgan",
+            f"Vazifalar: {get_daily_schedule_manager().stats['enabled']} yoqilgan\n"
+            f"{telegram_line}",
             title="[bold]ZET Daemon[/bold]",
             border_style="cyan",
         )

@@ -48,8 +48,13 @@ RUN groupadd --gid 1001 zet \
     && useradd --uid 1001 --gid zet --create-home zet
 WORKDIR /app
 
-# `public/` YO'Q bu loyihada — `COPY`ni majburiy manba talab qilgani
-# uchun uni qo'shish build'ni yiqitardi (mahalliy build orqali topildi).
+# `public/` — PWA fayllari shu yerda (manifest.webmanifest, sw.js, ikonkalar,
+# 2026-08-13 qo'shilgan). Ilgari bu izoh "public/ yo'q" deb yozgan edi —
+# o'shanda haqiqatan yo'q edi, lekin PWA qo'shilgach eskirib qoldi va
+# nusxalash qadami qo'shilmagani sabab Hetzner deploy'da manifest/sw.js/
+# ikonkalar 404 qaytarardi (BLOCK-3 audit F5 gap; Railway/Railpack yo'li
+# bunga ta'sirlanmagan edi, chunki u to'liq repo checkout'idan quradi).
+COPY --from=builder --chown=zet:zet /app/public ./public
 COPY --from=builder --chown=zet:zet /app/.next ./.next
 COPY --from=builder --chown=zet:zet /app/node_modules ./node_modules
 COPY --from=builder --chown=zet:zet /app/package.json ./package.json
