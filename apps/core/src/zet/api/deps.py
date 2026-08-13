@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import structlog
-from fastapi import Depends
+from fastapi import Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from zet.agents.registry import AgentRegistry
@@ -46,6 +46,7 @@ from zet.memory.embeddings import (
     NullEmbeddingProvider,
     OllamaEmbeddingProvider,
 )
+from zet.memory.manager import MemoryManager
 from zet.memory.pg_store import PgMemoryStore
 from zet.monitoring.alerts import AlertManager
 from zet.monitoring.notify_bridge import AlertNotificationBridge
@@ -547,6 +548,56 @@ async def get_memory_store(
     """
     owner = await get_or_create_owner(session, external_id=settings.owner_id)
     return PgMemoryStore(session, owner_id=owner.id, embedder=embedder)
+
+
+async def get_memory_manager(
+    store: MemoryStoreLike = Depends(get_memory_store),
+) -> MemoryManager:
+    """So'rov chegarasidagi `MemoryManager` — REST route policy'ni chetlab o'tmasin uchun.
+
+    NEGA. Ilgari `api/routes/memory.py::add_memory` `store.add()`ni to'g'ridan-
+    to'g'ri chaqirib `check_write` policy'ni o'tkazib yuborardi — faqat
+    `memory.write` tooli qoidani majbur qilardi (`docs/AUDIT_GAPS` #4). Endi
+    HTTP yozuvlari ham `MemoryManager.aremember()` orqali yagona policy
+    darvozasidan o'tadi. Store dependency (`get_memory_store`) o'zgarmadi —
+    testlar hali ham `MemoryStore()` bilan override qila oladi.
+    """
+    return MemoryManager(store=store)
+
+
+# ── Trust level (xotira siyosati uchun) ───────────────────────────
+
+# `memory/policy.py::WRITE_POLICY`/`READ_POLICY` kalitlari — API qatlami
+# faqat shu qiymatlarni qabul qiladi (yasama qiymat 400 qaytaradi).
+_ALLOWED_TRUST_LEVELS: frozenset[str] = frozenset({"owner", "system", "untrusted"})
+
+
+def get_caller_trust_level(
+    x_trust_level: str | None = Header(default=None, alias="X-Trust-Level"),
+) -> str:
+    """So'rov mualifining trust_level'ini qaytaradi.
+
+    Manba — `X-Trust-Level` header (kelajakda auth kontekstidan ham
+    olinishi mumkin). Header berilmasa — default `"owner"`: bu
+    backward-compat uchun, ya'ni ilgari policy'ni bilmagan mijozlar va
+    testlar avvalgidek OWNER huquqi bilan ishlaydi.
+
+    Noto'g'ri qiymatda 400 qaytariladi — jimgina `frozenset().get(x)` yo'q
+    deb qaytish policy'ni bypass qilardi (xotira allaqachon yozib bo'lgan
+    bo'lardi, faqat 403 emas 200 tushib).
+    """
+    if x_trust_level is None or x_trust_level == "":
+        return "owner"
+    normalized = x_trust_level.strip().lower()
+    if normalized not in _ALLOWED_TRUST_LEVELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"noto'g'ri X-Trust-Level: {x_trust_level!r} "
+                f"(ruxsat etilgan: {sorted(_ALLOWED_TRUST_LEVELS)})"
+            ),
+        )
+    return normalized
 
 
 # ── Agentlar ──────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ Tekshiriladi:
     - POST /api/v1/memory/search — qidirish
     - GET /api/v1/memory/layer/{layer} — qatlam bo'yicha
     - POST /api/v1/memory/cleanup — tozalash
+    - POST /api/v1/memory — MemoryManager wire-in (policy + auto-tag)
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.testclient import TestClient
 
 from zet.api.app import create_app
-from zet.api.deps import get_db_session, get_memory_store
+from zet.api.deps import get_db_session, get_memory_manager, get_memory_store
+from zet.memory.manager import MemoryManager
 from zet.memory.store import MemoryStore
 
 
@@ -183,6 +185,77 @@ class TestMemoryAPI:
             json={"layer": "invalid", "content": "test"},
         )
         assert resp.status_code == 422
+
+
+class TestMemoryManagerWireIn:
+    """POST /api/v1/memory `MemoryManager.aremember()` orqali o'tishini isbotlash.
+
+    NEGA. Ilgari route `store.add()`ni to'g'ridan-to'g'ri chaqirar edi va
+    `check_write` policy'sini chetlab o'tardi (`docs/AUDIT_GAPS` #4).
+    Endi manager yagona darvoza — auto-tag pipeline shu tomondan ishlaydi.
+    """
+
+    def test_untrusted_blocked_from_knowledge(self, client: TestClient) -> None:
+        """`untrusted` trust KNOWLEDGE qatlamga yoza olmaydi (policy manager orqali)."""
+        resp = client.post(
+            "/api/v1/memory",
+            json={"layer": "knowledge", "content": "hacked"},
+            headers={"X-Trust-Level": "untrusted"},
+        )
+        assert resp.status_code == 403
+
+    def test_untrusted_allowed_short_term(self, client: TestClient) -> None:
+        """`untrusted` trust SHORT_TERM ga yozishi mumkin."""
+        resp = client.post(
+            "/api/v1/memory",
+            json={"layer": "short_term", "content": "vaqtinchalik yozuv"},
+            headers={"X-Trust-Level": "untrusted"},
+        )
+        assert resp.status_code == 201
+        # Manager `trust_level`ni chaqiruvchi trust'iga cheklaydi
+        assert resp.json()["trust_level"] == "untrusted"
+
+    def test_auto_tag_via_manager(self, client: TestClient) -> None:
+        """Tegsiz yozuv — manager auto-tag orqali kalit-so'z chiqaradi."""
+        resp = client.post(
+            "/api/v1/memory",
+            json={
+                "layer": "knowledge",
+                "content": "Python dasturlash tili sintaksisi",
+                # Tag berilmagan — manager avtomatik ajratsin
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        # Manager `extract_keywords` orqali kamida bitta tag qo'shadi
+        assert len(data["tags"]) > 0
+
+    def test_manager_dependency_injected(self, client: TestClient, store: MemoryStore) -> None:
+        """`get_memory_manager` override bilan almashtirilsa — route uni ishlatadi.
+
+        Manager ustidan spy qo'yib, `aremember()` chaqirilganini kuzatamiz.
+        """
+        called: list[dict[str, object]] = []
+
+        class SpyManager(MemoryManager):
+            async def aremember(self, **kwargs: object) -> object:  # type: ignore[override]
+                called.append(kwargs)
+                return await super().aremember(**kwargs)  # type: ignore[arg-type]
+
+        app = create_app()
+        app.dependency_overrides[get_memory_store] = lambda: store
+        app.dependency_overrides[get_memory_manager] = lambda: SpyManager(store=store)
+        spy_client = TestClient(app)
+
+        resp = spy_client.post(
+            "/api/v1/memory",
+            json={"layer": "knowledge", "content": "wire-in isboti"},
+        )
+        assert resp.status_code == 201
+        assert len(called) == 1
+        assert called[0]["layer"].value == "knowledge"
+        assert called[0]["content"] == "wire-in isboti"
+        assert called[0]["trust_level"] == "owner"
 
 
 class TestMemoryAPIPersistence:

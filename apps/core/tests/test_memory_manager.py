@@ -195,6 +195,76 @@ class TestForget:
         assert manager.forget("nonexistent") is False
 
 
+class TestAremember:
+    """`aremember()` sinxron va asinxron store bilan ishlashini isbotlash.
+
+    NEGA. `api/routes/memory.py::add_memory` `PgMemoryStore` (async) bilan
+    ishlaydi — `remember()` (sync) uni qo'llab-quvvatlamaydi. Route
+    `aremember()`ga bog'liq, shu sabab u erda ham qamrov kerak.
+    """
+
+    async def test_aremember_with_sync_store(self, manager: MemoryManager) -> None:
+        """`aremember()` sinxron store bilan ham ishlaydi."""
+        entry = await manager.aremember(
+            layer=MemoryLayer.KNOWLEDGE,
+            content="asinxron eslab qolish",
+        )
+        assert entry.content == "asinxron eslab qolish"
+        assert manager.count == 1
+
+    async def test_aremember_with_async_store(self) -> None:
+        """`aremember()` awaitable qaytaruvchi store bilan ishlaydi."""
+        from zet.domain.memory import MemoryEntry
+
+        recorded: list[dict[str, object]] = []
+
+        class FakeAsyncStore:
+            async def add(self, **kwargs: object) -> MemoryEntry:
+                recorded.append(kwargs)
+                return MemoryEntry(
+                    id="fake-id",
+                    layer=kwargs["layer"],  # type: ignore[arg-type]
+                    content=kwargs["content"],  # type: ignore[arg-type]
+                    summary=kwargs.get("summary"),  # type: ignore[arg-type]
+                    tags=list(kwargs.get("tags") or []),  # type: ignore[arg-type]
+                    source=kwargs.get("source"),  # type: ignore[arg-type]
+                    trust_level=kwargs["trust_level"],  # type: ignore[arg-type]
+                )
+
+        async_manager = MemoryManager(store=FakeAsyncStore())
+        entry = await async_manager.aremember(
+            layer=MemoryLayer.KNOWLEDGE,
+            content="async store yozuvi",
+        )
+        assert entry.id == "fake-id"
+        assert len(recorded) == 1
+        assert recorded[0]["content"] == "async store yozuvi"
+
+    async def test_aremember_enforces_policy(self, manager: MemoryManager) -> None:
+        """`aremember()` `check_write`ni chetlab o'tmaydi."""
+        with pytest.raises(MemoryPolicyError):
+            await manager.aremember(
+                layer=MemoryLayer.KNOWLEDGE,
+                content="ruxsatsiz",
+                trust_level="untrusted",
+            )
+
+    def test_remember_rejects_async_store(self) -> None:
+        """Sinxron `remember()` awaitable qaytaradigan store bilan aniq xato."""
+        from zet.domain.memory import MemoryEntry
+
+        class FakeAsyncStore:
+            async def add(self, **_kwargs: object) -> MemoryEntry:  # pragma: no cover
+                raise AssertionError("shouldn't be awaited in sync path")
+
+        sync_bad_manager = MemoryManager(store=FakeAsyncStore())
+        with pytest.raises(TypeError, match="aremember"):
+            sync_bad_manager.remember(
+                layer=MemoryLayer.KNOWLEDGE,
+                content="test",
+            )
+
+
 class TestCleanup:
     def test_cleanup(self, manager: MemoryManager) -> None:
         """Eskirgan yozuvlarni tozalash."""

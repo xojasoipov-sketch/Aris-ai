@@ -1,7 +1,23 @@
 """Secret Manager — maxfiy kalitlar boshqaruvi (Bo'lim 11).
 
-.env faylidan o'qilgan sirlarni xavfsiz saqlash va boshqarish.
-Kalitlarni rotatsiya qilish, muddatini kuzatish.
+.. deprecated::
+    `SecretManager`/`SecretMetadata`/`SecretStatus` sinflari orqaga
+    moslik uchun saqlanmoqda, lekin produksiyada ISHLATILMAYDI. Ilgari
+    rotatsiya/expiry lifecycle rejalashtirilgan edi, lekin hech qanday
+    kod yo'liga ulanmagan.
+
+    NEGA saqlaymiz: `mask_value()` yordamchisi va tegishli testlar
+    (`tests/test_security_bolim11.py`) uni ishlatadi; sinflarning o'zi
+    ham unit test qamrovida — kelajakda `.env` yuklash yo'liga ulash
+    uchun tayyor.
+
+    Ilgari sirlar bu klass orqali yuklanadi deb rejalashtirilgan edi,
+    lekin haqiqiy sirlar `zet.config.Settings` (pydantic-settings orqali
+    `.env` dan) yuklanadi — REPLACEMENT: **zet/config.py**.
+
+    Bu modulni ishlatishdan oldin `SecretManager`ni `Settings.load()`
+    yo'liga ulash kerak, aks holda ikkita alohida sir manbasini
+    saqlash sinxronsizlikka olib keladi.
 
 Xavfsizlik:
     - Kalitlar hech qachon logga yozilmaydi

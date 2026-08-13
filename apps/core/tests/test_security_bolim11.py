@@ -1,18 +1,20 @@
-"""Bo'lim 11 testlari — Xavfsizlik (Rate Limiter, Audit Log, Secret Manager).
+"""Bo'lim 11 testlari — Xavfsizlik (Rate Limiter, Secret Manager).
+
+NEGA `AuditLog` testlari yo'q. Ilgari in-memory `AuditLog` re-export
+qilinardi va shu yerda qamrab olinardi. Endi haqiqiy audit
+`zet.security.audit_writer.write_audit()` orqali DB'ga yoziladi —
+`tests/test_audit_writer.py` uni sinaydi.
 
 Test guruhlari:
     1. RateLimitTier — enum qiymatlari
     2. RateLimitResult — model maydonlari
     3. RateLimiter — check, limits, tiers, custom, reset, stats
-    4. AuditCategory — enum qiymatlari
-    5. AuditEntry — yaratish, compute_hash, frozen
-    6. AuditLog — append, entries filter, hash chain, verify_integrity, stats
-    7. SecretStatus — enum qiymatlari
-    8. SecretMetadata — yaratish, is_expired, days_until_expiry, frozen
-    9. mask_value — turli uzunliklar
-    10. SecretManager — register, get_value, rotate, revoke, list, expiring_soon
-    11. Security __init__ exports (Bo'lim 11 qo'shimchalari)
-    12. Xavfsizlik invariantlari
+    4. SecretStatus — enum qiymatlari
+    5. SecretMetadata — yaratish, is_expired, days_until_expiry, frozen
+    6. mask_value — turli uzunliklar
+    7. SecretManager — register, get_value, rotate, revoke, list, expiring_soon
+    8. Security __init__ exports (Bo'lim 11 qo'shimchalari)
+    9. Xavfsizlik invariantlari
 """
 
 from __future__ import annotations
@@ -24,9 +26,6 @@ import pytest
 from pydantic import ValidationError
 
 from zet.security import (
-    AuditCategory,
-    AuditEntry,
-    AuditLog,
     RateLimiter,
     RateLimitResult,
     RateLimitTier,
@@ -196,181 +195,7 @@ class TestRateLimiter:
         assert s["total_denied"] == 1
 
 
-# ─── 4. AuditCategory ──────────────────────────────────────────
-
-
-class TestAuditCategory:
-    """AuditCategory enum testlari."""
-
-    def test_values(self) -> None:
-        assert AuditCategory.AUTH == "auth"
-        assert AuditCategory.PERMISSION == "permission"
-        assert AuditCategory.DATA == "data"
-        assert AuditCategory.CONFIG == "config"
-        assert AuditCategory.SECURITY == "security"
-        assert AuditCategory.SYSTEM == "system"
-
-    def test_six_categories(self) -> None:
-        assert len(AuditCategory) == 6
-
-
-# ─── 5. AuditEntry ──────────────────────────────────────────────
-
-
-class TestAuditEntry:
-    """AuditEntry model testlari."""
-
-    def test_create(self) -> None:
-        e = AuditEntry(category=AuditCategory.AUTH, action="login")
-        assert e.category == AuditCategory.AUTH
-        assert e.action == "login"
-        assert e.actor == "system"
-        assert e.success is True
-        assert len(e.id) == 16
-        assert isinstance(e.timestamp, datetime)
-
-    def test_create_with_details(self) -> None:
-        e = AuditEntry(
-            category=AuditCategory.SECURITY,
-            action="injection.detected",
-            actor="scanner",
-            target="run_123",
-            detail="Prompt injection topildi",
-            success=False,
-        )
-        assert e.actor == "scanner"
-        assert e.target == "run_123"
-        assert e.success is False
-
-    def test_compute_hash(self) -> None:
-        e = AuditEntry(category=AuditCategory.AUTH, action="login")
-        h = e.compute_hash()
-        assert isinstance(h, str)
-        assert len(h) == 32  # SHA-256 truncated
-
-    def test_hash_deterministic(self) -> None:
-        e = AuditEntry(category=AuditCategory.AUTH, action="login")
-        assert e.compute_hash() == e.compute_hash()
-
-    def test_different_entries_different_hash(self) -> None:
-        e1 = AuditEntry(category=AuditCategory.AUTH, action="login")
-        e2 = AuditEntry(category=AuditCategory.AUTH, action="logout")
-        assert e1.compute_hash() != e2.compute_hash()
-
-    def test_frozen(self) -> None:
-        e = AuditEntry(category=AuditCategory.AUTH, action="login")
-        with pytest.raises(ValidationError):
-            e.action = "changed"  # type: ignore[misc]
-
-
-# ─── 6. AuditLog ────────────────────────────────────────────────
-
-
-class TestAuditLog:
-    """AuditLog testlari."""
-
-    def test_append(self) -> None:
-        al = AuditLog()
-        entry = al.append(category=AuditCategory.AUTH, action="login")
-        assert entry.category == AuditCategory.AUTH
-        assert al.count == 1
-
-    def test_append_multiple(self) -> None:
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="login")
-        al.append(category=AuditCategory.DATA, action="write")
-        al.append(category=AuditCategory.SYSTEM, action="start")
-        assert al.count == 3
-
-    def test_last_entry(self) -> None:
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="login")
-        al.append(category=AuditCategory.DATA, action="write")
-        assert al.last_entry is not None
-        assert al.last_entry.action == "write"
-
-    def test_last_entry_empty(self) -> None:
-        al = AuditLog()
-        assert al.last_entry is None
-
-    def test_entries_reverse_order(self) -> None:
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="first")
-        al.append(category=AuditCategory.AUTH, action="second")
-        al.append(category=AuditCategory.AUTH, action="third")
-        entries = al.entries()
-        assert entries[0].action == "third"
-        assert entries[2].action == "first"
-
-    def test_entries_filter_category(self) -> None:
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="login")
-        al.append(category=AuditCategory.DATA, action="write")
-        al.append(category=AuditCategory.AUTH, action="logout")
-        auth = al.entries(category=AuditCategory.AUTH)
-        assert len(auth) == 2
-
-    def test_entries_filter_actor(self) -> None:
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="a", actor="owner")
-        al.append(category=AuditCategory.AUTH, action="b", actor="system")
-        owner = al.entries(actor="owner")
-        assert len(owner) == 1
-        assert owner[0].actor == "owner"
-
-    def test_entries_limit(self) -> None:
-        al = AuditLog()
-        for i in range(20):
-            al.append(category=AuditCategory.AUTH, action=f"act_{i}")
-        limited = al.entries(limit=5)
-        assert len(limited) == 5
-
-    def test_hash_chain(self) -> None:
-        """Har bir yozuvning prev_hash oldingi yozuvning hashiga teng."""
-        al = AuditLog()
-        e1 = al.append(category=AuditCategory.AUTH, action="first")
-        e2 = al.append(category=AuditCategory.AUTH, action="second")
-        assert e1.prev_hash == ""  # Birinchi yozuv — bo'sh
-        assert e2.prev_hash == e1.compute_hash()
-
-    def test_verify_integrity_ok(self) -> None:
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="a")
-        al.append(category=AuditCategory.DATA, action="b")
-        al.append(category=AuditCategory.SYSTEM, action="c")
-        assert al.verify_integrity() is True
-
-    def test_verify_integrity_empty(self) -> None:
-        al = AuditLog()
-        assert al.verify_integrity() is True
-
-    def test_verify_integrity_tampered(self) -> None:
-        """Yozuv o'zgartirilsa — zanjir buziladi."""
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="a")
-        al.append(category=AuditCategory.AUTH, action="b")
-        # Zanjirni buzish: birinchi yozuvni almashtirish
-        fake = AuditEntry(
-            category=AuditCategory.AUTH,
-            action="tampered",
-            prev_hash="",  # to'g'ri prev_hash, lekin hash o'zgaradi
-        )
-        al._entries[0] = fake
-        assert al.verify_integrity() is False
-
-    def test_stats(self) -> None:
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="login", success=True)
-        al.append(category=AuditCategory.SECURITY, action="blocked", success=False)
-        s = al.stats
-        assert s["total"] == 2
-        assert s["failed"] == 1
-        assert s["integrity_ok"] is True
-        assert s["by_category"]["auth"] == 1
-        assert s["by_category"]["security"] == 1
-
-
-# ─── 7. SecretStatus ────────────────────────────────────────────
+# ─── 4. SecretStatus ────────────────────────────────────────────
 
 
 class TestSecretStatus:
@@ -386,7 +211,7 @@ class TestSecretStatus:
         assert len(SecretStatus) == 4
 
 
-# ─── 8. SecretMetadata ──────────────────────────────────────────
+# ─── 5. SecretMetadata ──────────────────────────────────────────
 
 
 class TestSecretMetadata:
@@ -440,7 +265,7 @@ class TestSecretMetadata:
             SecretMetadata(name="")
 
 
-# ─── 9. mask_value ──────────────────────────────────────────────
+# ─── 6. mask_value ──────────────────────────────────────────────
 
 
 class TestMaskValue:
@@ -465,7 +290,7 @@ class TestMaskValue:
         assert mask_value("x") == "*"
 
 
-# ─── 10. SecretManager ──────────────────────────────────────────
+# ─── 7. SecretManager ──────────────────────────────────────────
 
 
 class TestSecretManager:
@@ -576,7 +401,7 @@ class TestSecretManager:
         assert s["revoked"] == 1
 
 
-# ─── 11. Security __init__ exports ──────────────────────────────
+# ─── 8. Security __init__ exports ──────────────────────────────
 
 
 class TestSecurityExportsBolim11:
@@ -588,12 +413,6 @@ class TestSecurityExportsBolim11:
         rl = RateLimiter()
         assert rl.stats["total_allowed"] == 0
 
-    def test_auditlog_importable(self) -> None:
-        from zet.security import AuditLog
-
-        al = AuditLog()
-        assert al.count == 0
-
     def test_secretmanager_importable(self) -> None:
         from zet.security import SecretManager
 
@@ -604,9 +423,6 @@ class TestSecurityExportsBolim11:
         import zet.security as mod
 
         bolim11_names = {
-            "AuditCategory",
-            "AuditEntry",
-            "AuditLog",
             "RateLimiter",
             "RateLimitResult",
             "RateLimitTier",
@@ -616,34 +432,27 @@ class TestSecurityExportsBolim11:
         }
         assert bolim11_names.issubset(set(mod.__all__))
 
+    def test_audit_log_not_reexported(self) -> None:
+        """NEGA. In-memory `AuditLog` olib tashlandi — haqiqiy audit
+        `zet.security.audit_writer.write_audit()` orqali DB'ga yoziladi."""
+        import zet.security as mod
 
-# ─── 12. Xavfsizlik invariantlari ───────────────────────────────
+        assert "AuditLog" not in mod.__all__
+        assert "AuditCategory" not in mod.__all__
+        assert "AuditEntry" not in mod.__all__
+
+
+# ─── 9. Xavfsizlik invariantlari ───────────────────────────────
 
 
 class TestSecurityBolim11Invariants:
     """Xavfsizlik invariantlari — Bo'lim 11."""
-
-    def test_audit_entry_frozen(self) -> None:
-        """AuditEntry o'zgartirib bo'lmaydi."""
-        e = AuditEntry(category=AuditCategory.AUTH, action="login")
-        with pytest.raises(ValidationError):
-            e.action = "changed"  # type: ignore[misc]
 
     def test_secret_metadata_frozen(self) -> None:
         """SecretMetadata o'zgartirib bo'lmaydi."""
         m = SecretMetadata(name="KEY")
         with pytest.raises(ValidationError):
             m.status = SecretStatus.REVOKED  # type: ignore[misc]
-
-    def test_audit_hash_chain_immutable(self) -> None:
-        """Hash chain buzilsa — verify_integrity False qaytaradi."""
-        al = AuditLog()
-        al.append(category=AuditCategory.AUTH, action="a")
-        al.append(category=AuditCategory.AUTH, action="b")
-        assert al.verify_integrity() is True
-        # Buzish
-        al._entries[0] = AuditEntry(category=AuditCategory.SECURITY, action="fake", prev_hash="")
-        assert al.verify_integrity() is False
 
     def test_secret_value_not_in_metadata(self) -> None:
         """Kalit qiymati MetaData da emas, faqat maskalangan versiya."""
@@ -683,15 +492,6 @@ class TestSecurityBolim11Invariants:
         rl.set_custom_limit("x", 10)
         result = rl.check("x", cost=11)
         assert result.allowed is False
-
-    def test_audit_append_only_semantics(self) -> None:
-        """AuditLog faqat append qiladi — o'chirish metodi yo'q."""
-        al = AuditLog()
-        # O'chirish yoki yangilash metodi yo'qligini tekshirish
-        assert not hasattr(al, "delete")
-        assert not hasattr(al, "remove")
-        assert not hasattr(al, "update")
-        assert not hasattr(al, "clear")
 
     def test_mask_value_hides_secret(self) -> None:
         """mask_value kalitning ko'p qismini yashiradi."""

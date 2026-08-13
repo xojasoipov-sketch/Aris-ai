@@ -16,6 +16,9 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import inspect
+from typing import Any
+
 import structlog
 
 from zet.domain.memory import MemoryEntry, MemoryLayer, MemoryQuery, MemorySearchResult
@@ -31,15 +34,59 @@ class MemoryManager:
 
     Barcha xotira operatsiyalari shu orqali o'tadi.
     Policy tekshiruvi, auto-summarize, auto-tag qo'shadi.
+
+    `store` — sinxron `MemoryStore` (in-memory) yoki asinxron `PgMemoryStore`
+    (DB-backed) bo'lishi mumkin. Sinxron chaqiruvchilar `remember()`, asinxron
+    (API route) `aremember()` ishlatadi. Har ikkalasi bir xil policy/summarize/
+    tag pipeline'idan o'tadi — ilgari API route `store.add()`ni to'g'ridan-
+    to'g'ri chaqirib policy'ni chetlab o'tardi.
     """
 
-    def __init__(self, store: MemoryStore | None = None) -> None:
-        self._store = store or MemoryStore()
+    def __init__(self, store: Any | None = None) -> None:
+        self._store = store if store is not None else MemoryStore()
 
     @property
-    def store(self) -> MemoryStore:
+    def store(self) -> Any:
         """Asosiy xotira do'koni."""
         return self._store
+
+    def _prepare_write(
+        self,
+        *,
+        layer: MemoryLayer,
+        content: str,
+        trust_level: str,
+        summary: str | None,
+        tags: list[str] | None,
+        source: str | None,
+        auto_summarize: bool,
+        auto_tag: bool,
+    ) -> dict[str, Any]:
+        """Policy tekshiruvi + auto-summarize + auto-tag — `store.add()` kwargs qaytaradi.
+
+        NEGA alohida yordamchi. `remember()` va `aremember()` ikkalasi bir xil
+        pipeline'dan o'tishi kerak — mantiqni sinxron/asinxron oxirgi
+        `store.add()`ga qarab ikki nusxada saqlash siljish xavfini keltiradi.
+        """
+        # 1. Policy tekshiruvi
+        check_write(trust_level, layer)
+
+        # 2. Auto-summarize
+        if auto_summarize and summary is None and should_summarize(content):
+            summary = truncate_summary(content, max_length=200)
+
+        # 3. Auto-tag
+        if auto_tag and not tags:
+            tags = extract_keywords(content, max_keywords=5)
+
+        return {
+            "layer": layer,
+            "content": content,
+            "summary": summary,
+            "tags": tags or [],
+            "source": source,
+            "trust_level": trust_level,
+        }
 
     def remember(
         self,
@@ -53,48 +100,81 @@ class MemoryManager:
         auto_summarize: bool = True,
         auto_tag: bool = True,
     ) -> MemoryEntry:
-        """Yangi narsani eslab qolish.
+        """Yangi narsani eslab qolish (SINXRON store uchun).
 
         Policy tekshiruvidan o'tadi.
         Uzun matnlar avtomatik qisqartiriladi.
         Teglar berilmasa — matndan ajratiladi.
 
-        Args:
-            layer: Qatlam.
-            content: Matn.
-            trust_level: Manba ishonchliligi.
-            summary: Qisqartma (None bo'lsa avtomatik).
-            tags: Teglar (None bo'lsa avtomatik).
-            source: Manba identifikatori.
-            auto_summarize: Avtomatik qisqartirish.
-            auto_tag: Avtomatik teg qo'shish.
-
-        Returns:
-            Yaratilgan xotira yozuvi.
-
         Raises:
             MemoryPolicyError: Ruxsat bo'lmasa.
+            TypeError: `store.add()` awaitable qaytarsa (asinxron store) —
+                bunda `aremember()` ishlatilishi kerak.
         """
-        # 1. Policy tekshiruvi
-        check_write(trust_level, layer)
-
-        # 2. Auto-summarize
-        if auto_summarize and summary is None and should_summarize(content):
-            summary = truncate_summary(content, max_length=200)
-
-        # 3. Auto-tag
-        if auto_tag and not tags:
-            tags = extract_keywords(content, max_keywords=5)
-
-        # 4. Yozuv yaratish
-        entry = self._store.add(
+        kwargs = self._prepare_write(
             layer=layer,
             content=content,
-            summary=summary,
-            tags=tags or [],
-            source=source,
             trust_level=trust_level,
+            summary=summary,
+            tags=tags,
+            source=source,
+            auto_summarize=auto_summarize,
+            auto_tag=auto_tag,
         )
+        result = self._store.add(**kwargs)
+        if inspect.isawaitable(result):
+            # Aks holda coroutine sirtga sizib chiqadi va chaqiruvchi kutilmagan
+            # tarzda MemoryEntry o'rniga Coroutine oladi. Kutilmagan awaitable'ni
+            # avval close() bilan yopamiz — GC vaqtida "coroutine never awaited"
+            # ogohlantirishini yaratmasin.
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
+            raise TypeError(
+                "MemoryManager.remember() sinxron store bilan ishlaydi; "
+                "asinxron store uchun aremember() ishlating."
+            )
+
+        log.info(
+            "memory.remember",
+            id=result.id,
+            layer=layer.value,
+            trust_level=trust_level,
+            auto_summary=summary is not None,
+            tags_count=len(result.tags),
+        )
+        return result
+
+    async def aremember(
+        self,
+        *,
+        layer: MemoryLayer,
+        content: str,
+        trust_level: str = "owner",
+        summary: str | None = None,
+        tags: list[str] | None = None,
+        source: str | None = None,
+        auto_summarize: bool = True,
+        auto_tag: bool = True,
+    ) -> MemoryEntry:
+        """Yangi narsani eslab qolish — sinxron va asinxron store'ga ishlaydi.
+
+        `PgMemoryStore.add()` (async) yoki `MemoryStore.add()` (sync) — har
+        ikkalasi bilan bir xil ishlaydi. API route (`api/routes/memory.py`)
+        shu orqali policy'ni chetlab o'tmasdan yozadi.
+        """
+        kwargs = self._prepare_write(
+            layer=layer,
+            content=content,
+            trust_level=trust_level,
+            summary=summary,
+            tags=tags,
+            source=source,
+            auto_summarize=auto_summarize,
+            auto_tag=auto_tag,
+        )
+        result = self._store.add(**kwargs)
+        entry: MemoryEntry = await result if inspect.isawaitable(result) else result
 
         log.info(
             "memory.remember",
@@ -104,7 +184,6 @@ class MemoryManager:
             auto_summary=summary is not None,
             tags_count=len(entry.tags),
         )
-
         return entry
 
     def recall(

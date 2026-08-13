@@ -12,6 +12,18 @@ Xotira CRUD va qidirish:
 `store` — `PgMemoryStore` (DB-backed, async) yoki test'larda `MemoryStore`
 (in-memory, sync) bo'lishi mumkin. `_maybe_await()` ikkalasini ham
 qo'llab-quvvatlaydi — endpoint kodi bittasiga qattiq bog'lanmaydi.
+
+TRUST_LEVEL SIYOSATI (V-14, A-05).
+
+Har bir endpoint `X-Trust-Level` header'idan chaqiruvchining trust
+darajasini oladi (default `"owner"` — backward compat). Yozish/o'qish
+`memory/policy.py::check_write`/`check_read` orqali tekshiriladi:
+    - `owner` — barcha qatlamlar
+    - `system` — PERSONAL/KNOWLEDGE ga yoza olmaydi, KNOWLEDGE ga o'qiy oladi
+    - `untrusted` — faqat SHORT_TERM yozadi, SHORT_TERM+KNOWLEDGE o'qiydi
+
+Ilgari (audit'gacha) bu tekshiruv umuman yo'q edi — mijoz istagan
+qatlamga yozardi. Endi siyosat buzilganda 403 qaytariladi.
 """
 
 from __future__ import annotations
@@ -22,8 +34,20 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from zet.api.deps import MemoryStoreLike, get_memory_store
+from zet.api.deps import (
+    MemoryStoreLike,
+    get_caller_trust_level,
+    get_memory_manager,
+    get_memory_store,
+)
 from zet.domain.memory import MemoryEntry, MemoryLayer, MemoryQuery
+from zet.memory.manager import MemoryManager
+from zet.memory.policy import (
+    MemoryPolicyError,
+    check_read,
+    check_write,
+    readable_layers,
+)
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
@@ -35,11 +59,47 @@ async def _maybe_await[T](value: T | Any) -> T:
     return value
 
 
+def _enforce_write(trust_level: str, layer: MemoryLayer) -> None:
+    """`check_write` ni chaqirib, `MemoryPolicyError` ni 403 ga aylantiradi.
+
+    Xato matni "layer <X> requires <Y> trust" ko'rinishida — mijozga
+    aynan qaysi qatlam qaysi darajani talab qilishi ochiq ko'rinsin
+    (audit'da so'ralgan format).
+    """
+    try:
+        check_write(trust_level, layer)
+    except MemoryPolicyError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"layer {layer.value} requires higher trust for write (got {trust_level!r}): {exc}"
+            ),
+        ) from exc
+
+
+def _enforce_read(trust_level: str, layer: MemoryLayer) -> None:
+    """`check_read` ni chaqirib, `MemoryPolicyError` ni 403 ga aylantiradi."""
+    try:
+        check_read(trust_level, layer)
+    except MemoryPolicyError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"layer {layer.value} requires higher trust for read (got {trust_level!r}): {exc}"
+            ),
+        ) from exc
+
+
 # ── Request / Response modellari ──────────────────────────────────
 
 
 class MemoryAddRequest(BaseModel):
-    """Yangi xotira yozuvi."""
+    """Yangi xotira yozuvi.
+
+    `trust_level` maydoni backward-compat uchun saqlangan — lekin server
+    uni chaqiruvchining haqiqiy trust'iga cheklaydi (mijoz o'zidan yuqori
+    trust bilan yoza olmaydi).
+    """
 
     layer: MemoryLayer
     content: str = Field(..., min_length=1, max_length=50_000)
@@ -122,19 +182,38 @@ def _entry_to_response(entry: MemoryEntry) -> MemoryEntryResponse:
 @router.post("", response_model=MemoryEntryResponse, status_code=201)
 async def add_memory(
     request: MemoryAddRequest,
-    store: MemoryStoreLike = Depends(get_memory_store),
+    manager: MemoryManager = Depends(get_memory_manager),
+    trust_level: str = Depends(get_caller_trust_level),
 ) -> MemoryEntryResponse:
-    """Yangi xotira yozuvi qo'shish."""
-    entry = await _maybe_await(
-        store.add(
+    """Yangi xotira yozuvi qo'shish.
+
+    Chaqiruvchining trust'i qatlamga yozishga yetmasa — 403. Yozuvning
+    `trust_level` maydoni sifatida chaqiruvchi trust'i saqlanadi
+    (mijoz JSON'da yuborgan `trust_level` server tomonidan almashtiriladi
+    — mijoz o'zidan yuqori trust bilan yoza olmasin).
+
+    NEGA `MemoryManager` orqali. Ilgari route `store.add()`ni to'g'ridan-
+    to'g'ri chaqirar edi — bu `memory.write` tool bilan bir xil policy
+    darvozasidan o'tmasdi va auto-summarize/auto-tag ham ishlamasdi.
+    Endi manager `check_write` + summarize + tag pipeline'ini bajaradi;
+    quyidagi qo'shimcha `_enforce_write` faqat tez 403 xato matni uchun
+    (ichki `MemoryPolicyError` matni mijoz uchun mos emas).
+    """
+    _enforce_write(trust_level, request.layer)
+    try:
+        entry = await manager.aremember(
             layer=request.layer,
             content=request.content,
+            trust_level=trust_level,
             summary=request.summary,
-            tags=request.tags,
+            tags=request.tags or None,
             source=request.source,
-            trust_level=request.trust_level,
         )
-    )
+    except MemoryPolicyError as exc:
+        # Manager policy'ni ikkinchi bor tekshirishi mumkin (bir xil qoida) —
+        # yuqoridagi `_enforce_write` tuzoqqa tushmagan chekka holat uchun
+        # xavfsiz zaxira.
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return _entry_to_response(entry)
 
 
@@ -142,11 +221,18 @@ async def add_memory(
 async def get_memory(
     entry_id: str,
     store: MemoryStoreLike = Depends(get_memory_store),
+    trust_level: str = Depends(get_caller_trust_level),
 ) -> MemoryEntryResponse:
-    """Yozuvni ID bo'yicha olish."""
+    """Yozuvni ID bo'yicha olish.
+
+    Yozuvning qatlami chaqiruvchi uchun o'qish siyosatiga to'g'ri kelmasa
+    — 403 (yozuvning mavjudligi ham fosh bo'lmasin uchun avval fetch,
+    keyin policy).
+    """
     entry = await _maybe_await(store.get(entry_id))
     if entry is None:
         raise HTTPException(status_code=404, detail="Yozuv topilmadi")
+    _enforce_read(trust_level, entry.layer)
     return _entry_to_response(entry)
 
 
@@ -155,8 +241,16 @@ async def update_memory(
     entry_id: str,
     request: MemoryUpdateRequest,
     store: MemoryStoreLike = Depends(get_memory_store),
+    trust_level: str = Depends(get_caller_trust_level),
 ) -> MemoryEntryResponse:
-    """Yozuvni yangilash (versiya oshadi)."""
+    """Yozuvni yangilash (versiya oshadi).
+
+    Yangilanadigan yozuvning qatlamiga yozish ruxsati tekshiriladi.
+    """
+    existing = await _maybe_await(store.get(entry_id))
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Yozuv topilmadi")
+    _enforce_write(trust_level, existing.layer)
     updated = await _maybe_await(
         store.update(
             entry_id,
@@ -174,8 +268,17 @@ async def update_memory(
 async def delete_memory(
     entry_id: str,
     store: MemoryStoreLike = Depends(get_memory_store),
+    trust_level: str = Depends(get_caller_trust_level),
 ) -> None:
-    """Yozuvni o'chirish (soft delete)."""
+    """Yozuvni o'chirish (soft delete).
+
+    O'chirishdan oldin qatlam bo'yicha yozish siyosati tekshiriladi —
+    untrusted trust PERSONAL yozuvni o'chira olmaydi.
+    """
+    existing = await _maybe_await(store.get(entry_id))
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Yozuv topilmadi")
+    _enforce_write(trust_level, existing.layer)
     if not await _maybe_await(store.delete(entry_id)):
         raise HTTPException(status_code=404, detail="Yozuv topilmadi")
 
@@ -184,11 +287,35 @@ async def delete_memory(
 async def search_memory(
     request: MemorySearchRequest,
     store: MemoryStoreLike = Depends(get_memory_store),
+    trust_level: str = Depends(get_caller_trust_level),
 ) -> list[MemorySearchResultResponse]:
-    """Xotiradan qidirish."""
+    """Xotiradan qidirish.
+
+    Chaqiruvchi ochiq ravishda o'qib bo'lmaydigan qatlamni so'rasa (masalan,
+    untrusted → PERSONAL) — 403. Aks holda so'rov `readable_layers` bilan
+    kesib olinadi: filtr yuborilmasa faqat ruxsat etilgan qatlamlar
+    qidiriladi, shu bilan bekilgan qatlamdan sirt chiqmaydi.
+    """
+    allowed = readable_layers(trust_level)
+    if request.layers is not None:
+        for layer in request.layers:
+            if layer not in allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"layer {layer.value} requires higher trust for read (got {trust_level!r})"
+                    ),
+                )
+        effective_layers = list(request.layers)
+    else:
+        # Filtr yo'q — o'qib bo'ladigan qatlamlar bilan cheklaymiz. Aks
+        # holda untrusted mijoz butun xotirani qidirib chiqib, kimningdir
+        # PERSONAL yozuvini `text` orqali chiqarib olishi mumkin edi.
+        effective_layers = list(allowed)
+
     query = MemoryQuery(
         text=request.text,
-        layers=request.layers,
+        layers=effective_layers,
         tags=request.tags,
         limit=request.limit,
         min_similarity=request.min_similarity,
@@ -210,8 +337,13 @@ async def list_by_layer(
     layer: MemoryLayer,
     limit: int = 50,
     store: MemoryStoreLike = Depends(get_memory_store),
+    trust_level: str = Depends(get_caller_trust_level),
 ) -> list[MemoryEntryResponse]:
-    """Qatlam bo'yicha yozuvlar ro'yxati."""
+    """Qatlam bo'yicha yozuvlar ro'yxati.
+
+    Qatlam chaqiruvchi uchun o'qib bo'lmasa — 403.
+    """
+    _enforce_read(trust_level, layer)
     entries = await _maybe_await(store.list_by_layer(layer, limit=limit))
     return [_entry_to_response(e) for e in entries]
 
