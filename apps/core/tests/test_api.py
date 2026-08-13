@@ -343,10 +343,15 @@ class TestApprovals:
         resp = client.post(f"/api/v1/approvals/{uuid.uuid4()}/approve", json={})
         assert resp.status_code == 404
 
-    def test_list_requires_run_id(self, client: TestClient) -> None:
-        """run_id bermasdan → 400."""
+    def test_list_without_run_id_returns_all_pending(self, client: TestClient) -> None:
+        """run_id bermasdan → hamma kutayotgan tasdiqlar (yangi xatti-harakat).
+
+        Ilgari 400 qaytardi. `z approvals` CLI (BROKEN #1 tuzatishning
+        bir qismi) barcha kutayotganlarni ro'yxatlash uchun bu endpoint'ni
+        ishlatadi — argumentsiz."""
         resp = client.get("/api/v1/approvals")
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)  # bo'sh yoki to'ldirilgan ro'yxat
 
 
 # ── KillSwitch ────────────────────────────────────────────────────

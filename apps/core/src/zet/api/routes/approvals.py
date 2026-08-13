@@ -81,9 +81,14 @@ async def list_pending(
     run_id: str | None = None,
     approvals: ApprovalService = Depends(get_approval_service),
 ) -> list[ApprovalResponse]:
-    """Run uchun kutilayotgan tasdiqlar ro'yxati."""
+    """Kutilayotgan tasdiqlar ro'yxati.
+
+    `run_id` berilsa — faqat shu run'ga tegishlilari; berilmasa — HAMMA
+    kutayotgan tasdiqlar (`z approvals` CLI ishlatadi, GAP_ANALYSIS
+    BROKEN #1 tuzatilishida kerak bo'ldi).
+    """
     if run_id is None:
-        raise HTTPException(status_code=400, detail="run_id majburiy")
+        return [_to_response(r) for r in approvals.all_pending()]
     rid = _parse_uuid(run_id, "run_id")
     return [_to_response(r) for r in approvals.pending_for_run(rid)]
 

@@ -211,6 +211,17 @@ class ApprovalService:
             if self._requests[aid].status == ApprovalStatus.PENDING
         ]
 
+    def all_pending(self) -> list[ApprovalRequest]:
+        """Barcha kutilayotgan tasdiqlar (run bo'yicha filtrsiz).
+
+        `z approvals` CLI orqali "hozir nimalar tasdiq kutmoqda?" savoliga
+        javob berish uchun kerak — GAP_ANALYSIS BROKEN #1 yopishning bir
+        qismi. Cross-process approve/reject ish beradi, lekin ID'ni
+        boshqa joydan (Telegram bildirishnomasi, log) topish kerak edi;
+        endi CLI o'zi ro'yxatlab beradi.
+        """
+        return [r for r in self._requests.values() if r.status == ApprovalStatus.PENDING]
+
     def approve(
         self,
         approval_id: uuid.UUID,

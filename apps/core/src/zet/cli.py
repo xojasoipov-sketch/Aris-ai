@@ -92,8 +92,18 @@ def run(
                 f"  [yellow]⏸ Tasdiq kerak[/yellow] — approval_id: "
                 f"[dim]{record.pending_approval_id}[/dim]"
             )
+            # NOTA: bu holatdagi run CLI JARAYONida qoladi va API'da ko'rinmaydi
+            # (RunStore singleton har jarayonda alohida). `z approve <id>` API'ga
+            # murojaat qiladi va u yerda RUN yo'q, shu sabab XATO qaytadi. Ishonchli
+            # tasdiq oqimi uchun ishga `z tg` (Telegram bot) yoki HTTP orqali
+            # `POST /api/v1/run` — ikkalasi ham API jarayonida ishlaydi.
             out.print(
-                f"  Tasdiqlash uchun: POST /api/v1/approvals/{record.pending_approval_id}/approve"
+                "  [dim]Cross-process tasdiq: `z run` ni HTTP orqali ishga tushiring[/dim]\n"
+                "  [dim]yoki Telegram inline tugmalari orqali tasdiqlang.[/dim]"
+            )
+            out.print(
+                f"  [dim]Yoki: [/dim][cyan]z approve {record.pending_approval_id}[/cyan] "
+                "[dim](API jarayonida ishlaydi)[/dim]"
             )
         elif record.status.value == "done":
             out.print(f"  [green]✓[/green] {record.result_summary}")
@@ -726,6 +736,132 @@ def telegram_test(
         out.print(Panel(clean_text, title="Bot javobi", border_style="cyan"))
     else:
         out.print("[red]Bot javob bermadi[/red]")
+
+
+# ── z approve / z reject ──────────────────────────────────────────
+#
+# GAP_ANALYSIS BROKEN #1: `z run` CLI da `AWAITING_APPROVAL` holatiga
+# tushgan run — API serverning `RunStore`si (alohida jarayon, alohida
+# xotira) buni HECH QACHON ko'rmasdi. CLI chop etgan "approve URL" 404
+# berardi, `z approve` esa umuman yo'q edi. Endi `z approve`/`z reject`
+# HTTP orqali API'ga so'rov yuboradi — bitta manba, cross-process
+# muammosi yo'q. Bitta shart: API serverni oldindan `uvicorn` bilan
+# ishga tushirish (Hetzner'da bu doim bajarilgan holat).
+
+
+def _api_call(method: str, path: str, *, json_body: dict | None = None) -> tuple[int, dict]:
+    """API'ga so'rov — tokenli, xato holatida (status, body) qaytaradi.
+
+    Ilgari CLI faqat in-process ishlardi. Endi cross-process operatsiya
+    uchun httpx bilan mahalliy (yoki masofaviy) API'ga chiqadi.
+    """
+    import httpx
+
+    settings = get_settings()
+    headers: dict[str, str] = {}
+    if settings.api_token is not None:
+        headers["Authorization"] = f"Bearer {settings.api_token.get_secret_value()}"
+
+    url = settings.api_url.rstrip("/") + path
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.request(method, url, headers=headers, json=json_body)
+    except httpx.HTTPError as exc:
+        out.print(
+            f"[red]✗ API'ga ulanib bo'lmadi:[/red] {exc}\n"
+            f"  URL: [dim]{url}[/dim]\n"
+            f"  API serveri ishlayapti? ([dim]uvicorn zet.api.app:create_app --factory[/dim])"
+        )
+        raise SystemExit(2) from exc
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"raw": response.text}
+    return response.status_code, body
+
+
+@app.command()
+def approve(
+    approval_id: str = typer.Argument(..., help="Tasdiq ID (z run chiqishida ko'rsatiladi)"),
+    note: str | None = typer.Option(None, "--note", "-n", help="Ixtiyoriy izoh"),
+) -> None:
+    """API orqali kutayotgan tasdiqni ma'qullash va run'ni davom ettirish.
+
+    NEGA HTTP orqali: `z run` va API alohida jarayonlar — ular xotira
+    darajasida `RunStore`ni bo'lisha olmaydi. HTTP endpoint bitta manba
+    hisoblanadi va Telegram/Web/CLI uchbalasidan ham bir xil so'ralgan
+    tasdiq bilan ishlaydi.
+    """
+    _setup()
+    payload = {"note": note} if note else {}
+    status_code, body = _api_call(
+        "POST", f"/api/v1/approvals/{approval_id}/approve", json_body=payload
+    )
+    if status_code == 200:
+        run_id = body.get("run_id", "?")
+        status = body.get("status", "?")
+        summary = body.get("result_summary") or body.get("error") or "(bo'sh natija)"
+        out.print(f"[green]✓ Tasdiqlandi[/green] — run [dim]{run_id}[/dim] → [bold]{status}[/bold]")
+        out.print(f"  {summary}")
+    else:
+        detail = body.get("detail") or body
+        out.print(f"[red]✗ HTTP {status_code}:[/red] {detail}")
+        raise SystemExit(1)
+
+
+@app.command()
+def reject(
+    approval_id: str = typer.Argument(..., help="Tasdiq ID"),
+    note: str | None = typer.Option(None, "--note", "-n", help="Rad etish sababi"),
+) -> None:
+    """API orqali kutayotgan tasdiqni rad etish va run'ni bekor qilish."""
+    _setup()
+    payload = {"note": note} if note else {}
+    status_code, body = _api_call(
+        "POST", f"/api/v1/approvals/{approval_id}/reject", json_body=payload
+    )
+    if status_code == 200:
+        run_id = body.get("run_id", "?")
+        out.print(f"[yellow]⊘ Rad etildi[/yellow] — run [dim]{run_id}[/dim]")
+    else:
+        detail = body.get("detail") or body
+        out.print(f"[red]✗ HTTP {status_code}:[/red] {detail}")
+        raise SystemExit(1)
+
+
+@app.command("approvals")
+def approvals_list() -> None:
+    """Kutayotgan tasdiqlarni ko'rsatish (barcha kanallar bo'yicha)."""
+    _setup()
+    status_code, body = _api_call("GET", "/api/v1/approvals")
+    if status_code != 200:
+        detail = body.get("detail") if isinstance(body, dict) else body
+        out.print(f"[red]✗ HTTP {status_code}:[/red] {detail}")
+        raise SystemExit(1)
+
+    # Endpoint list qaytaradi (FastAPI response_model=list[ApprovalResponse]).
+    # Test/backward-compat uchun `{"pending": [...]}` sxemasini ham qabul qilamiz.
+    pending = body if isinstance(body, list) else body.get("pending", [])
+    if not pending:
+        out.print("[dim]Kutayotgan tasdiq yo'q.[/dim]")
+        return
+
+    table = Table(title="Kutayotgan tasdiqlar", border_style="yellow")
+    table.add_column("ID", style="dim")
+    table.add_column("Run", style="dim")
+    table.add_column("Tool")
+    table.add_column("Xarajat")
+    table.add_column("Kim so'radi")
+    for item in pending:
+        table.add_row(
+            str(item.get("id", "?"))[:8],
+            str(item.get("run_id", "?"))[:8],
+            str(item.get("tool_name", "?")),
+            f"${item.get('estimated_cost_usd', 0):.4f}",
+            str(item.get("requested_by", "?")),
+        )
+    out.print(table)
 
 
 # ── z daemon ──────────────────────────────────────────────────────

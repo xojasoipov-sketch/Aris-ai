@@ -310,6 +310,16 @@ class Settings(BaseSettings):
     enable_shell: bool = False
     """`shell.exec` tooli. Default o'chirilgan — Z1.10 dagi eng xavfli komponent."""
 
+    # ── CLI → API ──────────────────────────────────────────────────
+    api_url: str = "http://localhost:8000"
+    """`z approve`/`z reject` CLI komandalari HTTP orqali shu bazaga
+    murojaat qiladi. Ilgari `z run` da approval kerakligi paydo bo'lsa,
+    CLI o'z jarayonida `RunStore` bilan qolar, API buni ko'rmasdi
+    (GAP_ANALYSIS BROKEN #1). Endi `z approve <id>` shu URL'ga
+    `POST /api/v1/approvals/{id}/approve` yuboradi — bitta manba.
+
+    Prod'da (Hetzner) `ZET_API_URL=http://backend:8000` yoki jamoat URL."""
+
     # ── Yo'llar ────────────────────────────────────────────────────
     data_dir: Path = _REPO_ROOT / "data"
 
