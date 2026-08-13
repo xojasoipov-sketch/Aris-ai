@@ -1,25 +1,40 @@
 """Verifier — natijani tekshiradi (Z1.11).
 
-Uch xil verifikatsiya:
-    1. deterministic — exit code, regex, schema tekshiruvi
-    2. tool-based — tool orqali tekshirish (masalan: fayl mavjudligi)
-    3. llm-judge — LLM bilan tekshirish (oxirgi chora, arzon model)
+Uch xil verifikatsiya (V-01):
+    1. deterministic — success flag, matn/regex taqqoslash
+    2. tool-based — tool orqali tekshirish (kelajakda: fayl mavjudligi)
+    3. llm-judge — arzon LLM (T1_FREE) bilan tekshirish
 
-Bo'lim 1 uchun faqat deterministic verifikatsiya.
+Ilgari faqat deterministic bor edi. Uzun `expected_outcome` (>3 so'z,
+ya'ni jonli tildagi TAVSIF) confidence=0.6 bilan avtomatik 'ok'
+hisoblanardi — hech qanday tekshiruv bo'lmasdan. Bu Bo'lim 1'ning
+tanlangan taqiqi edi ("keyingi bo'limda") va yashirin false-pass
+manbai. Endi LLM-judge ulangan bo'lsa shu holatda haqiqiy tekshiruv
+so'ralad: T1_FREE model tool chiqishini kutilgan natija bilan
+solishtirib "ha/yo'q + sabab" qaytaradi.
+
+FAIL-OPEN: LLM-judge yiqilsa (tarmoq, rate limit, timeout) — eski
+xatti-harakat (matnli tavsifni 'ok' deb qabul qilish) qaytadi. Ya'ni
+LLM-judge yolg'on 'FAIL' bermaydi, u faqat qo'shimcha tekshiruv qatlami.
 
 Bog'liq qarorlar:
     V-01 — har bir natija tekshiriladi
     V-35 — tekshiruv natijasi Verification modelida
+    ADR-0006 — Model Router (T1_FREE — arzon tekshiruv)
 """
 
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 import structlog
 
 from zet.domain.plan import PlanStep
 from zet.domain.tool import ToolResult, Verification
+
+if TYPE_CHECKING:
+    from zet.llm.base import LLMProvider
 
 log = structlog.get_logger(__name__)
 
@@ -45,18 +60,38 @@ Ega to'liq va to'g'ri natijani oldi, lekin ZET uni "muvaffaqiyatsiz"
 deb ko'rsatdi.
 
 Qisqa shablon (`natija`, `\\d{3}`) — haqiqatan tekshiriladi va topilmasa
-qadam yiqiladi. Uzun jumla esa tekshirib bo'lmaydigan tavsif: u
-ishonchni pasaytiradi va sababi yoziladi, lekin muvaffaqiyatli tool
-natijasini yolg'ondan yiqitmaydi."""
+qadam yiqiladi. Uzun jumla esa: LLM-judge ulangan bo'lsa haqiqiy
+tekshiruv o'tadi, aks holda ishonchni pasaytiradi va sababi yoziladi,
+lekin muvaffaqiyatli tool natijasini yolg'ondan yiqitmaydi."""
+
+
+LLM_JUDGE_MAX_OUTPUT_CHARS = 4000
+"""Tool chiqishining LLM'ga uzatiladigan qismi.
+
+Uzun (10k+ token) natijalar bir T1 chaqiruvining butun budjetini
+yeyishi mumkin. 4k belgi — o'zaro kelishuv: kontekst yetarli, tanaffuz
+kichik."""
 
 
 class Verifier:
     """Qadam natijasini kutilgan natijaga tekshiradi.
 
-    Bo'lim 1: deterministic verifikatsiya (success flag + matn taqqoslash).
+    Deterministic (default) + LLM-judge (ixtiyoriy).
     """
 
-    def verify_step(
+    def __init__(
+        self,
+        *,
+        llm_judge_provider: LLMProvider | None = None,
+    ) -> None:
+        """
+        Args:
+            llm_judge_provider: LLM-judge uchun T1_FREE provayder. Berilmasa
+                — eski deterministic-only xatti-harakat (backward compat).
+        """
+        self._llm_judge = llm_judge_provider
+
+    async def verify_step(
         self,
         step: PlanStep,
         tool_result: ToolResult | None,
@@ -99,7 +134,7 @@ class Verifier:
 
         # expected_outcome mavjud — matn taqqoslash
         if step.expected_outcome:
-            return self._verify_against_expectation(
+            return await self._verify_against_expectation(
                 step.expected_outcome,
                 tool_result,
             )
@@ -146,14 +181,14 @@ class Verifier:
             confidence=round(avg_confidence, 2),
         )
 
-    def _verify_against_expectation(
+    async def _verify_against_expectation(
         self,
         expected: str,
         result: ToolResult,
     ) -> Verification:
         """Natijani kutilgan natijaga tekshiradi.
 
-        Oddiy matn taqqoslash + regex.
+        Oddiy matn taqqoslash + regex + (ixtiyoriy) LLM-judge.
         """
         output_str = str(result.output) if result.output is not None else ""
 
@@ -178,10 +213,16 @@ class Verifier:
         except re.error:
             pass  # Regex emas — oddiy matn sifatida qaralsin
 
-        # Jonli tildagi jumla — tekshirib bo'lmaydi (yuqoridagi izohga
-        # qarang). Tool o'zi muvaffaqiyat deb aytdi; buni "yiqildi" deb
-        # qayta yozish egaga yolg'on ma'lumot berish bo'lardi.
+        # Jonli tildagi jumla — literal/regex tekshiruv iloji yo'q.
         if len(expected.split()) > MAX_LITERAL_WORDS:
+            # LLM-judge ulangan bo'lsa haqiqiy tekshiruv — bu darslikda
+            # aytilgan "keyingi bo'lim" edi. Ulanmagan bo'lsa eski
+            # xatti-harakat (`ok=True, confidence=0.6`) davom etadi.
+            if self._llm_judge is not None:
+                judged = await self._llm_judge_verify(expected, output_str)
+                if judged is not None:
+                    return judged
+
             return Verification(
                 ok=True,
                 reason=(
@@ -198,3 +239,68 @@ class Verifier:
             auto=True,
             confidence=0.7,
         )
+
+    async def _llm_judge_verify(self, expected: str, output: str) -> Verification | None:
+        """LLM-judge: arzon model tool chiqishini kutilgan natija bilan solishtiradi.
+
+        Returns:
+            Verification (ok=True/False, reason bilan) — LLM muvaffaqiyatli
+            javob bergan bo'lsa. `None` — LLM yiqildi/timeout/parse xato,
+            chaqiruvchi eski (fail-open) yo'lga tushsin.
+        """
+        from zet.llm.base import ChatMessage, LLMError
+
+        truncated = output[:LLM_JUDGE_MAX_OUTPUT_CHARS]
+        system = (
+            "Sen — natija tekshiruvchi (verifier). Bir qadamning KUTILGAN NATIJASI "
+            "va TOOL CHIQISHI beriladi. Tool chiqishi kutilgan natijaga to'g'ri "
+            "keldimi degan savolga javob ber.\n\n"
+            "JAVOB FORMATI (aynan, boshqa hech narsa qo'shma):\n"
+            "  OK: <bir gapda sabab>\n"
+            "yoki\n"
+            "  FAIL: <nima yetishmayotgani>\n\n"
+            "Jonli tildagi tasvirlar uchun MATNMA-MATN mos kelishi shart emas — "
+            "MA'NO mos kelsa yetarli. Tool JSON qaytargan bo'lsa strukturasi va "
+            "qiymatlariga qara, so'zma-so'z izlama."
+        )
+        user = (
+            f"KUTILGAN NATIJA:\n{expected}\n\n"
+            f"TOOL CHIQISHI:\n{truncated}\n\n"
+            "Yechim (OK: yoki FAIL: bilan boshla):"
+        )
+        try:
+            response = await self._llm_judge.complete(
+                messages=[ChatMessage(role="user", content=user)],
+                system=system,
+                max_tokens=120,
+            )
+        except (LLMError, Exception):
+            log.debug("verifier.llm_judge_failed", expected=expected[:80])
+            return None
+
+        text = response.text.strip()
+        if not text:
+            return None
+
+        # `OK: ...` — muvaffaqiyat
+        upper = text.upper()
+        if upper.startswith("OK"):
+            reason = text.split(":", 1)[1].strip() if ":" in text else "LLM tasdiqladi"
+            return Verification(
+                ok=True,
+                reason=f"LLM-judge: {reason[:200]}",
+                auto=True,
+                confidence=0.75,
+            )
+        if upper.startswith("FAIL"):
+            reason = text.split(":", 1)[1].strip() if ":" in text else "LLM rad etdi"
+            return Verification(
+                ok=False,
+                reason=f"LLM-judge: {reason[:200]}",
+                auto=True,
+                confidence=0.75,
+            )
+
+        # Format buzilgan — fail-open (eski yo'l)
+        log.debug("verifier.llm_judge_bad_format", text=text[:200])
+        return None

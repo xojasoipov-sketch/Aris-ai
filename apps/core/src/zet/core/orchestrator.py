@@ -171,6 +171,7 @@ class Orchestrator:
         mark_verified_fn: Callable[[uuid.UUID, bool], Awaitable[None]] | None = None,
         run_timeout_s: int | None = None,
         concurrency_semaphore: asyncio.Semaphore | None = None,
+        verifier_judge_provider: object | None = None,
     ) -> None:
         self._router = router
         # Uzoq muddatli xotira — ega profili va oldingi bilimlar javobga
@@ -178,7 +179,11 @@ class Orchestrator:
         self._recall = recall
         self._intent = IntentRecognizer(router)
         self._planner = Planner(router, max_steps=max_steps)
-        self._verifier = Verifier()
+        # LLM-judge verifier tier (V-01, ilgari "Bo'lim 1 uchun faqat
+        # deterministic" edi). Provider berilsa uzun jonli-tildagi
+        # expected_outcome haqiqiy tekshiruvdan o'tadi; berilmasa eski
+        # xatti-harakat (fail-open) qoladi.
+        self._verifier = Verifier(llm_judge_provider=verifier_judge_provider)  # type: ignore[arg-type]
         self._tool_registry = tool_registry
         self._permission_policy = permission_policy
         self._approvals = approval_service
@@ -348,8 +353,12 @@ class Orchestrator:
         record.spent_usd += executor.spent_usd
         record.steps_done = sum(1 for res in ctx.results.values() if res.status == StepStatus.DONE)
 
+        # verify_step endi async (LLM-judge tier qo'shildi). Barchasini
+        # ketma-ket tekshirish — tartib deterministik va LLM-judge chaqirish
+        # kam holatda ishlaydi, parallelism kerak emas.
         verifications = [
-            self._verifier.verify_step(res.step, res.tool_result) for res in ctx.results.values()
+            await self._verifier.verify_step(res.step, res.tool_result)
+            for res in ctx.results.values()
         ]
         overall = self._verifier.verify_run(verifications)
         record.verified_ok = overall.ok

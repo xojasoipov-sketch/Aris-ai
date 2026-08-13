@@ -684,6 +684,35 @@ async def _default_mark_verified(run_id: uuid.UUID, verified_ok: bool) -> None:
     await mark_run_verified(get_session_factory(), run_id, verified_ok=verified_ok)
 
 
+class _VerifierJudgeProvider:
+    """Verifier LLM-judge uchun yengil adapter — ModelRouter'ga TaskClass.SIMPLE
+    (T1_FREE) bilan chaqiradi.
+
+    V-01: uzun jonli-tildagi expected_outcome uchun arzon LLM'dan
+    "OK / FAIL" so'raladi. `RoutedLLMProvider` `model` argumentini talab
+    qiladi, Verifier esa uni bilmaydi (ATOMic .complete(messages=, system=)
+    interfeysi). Shu sabab yengil adapter — chaqiruvni router'ga qaytaradi.
+    Fail-open: router yiqilsa Verifier eski xatti-harakatga tushadi."""
+
+    def __init__(self, router: ModelRouter) -> None:
+        self._router = router
+
+    async def complete(self, *, messages, system=None, max_tokens=120, **_):  # type: ignore[no-untyped-def]
+        from zet.domain.enums import TaskClass
+
+        result = await self._router.complete(
+            task_class=TaskClass.SIMPLE,
+            messages=messages,
+            system=system,
+            max_tokens=max_tokens,
+        )
+        return result.response
+
+
+def _build_verifier_judge(router: ModelRouter) -> object:
+    return _VerifierJudgeProvider(router)
+
+
 def get_orchestrator(
     router: ModelRouter = Depends(get_model_router),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -714,6 +743,7 @@ def get_orchestrator(
         mark_verified_fn=_default_mark_verified,
         run_timeout_s=settings.run_timeout_s,
         concurrency_semaphore=get_run_semaphore(),
+        verifier_judge_provider=_build_verifier_judge(router),
     )
 
 
@@ -817,6 +847,7 @@ def get_telegram_bot() -> object:
                 mark_verified_fn=_default_mark_verified,
                 run_timeout_s=settings.run_timeout_s,
                 concurrency_semaphore=get_run_semaphore(),
+                verifier_judge_provider=_build_verifier_judge(router),
             )
 
             command = Command(text=text, channel="telegram", history=history)
