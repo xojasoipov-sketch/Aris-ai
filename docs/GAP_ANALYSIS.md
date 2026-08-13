@@ -283,7 +283,7 @@ yashil**, lekin **hech qanday production chaqiruvchisi yo'q**:
 | `HandoffDispatcher` | `automation/handoff.py` | Reaktiv agent-zanjiri | Production run oqimiga ulanmagan (faqat testda) |
 | `DeviceRegistry` | `devices/registry.py` | Qurilma ro'yxati + token | DB modeli yo'q, API route yo'q, hech qayerda instantiatsiya qilinmaydi |
 | `CapabilityToken` | `devices/registry.py` | Scoped, TTL'li ruxsat | Hech bir tool tekshirmaydi |
-| `SelfImproveEngine` | `deploy/selfimprove.py` | Taklif/tasdiq CRUD | `.suggest()` hech qachon chaqirilmaydi |
+| ~~`SelfImproveEngine`~~ | `deploy/selfimprove.py` | Taklif/tasdiq CRUD | ✅ ULANGAN — `SelfImproveDaemon` haftalik CostLedger/ToolCall signallari asosida `.suggest()` chaqiradi va notifier'ga xulosa yuboradi |
 | `MemoryManager`/policy | `memory/manager.py`, `memory/policy.py` | Qatlam bo'yicha o'qish/yozish siyosati | Production `PgMemoryStore` yo'lidan chetlab o'tiladi |
 | `RunState`/`RunLimits` | `domain/run.py` | Run chuqurligi/limitlari domeni | Hech qachon instantiatsiya qilinmaydi |
 | `PyAutoGUIDesktop` | (yo'q) | — | Faqat docstringda nomlangan, klass yozilmagan |
