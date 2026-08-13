@@ -68,7 +68,7 @@ from zet.tools.builtin.memory_search import MemorySearchTool, SearchFn
 from zet.tools.builtin.memory_write import MemoryWriteTool, WriteFn
 from zet.tools.builtin.note_list import NoteListTool
 from zet.tools.builtin.note_read import NoteReadTool
-from zet.tools.builtin.note_write import NoteWriteTool
+from zet.tools.builtin.note_write import NoteMemoryShadowFn, NoteWriteTool
 from zet.tools.builtin.shell_exec import ShellExecTool
 from zet.tools.builtin.telegram_tools import (
     TelegramChannelPostTool,
@@ -110,6 +110,7 @@ def build_default_registry(
     desktop_provider: DesktopProvider | None = None,
     memory_search_fn: SearchFn | None = None,
     memory_write_fn: WriteFn | None = None,
+    note_memory_shadow_fn: NoteMemoryShadowFn | None = None,
     workspace_scope: WorkspaceScope | None = None,
     crm_scope: CRMScope | None = None,
     commerce_scope: CommerceScope | None = None,
@@ -178,7 +179,7 @@ def build_default_registry(
     registry.register(TimeNowTool())
     registry.register(MemorySearchTool(search_fn=memory_search_fn))
     registry.register(MemoryWriteTool(write_fn=memory_write_fn))
-    registry.register(NoteWriteTool(notes_dir=notes_dir))
+    registry.register(NoteWriteTool(notes_dir=notes_dir, memory_shadow_fn=note_memory_shadow_fn))
     registry.register(NoteReadTool(notes_dir=notes_dir))
     registry.register(NoteListTool(notes_dir=notes_dir))
     registry.register(WebSearchTool(api_key=web_search_api_key))

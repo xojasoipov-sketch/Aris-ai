@@ -38,6 +38,7 @@ from zet.api.deps import (
     get_notifier,
     get_permission_policy,
     get_rate_limiter,
+    get_selfimprove_engine,
     get_shop_bot,
     get_stt,
     get_telegram_bot,
@@ -85,6 +86,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from zet.deploy.bootstrap import bootstrap_agents, load_persisted_agents
     from zet.deploy.daemon import DailyScheduleDaemon
     from zet.deploy.reports_daemon import ReportsDaemon
+    from zet.deploy.selfimprove_daemon import SelfImproveDaemon
     from zet.deploy.shipment_daemon import ShipmentNotifyDaemon
     from zet.security.killswitch_store import load_killswitch
 
@@ -212,6 +214,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     reports_daemon_task = asyncio.create_task(reports_daemon.run_forever())
 
+    # Self-improvement (V-36, GAP_ANALYSIS §12). `SelfImproveEngine` ilgari
+    # faqat testda yashardi — endi dushanba ertalab CostLedger/ToolCall
+    # signallarini o'qib, tavsiya qo'shadi va yig'ilganini egaga yuboradi.
+    # Fail-open: tahlil xato bo'lsa daemon jimgina o'tib ketadi.
+    selfimprove_daemon = SelfImproveDaemon(
+        engine=get_selfimprove_engine(),
+        session_factory=get_session_factory(),
+        settings=settings,
+        notifier=get_notifier(),
+    )
+    selfimprove_daemon_task = asyncio.create_task(selfimprove_daemon.run_forever())
+
     yield
 
     log.info("zet.shutdown")
@@ -233,6 +247,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     reports_daemon_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await reports_daemon_task
+    selfimprove_daemon.stop()
+    selfimprove_daemon_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await selfimprove_daemon_task
     with contextlib.suppress(Exception):
         await telegram_bot.stop()  # type: ignore[attr-defined]
     with contextlib.suppress(Exception):

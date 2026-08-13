@@ -29,6 +29,7 @@ from zet.core.state import CoreState
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
+from zet.deploy.selfimprove import SelfImproveEngine
 from zet.devices.repository import DeviceDBRepository
 from zet.domain.command import ConversationTurn
 from zet.domain.enums import MessageRole, TaskClass
@@ -116,6 +117,31 @@ async def _memory_search_fn(
         memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
         return await memory.search(
             MemoryQuery(text=query, limit=limit, min_similarity=min_similarity)
+        )
+
+
+async def _note_memory_shadow_fn(*, title: str, path: str, preview: str, tags: list[str]):  # type: ignore[no-untyped-def]
+    """A-03: `note.write` chaqirilganda memory'ga qisqa shadow yozuvi.
+
+    Naqsh `_memory_search_fn`/`_memory_write_fn` bilan bir xil: qisqa
+    DB sessiya, PgMemoryStore.add(). Fail-open — istisno chaqiruvchida
+    yutiladi, note baribir yoziladi.
+    """
+    async with session_scope(get_session_factory()) as session:
+        settings = get_settings()
+        owner = await get_or_create_owner(session, external_id=settings.owner_id)
+        memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+        # KNOWLEDGE layer: ega o'zi yozgan eslatma → doimiy bilim manba.
+        # Content — path + preview, LLM `note.read`ni ochsin.
+        from zet.domain.memory import MemoryLayer
+
+        return await memory.add(
+            layer=MemoryLayer.KNOWLEDGE,
+            content=f"Obsidian eslatma: {title}\nYo'l: {path}\n\n{preview}",
+            summary=f"Eslatma: {title}",
+            tags=tags,
+            source=f"obsidian:{title}",
+            trust_level="owner",  # ega o'zi yozgan, KNOWLEDGE'ga ruxsat bor
         )
 
 
@@ -246,6 +272,7 @@ def get_tool_registry() -> ToolRegistry:
         camera_provider=camera_provider,
         memory_search_fn=_memory_search_fn,
         memory_write_fn=_memory_write_fn,
+        note_memory_shadow_fn=_note_memory_shadow_fn,
         workspace_scope=_workspace_scope,
         crm_scope=_crm_scope,
         commerce_scope=_commerce_scope,
@@ -316,6 +343,18 @@ def get_run_semaphore() -> asyncio.Semaphore:
 def get_daily_schedule_manager() -> DailyScheduleManager:
     """Global kunlik jadval (singleton) — V-35."""
     return DailyScheduleManager()
+
+
+@lru_cache(maxsize=1)
+def get_selfimprove_engine() -> SelfImproveEngine:
+    """Global takomillashtirish tavsiyalari do'koni (singleton) — V-36.
+
+    `SelfImproveDaemon` shu instansiyaga `.suggest()` yozadi. Ilgari
+    engine faqat testda yashardi va prod'da hech qachon chaqirilmasdi
+    (GAP_ANALYSIS §12); endi singleton — daemon va (kelajakdagi) API
+    route'lari bir xil holatga tayanadi.
+    """
+    return SelfImproveEngine()
 
 
 @lru_cache(maxsize=1)
