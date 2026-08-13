@@ -17,6 +17,7 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -69,6 +70,7 @@ class IntentRecognizer:
         command: Command,
         *,
         available_tools: Sequence[str] = (),
+        run_id: uuid.UUID | None = None,
     ) -> Intent:
         """Buyruqni tahlil qilib Intent qaytaradi.
 
@@ -96,6 +98,7 @@ class IntentRecognizer:
                 messages=messages,
                 system=system,
                 tools=[_INTENT_TOOL],
+                run_id=run_id,
             )
 
             intent = self._extract_intent(route_result, command)

@@ -20,6 +20,7 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 
 import structlog
@@ -164,6 +165,7 @@ class Executor:
         history: Sequence[ConversationTurn] = (),
         recall: RecallFn | None = None,
         audit_fn: AuditFn | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> None:
         self._registry = registry
         self._policy = policy
@@ -182,6 +184,11 @@ class Executor:
         # HIGH_RISK yoki WRITE/EXECUTE tool bajarilganda audit yozuvi
         # (GAP_ANALYSIS SR-02). Berilmasa audit yozuvi qilinmaydi (test/lean).
         self._audit_fn = audit_fn
+        # A-04: per-run cost tracking — Router.complete()ga uzatilib
+        # CostLedger.run_id maydoniga yoziladi. Bo'lmasa (test/lean) —
+        # NULL (jamlanma summasi bo'yicha o'sha-o'sha to'g'ri qoladi,
+        # faqat per-run xarajat izi yo'q bo'ladi).
+        self._run_id = run_id
 
     @property
     def spent_usd(self) -> float:
@@ -363,6 +370,7 @@ class Executor:
                 max_tokens=1024,
                 run_budget_usd=self.budget_remaining_usd,
                 run_spent_usd=self._spent_usd,
+                run_id=self._run_id,
             )
         except LLMError as exc:
             # Fikrlash qadami butun run'ni yiqitmaydi — javob bo'sh

@@ -281,3 +281,35 @@ class ModelRouter:
             )
         )
         await self._session.flush()
+
+
+async def mark_run_verified(
+    session_factory: object,
+    run_id: UUID,
+    *,
+    verified_ok: bool,
+) -> None:
+    """A-04 feedback loop: run yakunida shu run'ning barcha CostLedger
+    yozuvlaridagi `verified_ok`ni belgilaydi.
+
+    Ilgari `verified_ok` qonundan-so'ng NULL bo'lib qolardi va Router
+    "modeldan olingan javob TO'G'RI edimi" ma'lumotini hech qachon
+    o'rganmasdi — ADR-0006 va A-04'ning butun ma'nosi shu edi. Endi
+    Orchestrator har run yakunida chaqiradi.
+
+    Fail-open — DB xatosi run natijasini o'zgartirmaydi."""
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from zet.db.session import session_scope
+
+    factory: async_sessionmaker[AsyncSession] = session_factory  # type: ignore[assignment]
+    try:
+        async with session_scope(factory) as session:
+            await session.execute(
+                update(CostLedger)
+                .where(CostLedger.run_id == run_id)
+                .values(verified_ok=verified_ok)
+            )
+    except Exception:
+        log.warning("router.mark_verified_failed", run_id=str(run_id))

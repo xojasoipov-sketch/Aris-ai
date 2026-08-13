@@ -21,7 +21,9 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import structlog
@@ -166,6 +168,9 @@ class Orchestrator:
         max_steps: int = 20,
         recall: RecallFn | None = None,
         audit_fn: AuditFn | None = None,
+        mark_verified_fn: Callable[[uuid.UUID, bool], Awaitable[None]] | None = None,
+        run_timeout_s: int | None = None,
+        concurrency_semaphore: asyncio.Semaphore | None = None,
     ) -> None:
         self._router = router
         # Uzoq muddatli xotira — ega profili va oldingi bilimlar javobga
@@ -183,6 +188,13 @@ class Orchestrator:
         # Executor'ga uzatiladigan audit yozuvchi (SR-02). Berilmasa
         # audit yozuvi qilinmaydi (test/lean).
         self._audit_fn = audit_fn
+        # A-04 feedback loop: run yakunida CostLedger.verified_ok'ni
+        # yangilash. Berilmasa (test/lean) — verified_ok NULL bo'lib qoladi.
+        self._mark_verified_fn = mark_verified_fn
+        # A-07 tormozlar (GAP_ANALYSIS #6): run wall-clock timeout va
+        # global concurrency chegarasi. Berilmasa cheklov yo'q.
+        self._run_timeout_s = run_timeout_s
+        self._concurrency_semaphore = concurrency_semaphore
 
     @property
     def approvals(self) -> ApprovalService:
@@ -200,15 +212,44 @@ class Orchestrator:
         Raises:
             KillSwitchEngagedError: emergency stop yoqilgan — hech narsa
                 boshlanmaydi (fail-closed)
+            asyncio.TimeoutError: run `run_timeout_s`dan uzun ishladi
         """
         self._killswitch.check()
+
+        # A-07 concurrency brake: agar semafora berilgan bo'lsa,
+        # bir vaqtda ishlayotgan run'lar chegaralanadi. Bo'lmasa cheksiz.
+        if self._concurrency_semaphore is not None:
+            async with self._concurrency_semaphore:
+                return await self._start_with_timeout(command, dry_run=dry_run)
+        return await self._start_with_timeout(command, dry_run=dry_run)
+
+    async def _start_with_timeout(self, command: Command, *, dry_run: bool) -> RunRecord:
+        """Wall-clock timeout — `run_timeout_s` sozlangan bo'lsa (A-07)."""
+        if self._run_timeout_s is None:
+            return await self._start_impl(command, dry_run=dry_run)
+        try:
+            return await asyncio.wait_for(
+                self._start_impl(command, dry_run=dry_run),
+                timeout=self._run_timeout_s,
+            )
+        except TimeoutError:
+            # Timeout — run yarmida to'xtatildi. RunStore ichida partial
+            # yozuv bo'ladi, lekin uni bu yerdan yangilab bo'lmaydi (task
+            # cancel qilingan). Chaqiruvchi TimeoutError ni ushlaydi.
+            log.warning("orchestrator.timeout", timeout_s=self._run_timeout_s)
+            raise
+
+    async def _start_impl(self, command: Command, *, dry_run: bool = False) -> RunRecord:
+        """Asosiy start mantiqi (avvalgi `start`)."""
 
         record = self._run_store.create(command)
         record.status = RunStatus.PLANNING
 
         try:
             intent = await self._intent.recognize(
-                command, available_tools=self._tool_registry.tool_names()
+                command,
+                available_tools=self._tool_registry.tool_names(),
+                run_id=record.run_id,
             )
         except AmbiguousCommandError as exc:
             record.status = RunStatus.FAILED
@@ -223,7 +264,9 @@ class Orchestrator:
             # Nomlar emas, IMZOLAR: model qaysi parametr majburiyligini
             # ko'rmasa uni tushirib qoldiradi (`video.learn` `url`siz).
             plan = await self._planner.plan(
-                intent, tool_specs=self._tool_registry.tool_signatures()
+                intent,
+                tool_specs=self._tool_registry.tool_signatures(),
+                run_id=record.run_id,
             )
         except (PlannerError, LLMError) as exc:
             record.status = RunStatus.FAILED
@@ -266,6 +309,8 @@ class Orchestrator:
             history=record.command.history,
             recall=self._recall,
             audit_fn=self._audit_fn,
+            # A-04: Router.complete() → CostLedger.run_id yozilsin
+            run_id=record.run_id,
         )
         record.status = RunStatus.EXECUTING
         record.pending_approval_id = None
@@ -319,6 +364,14 @@ class Orchestrator:
             steps_done=record.steps_done,
             spent_usd=record.spent_usd,
         )
+        # A-04 feedback: shu run'ning barcha LLM chaqiruvlarini
+        # "verified" deb belgilash — kelajakda ModelRouter shu ma'lumot
+        # asosida success_rate hisoblab, marshrutlashni sozlashi mumkin.
+        if self._mark_verified_fn is not None:
+            try:
+                await self._mark_verified_fn(record.run_id, record.verified_ok)
+            except Exception:
+                log.warning("orchestrator.mark_verified_failed", run_id=str(record.run_id))
         return record
 
     def approve(self, approval_id: uuid.UUID, *, note: str | None = None) -> RunRecord:

@@ -5,6 +5,8 @@ Singleton va per-request dependency'lar.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -222,6 +224,23 @@ def get_approval_service() -> ApprovalService:
 def get_run_store() -> RunStore:
     """Global run holatlari do'koni (singleton)."""
     return RunStore()
+
+
+@lru_cache(maxsize=1)
+def get_run_semaphore() -> asyncio.Semaphore:
+    """A-07 concurrency brake: bir vaqtda ishlayotgan run'lar chegarasi.
+
+    `deploy/config.DeployConfig.max_concurrent_runs` (default 3) ni
+    ishlatadi. Singleton — barcha Orchestrator instansiyalari bir xil
+    semafora ostida ishlaydi, ya'ni haqiqatan global chegara.
+
+    Diqqat: `asyncio.Semaphore()` event loop bo'lishini talab qiladi
+    (Python 3.10+), shuning uchun bu funksiya faqat aktiv loop ichida
+    (endpoint handler) chaqirilishi kerak."""
+    from zet.deploy.config import load_config
+
+    limit = load_config().max_concurrent_runs
+    return asyncio.Semaphore(limit)
 
 
 @lru_cache(maxsize=1)
@@ -623,6 +642,15 @@ async def _default_audit(**kwargs: object) -> None:
     await write_audit(get_session_factory(), **kwargs)  # type: ignore[arg-type]
 
 
+async def _default_mark_verified(run_id: uuid.UUID, verified_ok: bool) -> None:
+    """A-04 feedback loop: Router'dan mark_run_verified'ni chaqiradi."""
+    import uuid as _uuid  # noqa: F401 — global uuid shadowing xato bermasin
+
+    from zet.llm.router import mark_run_verified
+
+    await mark_run_verified(get_session_factory(), run_id, verified_ok=verified_ok)
+
+
 def get_orchestrator(
     router: ModelRouter = Depends(get_model_router),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -650,6 +678,9 @@ def get_orchestrator(
         max_steps=settings.run_max_steps,
         recall=recall,
         audit_fn=_default_audit,
+        mark_verified_fn=_default_mark_verified,
+        run_timeout_s=settings.run_timeout_s,
+        concurrency_semaphore=get_run_semaphore(),
     )
 
 
@@ -749,6 +780,10 @@ def get_telegram_bot() -> object:
                 budget_usd=settings.run_max_usd,
                 max_steps=settings.run_max_steps,
                 recall=_build_recall(memory),
+                audit_fn=_default_audit,
+                mark_verified_fn=_default_mark_verified,
+                run_timeout_s=settings.run_timeout_s,
+                concurrency_semaphore=get_run_semaphore(),
             )
 
             command = Command(text=text, channel="telegram", history=history)

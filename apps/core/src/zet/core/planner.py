@@ -19,6 +19,7 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -95,6 +96,7 @@ class Planner:
         available_tools: Sequence[str] = (),
         tool_specs: Sequence[ToolSignature] = (),
         task_class: TaskClass | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> Plan:
         """Intent'dan Plan yaratadi.
 
@@ -140,6 +142,7 @@ class Planner:
                 messages=messages,
                 system=system,
                 tools=[_PLAN_TOOL],
+                run_id=run_id,
             )
 
             plan, errors = self._extract_and_validate(
