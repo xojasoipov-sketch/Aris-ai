@@ -290,3 +290,71 @@ class TestRealProviderWiring:
         fired = await daemon.tick(now=_at(9, 0))
         assert len(fired) == 1
         assert automation_engine.scheduler.list_rules()[0].run_count == 1
+
+
+class TestHandoffWiring:
+    """Muvaffaqiyatli fire'dan keyin AGENT_HANDOFF triggerlari uyg'onishi.
+
+    Ilgari `HandoffDispatcher` qurilgan-u ishlab chiqarish oqimiga hech
+    qachon ulanmagan edi. Endi `AutomationDaemon._fire()` muvaffaqiyatli
+    bo'lgach `dispatch()` chaqiradi va navbat zanjiri ishlaydi.
+    """
+
+    async def test_successful_fire_triggers_handoff(
+        self,
+        automation_engine: AutomationEngine,
+        agent_registry: AgentRegistry,
+        tmp_path: Path,
+    ) -> None:
+        # 'ceo' tugagach 'operations'ni uyg'otsin
+        from zet.agents.builtin.operations import OPERATIONS_AGENT_SPEC
+        from zet.automation.handoff import HandoffDispatcher
+        from zet.automation.triggers import EventTrigger, TriggerCondition, TriggerType
+
+        agent_registry.register(OPERATIONS_AGENT_SPEC, status=AgentStatus.ACTIVE)
+        automation_engine.add_trigger(
+            EventTrigger(
+                name="ceo → operations",
+                trigger_type=TriggerType.AGENT_HANDOFF,
+                agent_name="operations",
+                event_type="agent.completed",
+                conditions=[
+                    TriggerCondition(field="agent", operator="eq", value="ceo"),
+                    TriggerCondition(field="success", operator="eq", value="true"),
+                ],
+            )
+        )
+
+        dispatcher = HandoffDispatcher(
+            engine=automation_engine,
+            agent_registry=agent_registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+        )
+
+        daemon = AutomationDaemon(
+            engine=automation_engine,
+            agent_registry=agent_registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            core_state=CoreState(),
+            killswitch=KillSwitchState(),
+            timezone="UTC",
+            handoff_dispatcher=dispatcher,
+        )
+        fired = await daemon.tick(now=_at(9, 0))
+        assert fired  # ceo qoidasi ishga tushdi
+        # Handoff mantiqi ishlaganini bilvosita — trigger'ning `fire_count`
+        # oshgan bo'lsa, uni `HandoffDispatcher` uyg'otgan (asosiy scheduler
+        # AGENT_HANDOFF triggerlariga tegmaydi). To'liq zanjir mantiqi
+        # `test_handoff.py`da tekshirilgan.
+        triggers = automation_engine.triggers.list_triggers()
+        assert triggers[0].fire_count >= 1, (
+            "AGENT_HANDOFF trigger uyg'onmagan — dispatcher ulanmagan bo'lishi mumkin"
+        )
+
+    async def test_no_dispatcher_is_not_an_error(self, daemon: AutomationDaemon) -> None:
+        """Handoff dispatcher berilmagan bo'lsa ham qoida ishlayveradi."""
+        fired = await daemon.tick(now=_at(9, 0))
+        assert fired

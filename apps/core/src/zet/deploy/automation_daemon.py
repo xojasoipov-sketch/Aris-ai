@@ -41,6 +41,7 @@ from zet.agents.registry import AgentRegistry
 from zet.automation.cron import is_due
 from zet.automation.engine import AutomationEngine
 from zet.automation.executor import AgentUnavailableError, run_agent_command
+from zet.automation.handoff import HandoffDispatcher
 from zet.automation.scheduler import ScheduleRule
 from zet.config import Settings
 from zet.core.state import CoreState
@@ -86,6 +87,7 @@ class AutomationDaemon:
         llm_providers: dict[str, LLMProvider] | None = None,
         settings: Settings | None = None,
         notifier: Notifier | None = None,
+        handoff_dispatcher: HandoffDispatcher | None = None,
     ) -> None:
         self._engine = engine
         self._agent_registry = agent_registry
@@ -99,6 +101,10 @@ class AutomationDaemon:
         self._llm_providers = llm_providers
         self._settings = settings
         self._notifier = notifier
+        # Ilgari `HandoffDispatcher` qurilgan-u, hech qanday agent tugash
+        # nuqtasiga ulanmagan edi (Bo'lim 9 chala qolgan bo'g'in). Endi
+        # muvaffaqiyatli fire'dan keyin AGENT_HANDOFF triggerlari uyg'onadi.
+        self._handoff_dispatcher = handoff_dispatcher
         self._last_fired_minute: dict[str, str] = {}
         self._stop_event = asyncio.Event()
 
@@ -154,6 +160,25 @@ class AutomationDaemon:
             await self._persist_state()
 
         return fired
+
+    async def _dispatch_handoff(self, agent_name: str, result: AgentRunResult) -> None:
+        """4-xususiyat (navbat): tugagan agentdan `agent.completed` chiqadi.
+
+        Ega ta'rifi (yangi zip, slayd 10): tugagan agent keyingi agentga
+        ishni "uzatishi" mumkin. HandoffDispatcher shu hodisani `AutomationEngine`
+        orqali AGENT_HANDOFF triggerlariga solishtiradi va mos kelganlar
+        uchun agent'ni ishga tushiradi.
+
+        FAIL-OPEN: dispatcher berilmagan bo'lsa (test/dev) yoki xato
+        chiqsa — daemon o'ziga tegishli asosiy ish (qoida bajarilishi)
+        allaqachon amalga oshgan, faqat navbat qadami o'tkazib yuboriladi.
+        """
+        if self._handoff_dispatcher is None:
+            return
+        try:
+            await self._handoff_dispatcher.dispatch(agent_name, result)
+        except Exception:
+            log.warning("automation_daemon.handoff_failed", agent=agent_name)
 
     async def _deliver(self, rule: ScheduleRule, output: str) -> None:
         """Natijani EGAGA yetkazadi.
@@ -238,6 +263,7 @@ class AutomationDaemon:
                     success=True,
                 )
                 await self._deliver(rule, result.output)
+                await self._dispatch_handoff(rule.agent_name, result)
                 return
 
             last_error = result.error

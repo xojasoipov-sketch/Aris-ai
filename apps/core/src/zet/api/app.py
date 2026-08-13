@@ -77,6 +77,7 @@ log = structlog.get_logger(__name__)
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Ilova boshlanganda va tugaganda bajariladigan kod."""
     from zet.api.deps import get_session_factory
+    from zet.automation.handoff import HandoffDispatcher
     from zet.automation.persistence import load_automation
     from zet.db.session import session_scope
     from zet.deploy.automation_daemon import AutomationDaemon
@@ -146,6 +147,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         owner_external_id=settings.owner_id,
     )
 
+    # 4-xususiyat (navbat) — Bo'lim 9 chala qolgan bo'g'in.
+    # `HandoffDispatcher` qurilgan-u ishlab chiqarish oqimiga hech qachon
+    # ulanmasdi. Endi tugagan agent AGENT_HANDOFF trigger'lariga yetadi.
+    # Zanjir chuqurligi (`MAX_HANDOFF_DEPTH=5`) va tashrif to'plami
+    # cheksiz tsikldan himoya qiladi (A-07 ruhida).
+    handoff_dispatcher = HandoffDispatcher(
+        engine=get_automation_engine(),
+        agent_registry=get_agent_registry(),
+        tool_registry=get_tool_registry(),
+        permission_policy=get_permission_policy(),
+        killswitch=get_killswitch(),
+    )
+
     automation_daemon = AutomationDaemon(
         engine=get_automation_engine(),
         agent_registry=get_agent_registry(),
@@ -160,6 +174,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Natija egaga yetib borsin — aks holda "Kunlik puls" har kuni
         # ishlab, hech kimga hech narsa aytmasdi.
         notifier=get_notifier(),
+        handoff_dispatcher=handoff_dispatcher,
     )
     automation_daemon_task = asyncio.create_task(automation_daemon.run_forever())
 
