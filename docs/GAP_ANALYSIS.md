@@ -197,34 +197,32 @@ barchasi shu bitta muammoni takrorlaydi.
 
 ## 6. Nima YO'Q (MISSING — hatto mock ham yo'q)
 
-- Telefon boshqaruvi (pairing, companion app) — 0%.
-- QA agent, E-commerce agent — fayl yo'q.
-- Obsidian↔Postgres sinxronizatsiyasi (A-03).
-- Qaror/bilim xotirasi (faqat suhbat saqlanadi).
-- Backup/restore mexanizmi.
-- PWA/companion rejim, frontend testlari.
+- Telefon boshqaruvi (pairing, companion app) — 0% (`DeviceRegistry` DB endi ULANGAN, companion app hali yo'q).
+- ~~QA agent, E-commerce agent~~ ✅ QO'SHILDI — 12 → 14 spec.
+- ~~Obsidian↔Postgres sinxronizatsiyasi (A-03)~~ ✅ QO'SHILDI — `note.write` memory'ga shadow yozadi.
+- ~~Qaror/bilim xotirasi~~ ✅ QO'SHILDI — `memory.write` tool trust_level+layer siyosati bilan.
+- ~~Backup/restore mexanizmi~~ ✅ QO'SHILDI — sidecar `pg_dump` kunlik + retention.
+- PWA/companion rejim (`manifest.webmanifest` + `sw.js` qo'shilishi kutilmoqda), frontend testlari.
 - Xususiy tarmoq (WireGuard) — kutilgan, chunki Mac mini hali yo'q.
-- HR agentning boshqa AI agentlarni boshqarishi (yangi so'rovning markaziy g'oyasi).
+- ~~HR agentning boshqa AI agentlarni boshqarishi~~ ✅ QO'SHILDI — HR = AI workforce manager (agent.list/pause/resume/disable/stats).
 
 ## 7. Nima BUZILGAN (BROKEN — ishlaydi deb da'vo qilinadi, lekin amalda ishlamaydi)
 
 Bu eng muhim ro'yxat — chunki bular "hech narsa yo'q" emas, **"bor deb ko'rinadi, lekin
 ishlamaydi"** holatlar:
 
-1. **Run holat mashinasi cross-process approval'i buzilgan.** `z run` CLI orqali
-   `AWAITING_APPROVAL`ga tushgan run — API serverning `RunStore`si (alohida jarayon,
-   alohida xotira) buni **hech qachon ko'rmaydi**. CLI chop etgan "approve URL" 404 beradi.
-   `z approve` CLI komandasi ham umuman yo'q.
-2. **Telegram inline approval tugmalari kosmetik.** ✅/❌ bosish chiroyli javob matnini
-   qaytaradi, lekin haqiqiy `ApprovalService.approve()`/`orchestrator.resume()`ni
-   **hech qachon chaqirmaydi**. Bu V-17 ("Telegram = asosiy boshqaruv paneli") va V-32
-   (approval gate) ikkalasini ham buzadi — egasi eng ko'p ishlatadigan interfeysda.
-3. **Killswitch restart'da o'chib qoladi.** Docstring "DB'da saqlanadi" deydi; amalda
-   `@lru_cache` orqali xotirada. Hetzner'dagi `update.sh` — konteynerni qayta qurish —
-   RUTIN amal, ya'ni har yangilanishda favqulodda to'xtatish holati yo'qoladi.
-4. **Kunlik avtonomiya (V-35, 08:00/09:00/12:00/18:00/21:00) natijasi hech kimga
-   yetmaydi.** `DailyScheduleDaemon` haqiqiy ishlaydi, byudjet/token sarflaydi, lekin
-   `AutomationDaemon`dagi kabi `_deliver()` mexanizmi yo'q — natija loglanadi va yo'qoladi.
+1. ~~**Run holat mashinasi cross-process approval'i buzilgan.**~~ ✅ QISMAN YOPILDI —
+   `z approve <id>` / `z reject <id>` / `z approvals` CLI komandalari HTTP orqali API'ga
+   yuboradi. To'liq DB persistence (bir jarayonda hech qanday xotira yo'qolmasligi) —
+   AR-01 (Task #57) katta refactorda.
+2. ~~**Telegram inline approval tugmalari kosmetik.**~~ ✅ YOPILDI — ✅/❌ bosish endi
+   `ApprovalService.approve()` + `orchestrator.resume()` chaqiradi va natijani ega
+   ko'radi.
+3. ~~**Killswitch restart'da o'chib qoladi.**~~ ✅ YOPILDI — `killswitch_store.py`
+   `KillSwitch` jadvaliga yozadi va startup'da `load_killswitch()` qayta tiklaydi.
+4. ~~**Kunlik avtonomiya (V-35) natijasi hech kimga yetmaydi.**~~ ✅ YOPILDI —
+   `DailyScheduleDaemon._deliver()` `Notifier.send_text()` orqali natijani egaga yuboradi
+   (AutomationDaemon bilan bir xil naqsh).
 
 ---
 
@@ -273,19 +271,19 @@ ishlamaydi"** holatlar:
 Bu ro'yxat alohida ahamiyatga ega: har biri **to'liq yozilgan va o'z birlik testida
 yashil**, lekin **hech qanday production chaqiruvchisi yo'q**:
 
-| Modul | Fayl | Nima qiladi | Nega ulanmagan |
+| Modul | Fayl | Nima qiladi | Holat (2026-08-13) |
 |---|---|---|---|
-| `RateLimiter` | `security/ratelimit.py` | Tier bo'yicha so'rov cheklash | ASGI middleware'ga qo'shilmagan |
-| `SecretManager` | `security/secrets.py` | Sirlarni maskalash/rotatsiya | Config `SecretStr`lar to'g'ridan-to'g'ri ishlatiladi |
-| `AuditLog` (xotira) | `security/audit.py` | Hash-chain audit yozuvi | Hech qayerdan chaqirilmaydi |
-| `AuditLog` (DB) | `db/models/security.py` | Postgres trigger bilan immutable jadval | INSERT nuqtasi yo'q |
-| `CostTracker` | `observability/cost.py` | Ikkinchi, mustaqil xarajat hisoblagichi | `CostLedger` allaqachon shu vazifani bajaradi — dublikat |
-| `HandoffDispatcher` | `automation/handoff.py` | Reaktiv agent-zanjiri | Production run oqimiga ulanmagan (faqat testda) |
-| `DeviceRegistry` | `devices/registry.py` | Qurilma ro'yxati + token | DB modeli yo'q, API route yo'q, hech qayerda instantiatsiya qilinmaydi |
-| `CapabilityToken` | `devices/registry.py` | Scoped, TTL'li ruxsat | Hech bir tool tekshirmaydi |
+| ~~`RateLimiter`~~ | `security/ratelimit.py` | Tier bo'yicha so'rov cheklash | ✅ ULANGAN — `RateLimitMiddleware` OWNER 60 req/min bilan barcha tokenli so'rovlarda |
+| `SecretManager` | `security/secrets.py` | Sirlarni maskalash/rotatsiya | Config `SecretStr`lar to'g'ridan-to'g'ri ishlatiladi (Settings `.env` yetarli, over-engineered — kelajakda o'chirilishi mumkin) |
+| `AuditLog` (xotira) | `security/audit.py` | Hash-chain audit yozuvi | Hech qayerdan chaqirilmaydi (DB versiyasi ishlatiladi) |
+| ~~`AuditLog` (DB)~~ | `db/models/security.py` | Postgres trigger bilan immutable jadval | ✅ ULANGAN — `Executor` WRITE/EXECUTE/HIGH_RISK tool amallarida `write_audit()` chaqiradi |
+| `CostTracker` | `observability/cost.py` | Ikkinchi, mustaqil xarajat hisoblagichi | `CostLedger` allaqachon shu vazifani bajaradi — dublikat, o'chirilishi lozim |
+| ~~`HandoffDispatcher`~~ | `automation/handoff.py` | Reaktiv agent-zanjiri | ✅ ULANGAN — `AutomationDaemon._fire()` muvaffaqiyatli tugagach `dispatch()` chaqiradi |
+| ~~`DeviceRegistry`~~ | `devices/registry.py` | Qurilma ro'yxati + token | ✅ ULANGAN — `DeviceDBRepository` + REST API + Alembic migration + tests (deprecated in-memory saqlab qoyildi) |
+| ~~`CapabilityToken`~~ | `devices/registry.py` | Scoped, TTL'li ruxsat | ✅ ULANGAN — SHA-256 hash bilan DB'da; `validate_token()` capability+expiry+revoked tekshiradi |
 | ~~`SelfImproveEngine`~~ | `deploy/selfimprove.py` | Taklif/tasdiq CRUD | ✅ ULANGAN — `SelfImproveDaemon` haftalik CostLedger/ToolCall signallari asosida `.suggest()` chaqiradi va notifier'ga xulosa yuboradi |
-| `MemoryManager`/policy | `memory/manager.py`, `memory/policy.py` | Qatlam bo'yicha o'qish/yozish siyosati | Production `PgMemoryStore` yo'lidan chetlab o'tiladi |
-| `RunState`/`RunLimits` | `domain/run.py` | Run chuqurligi/limitlari domeni | Hech qachon instantiatsiya qilinmaydi |
+| ~~`MemoryManager`/policy~~ (partial) | `memory/manager.py`, `memory/policy.py` | Qatlam bo'yicha o'qish/yozish siyosati | 🟡 QISMAN ULANDI — `memory.write` tooli `WRITE_POLICY.check_write()`ni tekshiradi; API darajasida tekshiruv qolgan |
+| `RunState`/`RunLimits` | `domain/run.py` | Run chuqurligi/limitlari domeni | Hech qachon instantiatsiya qilinmaydi (AR-01 systemic refactor bilan bir vaqtda hal bo'ladi) |
 | `PyAutoGUIDesktop` | (yo'q) | — | Faqat docstringda nomlangan, klass yozilmagan |
 
 **Tavsiya:** har bir modul uchun ikkita variant — (a) production yo'liga ulash, yoki

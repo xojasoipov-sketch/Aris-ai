@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <rect width="192" height="192" rx="32" ry="32" fill="#050608"/>
+  <text x="96" y="96" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif"
+        font-weight="600" font-size="112" fill="#4c8dff" letter-spacing="-4">Z</text>
+</svg>
