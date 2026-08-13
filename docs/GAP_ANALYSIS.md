@@ -4,6 +4,55 @@
 > kod o'zgartirilmadi) · Qamrov: `apps/core/src/zet` (backend), `apps/web/src` (frontend),
 > `infra/`, `.github/`.
 
+---
+
+## 📌 IMPLEMENTATSIYA HOLATI (2026-08-13 kechqurun yangilanish)
+
+**Bu hujjatning §3–§13 auditidan keyin bir SESSIYA davomida quyidagilar YOPILDI:**
+
+**Phase A** (BROKEN #2/#3/#4, backup):
+- ✅ `DailyScheduleDaemon._deliver()` — kunlik avtonomiya natijasi egaga yetadi
+- ✅ Telegram inline approval → haqiqiy `ApprovalService.approve()`+`orchestrator.resume()`
+- ✅ Killswitch DB persistence (restart'da yoqilgan holat saqlanadi)
+- ✅ Postgres kunlik `pg_dump` sidecar + retention (HR-02)
+- ✅ Haftalik/oylik sotuv+faollik hisoboti daemon
+
+**Phase B** (AR-02, SR-01/02/05, A-04/07):
+- ✅ Trust-level dinamik oqim (`_propagate_trust`) — A-05 to'liq yopildi
+- ✅ Injection skaner UNTRUSTED chiqishlarda ishlatiladi (SR-01)
+- ✅ `web.read` SSRF redirect fix (`follow_redirects=False` + qo'lda hop tekshiruvi)
+- ✅ Audit log INSERT — `Executor` WRITE/EXECUTE/HIGH_RISK amallarida yozadi (SR-02)
+- ✅ Model Router `run_id` + `verified_ok` — A-04 feedback loop
+- ✅ Run timeout + concurrency semafora (A-07)
+
+**Phase C** (§5, SR-03):
+- ✅ CRM tools (contact.*, lead.*, deal.*, crm.stats) Sales/Support agentlarga
+- ✅ RateLimitMiddleware ulandi — token o'g'irlansa 60 req/min OWNER limiti
+
+**Phase D** (§5, 4-xususiyat):
+- ✅ HR agent → AI workforce manager (yangi asosiy talab: agent.list/pause/resume/disable/stats)
+- ✅ QA agent yaratildi (github.read+write+web.read; static+dynamic quality guard)
+- ✅ E-commerce agent yaratildi (product.*, order.*, sales.stats)
+- ✅ HandoffDispatcher production oqimiga ulandi (AutomationDaemon → AGENT_HANDOFF)
+
+**Qo'shimcha yakuniy tuzatishlar** (BROKEN #1, V-01, V-13, A-06):
+- ✅ CLI `z approve`/`z reject`/`z approvals` — HTTP orqali API'ga (cross-process muammosi yopildi)
+- ✅ Verifier LLM-judge tier — jonli-tildagi expected_outcome uchun T1_FREE model bilan real tekshiruv
+- ✅ `memory.write` tool — trust_level+layer siyosati bilan (WRITE_POLICY tekshiriladi)
+- ✅ DeviceRegistry DB persist + REST API + CapabilityToken tokenlari (SHA-256 hash)
+
+**Hozirgi test soni: 2313** (auditda edi 2212 → +101 yangi test).
+
+**Qolgan (P1/P2/P3):**
+- ⏳ **Task #57 — AR-01**: Run/Approval DB persistence (systemic — eng katta refactor, keyingi sessiya)
+- ⏳ Obsidian↔Postgres sync (A-03)
+- ⏳ PWA/manifest/service-worker + frontend testlari
+- ⏳ pgvector (past ustuvorlik — hozirgi ma'lumot hajmida shart emas)
+- ⏳ Railway rasman o'chirilishi (HR-03)
+- ⏳ Xususiy tarmoq (WireGuard) — Mac mini kelganda
+
+---
+
 ## 0. Bu hujjat nima va nega yozildi
 
 Egasi original "JARVIS master build prompt"ni (40-slaydli vision, keyin kengaytirilgan versiya)
