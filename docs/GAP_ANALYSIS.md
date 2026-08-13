@@ -43,13 +43,22 @@
 
 **Hozirgi test soni: 2313** (auditda edi 2212 → +101 yangi test).
 
+**Ikkinchi qism yopilgan bandlar** (sessiya davom etganda qo'shilgan):
+- ✅ CLI `z approve`/`z reject`/`z approvals` — BROKEN #1 qisman yopildi (HTTP orqali cross-process)
+- ✅ Verifier LLM-judge tier — jonli-tildagi expected_outcome uchun T1_FREE tekshiruv (V-01)
+- ✅ `memory.write` tool + WRITE_POLICY tekshiruvi (agent bilim/qaror xotirasi)
+- ✅ DeviceRegistry DB persist + REST API + CapabilityToken tokenlari (A-06, Bo'lim 8)
+- ✅ Obsidian↔Postgres ko'prigi — `note.write` memory'ga shadow yozadi (A-03)
+- ✅ SelfImproveEngine daemon — haftalik ImprovementSuggestion (ADR-0002)
+- ✅ PWA support — manifest, service worker, ikon (frontend §6 dan chiqarildi)
+
 **Qolgan (P1/P2/P3):**
 - ⏳ **Task #57 — AR-01**: Run/Approval DB persistence (systemic — eng katta refactor, keyingi sessiya)
-- ⏳ Obsidian↔Postgres sync (A-03)
-- ⏳ PWA/manifest/service-worker + frontend testlari
+- ⏳ Frontend testlari (component/smoke — hozircha nol)
 - ⏳ pgvector (past ustuvorlik — hozirgi ma'lumot hajmida shart emas)
 - ⏳ Railway rasman o'chirilishi (HR-03)
 - ⏳ Xususiy tarmoq (WireGuard) — Mac mini kelganda
+- ⏳ Agent runtime `verify` bosqichi (docstring'da bor, kodda yo'q)
 
 ---
 
