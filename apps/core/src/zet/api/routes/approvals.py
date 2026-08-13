@@ -16,7 +16,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from zet.api.deps import get_approval_service, get_orchestrator
+from zet.api.deps import get_approval_service, get_orchestrator, get_session_factory
 from zet.core.orchestrator import Orchestrator, RunNotFoundError
 from zet.security.approvals import (
     ApprovalError,
@@ -24,6 +24,7 @@ from zet.security.approvals import (
     ApprovalRequest,
     ApprovalService,
 )
+from zet.security.audit_writer import write_audit
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
 
@@ -109,6 +110,15 @@ async def approve(
     record = await orchestrator.resume(record.run_id)
 
     approval = orchestrator.approvals.get(aid)
+    await write_audit(
+        get_session_factory(),
+        actor="owner",
+        action="approval.granted",
+        target=approval.tool_name,
+        permission_level=approval.requested_permission,
+        run_id=record.run_id,
+        detail={"reason": approval.reason, "note": body.note},
+    )
     return ApprovalDecisionResponse(
         approval=_to_response(approval),
         run_id=str(record.run_id),
@@ -136,6 +146,15 @@ async def reject(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     approval = orchestrator.approvals.get(aid)
+    await write_audit(
+        get_session_factory(),
+        actor="owner",
+        action="approval.rejected",
+        target=approval.tool_name,
+        permission_level=approval.requested_permission,
+        run_id=record.run_id,
+        detail={"reason": approval.reason, "note": body.note},
+    )
     return ApprovalDecisionResponse(
         approval=_to_response(approval),
         run_id=str(record.run_id),

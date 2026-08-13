@@ -643,3 +643,74 @@ class TestInjectionScanner:
             "Changes: src/auth.py - updated SESSION_TIMEOUT constant. "
             "Tests: added test_session_timeout in test_auth.py."
         )
+
+
+class TestWebReaderRedirectSSRF:
+    """SR-05: har redirect hop uchun `_validate_url` qayta qo'llanishi."""
+
+    @pytest.mark.asyncio()
+    async def test_redirect_to_metadata_ip_is_blocked(self) -> None:
+        """`Location: http://169.254.169.254/` — AWS metadata SSRF urinishi bloklanadi."""
+        import httpx
+        import respx
+
+        tool = WebReaderTool(stub=False)
+
+        with respx.mock:
+            respx.get("https://external.example.com/").mock(
+                return_value=httpx.Response(
+                    302, headers={"location": "http://169.254.169.254/latest/meta-data/"}
+                )
+            )
+            # metadata IP uchun so'rov umuman qilinmaslik kerak — ammo mock
+            # qo'shsak, testda foydali diagnostika bo'ladi
+            respx.get("http://169.254.169.254/latest/meta-data/").mock(
+                return_value=httpx.Response(200, text="ADMIN_TOKEN=leaked")
+            )
+
+            result = await tool.execute({"url": "https://external.example.com/", "max_chars": 200})
+
+        assert result.success is False
+        assert "ichki" in (result.error or "").lower() or "169" in (result.error or "")
+
+    @pytest.mark.asyncio()
+    async def test_redirect_to_localhost_is_blocked(self) -> None:
+        import httpx
+        import respx
+
+        tool = WebReaderTool(stub=False)
+
+        with respx.mock:
+            respx.get("https://redirect.example.com/").mock(
+                return_value=httpx.Response(301, headers={"location": "http://localhost:5432/"})
+            )
+
+            result = await tool.execute({"url": "https://redirect.example.com/", "max_chars": 200})
+
+        assert result.success is False
+        assert (
+            "block" in (result.error or "").lower()
+            or "loop" in (result.error or "").lower()
+            or "localhost" in (result.error or "").lower()
+        )
+
+    @pytest.mark.asyncio()
+    async def test_normal_redirect_still_works(self) -> None:
+        """SSRF himoyasi tashqi (xavfsiz) redirect'lar bilan buzmasin."""
+        import httpx
+        import respx
+
+        tool = WebReaderTool(stub=False)
+
+        with respx.mock:
+            respx.get("https://short.example.com/").mock(
+                return_value=httpx.Response(302, headers={"location": "https://long.example.com/x"})
+            )
+            respx.get("https://long.example.com/x").mock(
+                return_value=httpx.Response(200, text="<html><body>Hello</body></html>")
+            )
+
+            result = await tool.execute({"url": "https://short.example.com/", "max_chars": 200})
+
+        assert result.success is True
+        assert "Hello" in result.output["text"]

@@ -612,6 +612,17 @@ def get_recall(
 # ── Orchestrator ──────────────────────────────────────────────────
 
 
+async def _default_audit(**kwargs: object) -> None:
+    """Executor'dan chaqiriladigan audit yozuvchi (SR-02).
+
+    `write_audit`ni `get_session_factory()` bilan yopadi — Executor DB'ni
+    to'g'ridan-to'g'ri bilmaydi (naqsh `_memory_search_fn`/`_workspace_scope`
+    bilan bir xil)."""
+    from zet.security.audit_writer import write_audit
+
+    await write_audit(get_session_factory(), **kwargs)  # type: ignore[arg-type]
+
+
 def get_orchestrator(
     router: ModelRouter = Depends(get_model_router),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -638,6 +649,7 @@ def get_orchestrator(
         budget_usd=settings.run_max_usd,
         max_steps=settings.run_max_steps,
         recall=recall,
+        audit_fn=_default_audit,
     )
 
 

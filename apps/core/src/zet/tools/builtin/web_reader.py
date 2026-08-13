@@ -209,23 +209,45 @@ class WebReaderTool(Tool):
         }
 
     async def _real_fetch(self, url: str, max_chars: int) -> dict[str, Any]:
-        """Haqiqiy HTTP so'rov — httpx bilan."""
+        """Haqiqiy HTTP so'rov — httpx bilan, redirect'lar QO'LDA validatsiya bilan.
+
+        NEGA `follow_redirects=False`. Ilgari `httpx` avtomatik 30x'larni
+        kuzatardi va redirect maqsadi (`Location`) `_validate_url`dan
+        O'TMASDI — hujumkor sayt `Location: http://169.254.169.254/...`
+        (AWS metadata) qaytarib SSRF himoyasini aylanib o'tishi mumkin
+        edi (GAP_ANALYSIS SR-05). Endi har redirect hop uchun `Location`
+        yangidan `_validate_url` orqali tekshiriladi.
+        """
         try:
             import httpx
         except ImportError as exc:
             raise ToolError("httpx kutubxonasi o'rnatilmagan: pip install httpx") from exc
 
+        max_hops = 5
+        current_url = url
         try:
             async with httpx.AsyncClient(
                 timeout=10.0,
-                follow_redirects=True,
-                max_redirects=5,
+                follow_redirects=False,
             ) as client:
-                resp = await client.get(
-                    url,
-                    headers={"User-Agent": "ZET/1.0 (web.read tool)"},
-                )
-                resp.raise_for_status()
+                for _ in range(max_hops + 1):
+                    resp = await client.get(
+                        current_url,
+                        headers={"User-Agent": "ZET/1.0 (web.read tool)"},
+                    )
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("location")
+                        if not location:
+                            raise ToolError(f"HTTP {resp.status_code} lekin Location header yo'q")
+                        # Nisbiy URL bo'lsa absolyutga aylantiramiz
+                        next_url = str(resp.url.join(location))
+                        # HAR REDIRECT'ni SSRF himoyasidan qayta o'tkazamiz
+                        current_url = _validate_url(next_url)
+                        continue
+                    resp.raise_for_status()
+                    break
+                else:
+                    raise ToolError(f"Redirect chegarasi oshdi ({max_hops})")
         except httpx.TimeoutException as exc:
             raise ToolError(f"Sahifa yuklanmadi (timeout): {exc}") from exc
         except httpx.HTTPStatusError as exc:

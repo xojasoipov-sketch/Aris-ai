@@ -28,6 +28,7 @@ import structlog
 
 from zet.core.executor import (
     ApprovalRequiredError,
+    AuditFn,
     BudgetExhaustedError,
     ExecutionContext,
     Executor,
@@ -164,6 +165,7 @@ class Orchestrator:
         budget_usd: float = 0.10,
         max_steps: int = 20,
         recall: RecallFn | None = None,
+        audit_fn: AuditFn | None = None,
     ) -> None:
         self._router = router
         # Uzoq muddatli xotira — ega profili va oldingi bilimlar javobga
@@ -178,6 +180,9 @@ class Orchestrator:
         self._killswitch = killswitch
         self._run_store = run_store
         self._budget_usd = budget_usd
+        # Executor'ga uzatiladigan audit yozuvchi (SR-02). Berilmasa
+        # audit yozuvi qilinmaydi (test/lean).
+        self._audit_fn = audit_fn
 
     @property
     def approvals(self) -> ApprovalService:
@@ -260,6 +265,7 @@ class Orchestrator:
             command_text=record.command.text,
             history=record.command.history,
             recall=self._recall,
+            audit_fn=self._audit_fn,
         )
         record.status = RunStatus.EXECUTING
         record.pending_approval_id = None
