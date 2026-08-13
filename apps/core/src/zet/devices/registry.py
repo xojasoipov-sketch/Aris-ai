@@ -107,9 +107,17 @@ class Device(BaseModel, frozen=True):
 
 
 class DeviceRegistry:
-    """Qurilmalar registri — in-memory (Bo'lim 8 lean).
+    """[DEPREKATSIYA] Qurilmalar registri — faqat in-memory.
 
-    Produksiyada DB bilan almashtiriladi.
+    Yangi kod `zet.devices.repository.DeviceDBRepository`ni ishlatsin —
+    u haqiqiy `device` va `capability_token` jadvallariga yozadi, token
+    xesh sifatida saqlanadi va restart'da ma'lumot yo'qolmaydi
+    (GAP_ANALYSIS #12).
+
+    Bu klass shu yerda faqat orqaga moslik uchun qoldirilgan: mavjud
+    testlar (`tests/test_devices.py`) va CameraProvider stub oqimi hali
+    unga tayanadi. Yangi joyda ISHLATMANG — API va tool qatlami DB
+    variantiga o'tgan.
     """
 
     def __init__(self) -> None:

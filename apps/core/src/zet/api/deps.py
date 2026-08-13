@@ -29,6 +29,7 @@ from zet.core.state import CoreState
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
+from zet.devices.repository import DeviceDBRepository
 from zet.domain.command import ConversationTurn
 from zet.domain.enums import MessageRole, TaskClass
 from zet.domain.memory import MemoryQuery, MemorySearchResult
@@ -116,6 +117,40 @@ async def _memory_search_fn(
         return await memory.search(
             MemoryQuery(text=query, limit=limit, min_similarity=min_similarity)
         )
+
+
+async def _memory_write_fn(
+    *,
+    layer,  # type: ignore[no-untyped-def]  # MemoryLayer, but avoid extra import at top
+    content: str,
+    summary: str | None = None,
+    tags: list[str] | None = None,
+    trust_level: str = "system",
+    ttl_hours: int | None = None,
+):  # type: ignore[no-untyped-def]
+    """`memory.write` tooli uchun yozish — o'z sessiyasini ochadi.
+
+    `PgMemoryStore.add()` chaqiradi. `ttl_hours` hozircha `LAYER_TTL`
+    defaultini bekor qilmaydi (repository interfeysida bunday param yo'q)
+    — kelajakda per-write TTL kerak bo'lsa `add()` kengaytiriladi.
+
+    Naqsh `_memory_search_fn` bilan bir xil: sessiya chaqiruv paytida
+    ochiladi, tool registry qurilganda emas.
+    """
+    async with session_scope(get_session_factory()) as session:
+        settings = get_settings()
+        owner = await get_or_create_owner(session, external_id=settings.owner_id)
+        memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+        entry = await memory.add(
+            layer=layer,
+            content=content,
+            summary=summary,
+            tags=tags,
+            trust_level=trust_level,
+        )
+        # ttl_hours: hozircha e'tibordan chetda. Zaruratda `add()` kengaytiriladi.
+        _ = ttl_hours
+        return entry
 
 
 @asynccontextmanager
@@ -210,6 +245,7 @@ def get_tool_registry() -> ToolRegistry:
         instagram_business_account_id=settings.instagram_business_account_id or None,
         camera_provider=camera_provider,
         memory_search_fn=_memory_search_fn,
+        memory_write_fn=_memory_write_fn,
         workspace_scope=_workspace_scope,
         crm_scope=_crm_scope,
         commerce_scope=_commerce_scope,
@@ -479,6 +515,26 @@ def get_agent_repository(
     bu faqat write-through: har bir o'zgarish shu orqali ham DB'ga yoziladi.
     """
     return AgentRepository(session)
+
+
+# ── Qurilmalar ────────────────────────────────────────────────────
+
+
+async def get_device_repository(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_config),
+) -> DeviceDBRepository:
+    """So'rov chegarasidagi qurilma repozitoriysi (Bo'lim 8, GAP_ANALYSIS #12).
+
+    Ilgari `DeviceRegistry` (in-memory) hech qanday route/tool bilan
+    bog'lanmagan edi — iPhone/Mac boshqaruvi mumkin bo'lgani ma'lum
+    edi-yu, bunga tayanadigan hech nima yo'q edi (fixture'lardan boshqa).
+    Bu funksiya API va tool qatlami uchun DB-backed variantni ulaydi;
+    eski `DeviceRegistry` deprekatsiya belgisi bilan ham qoladi (orqaga
+    moslik).
+    """
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+    return DeviceDBRepository(session, owner_id=owner.id)
 
 
 # ── CRM ───────────────────────────────────────────────────────────

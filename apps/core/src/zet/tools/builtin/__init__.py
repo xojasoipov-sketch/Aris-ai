@@ -65,6 +65,7 @@ from zet.tools.builtin.instagram import (
     InstagramRecentMediaTool,
 )
 from zet.tools.builtin.memory_search import MemorySearchTool, SearchFn
+from zet.tools.builtin.memory_write import MemoryWriteTool, WriteFn
 from zet.tools.builtin.note_list import NoteListTool
 from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteWriteTool
@@ -108,6 +109,7 @@ def build_default_registry(
     camera_provider: CameraProvider | None = None,
     desktop_provider: DesktopProvider | None = None,
     memory_search_fn: SearchFn | None = None,
+    memory_write_fn: WriteFn | None = None,
     workspace_scope: WorkspaceScope | None = None,
     crm_scope: CRMScope | None = None,
     commerce_scope: CommerceScope | None = None,
@@ -175,6 +177,7 @@ def build_default_registry(
     registry = ToolRegistry()
     registry.register(TimeNowTool())
     registry.register(MemorySearchTool(search_fn=memory_search_fn))
+    registry.register(MemoryWriteTool(write_fn=memory_write_fn))
     registry.register(NoteWriteTool(notes_dir=notes_dir))
     registry.register(NoteReadTool(notes_dir=notes_dir))
     registry.register(NoteListTool(notes_dir=notes_dir))
