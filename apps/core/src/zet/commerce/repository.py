@@ -191,6 +191,18 @@ class CommerceRepository:
 
     # ── Kontakt (mijoz) qidirish — do'kon boti uchun ───────────────
 
+    async def get_contact(self, contact_id: uuid.UUID) -> CRMContact | None:
+        """`Order.contact_id`dan kontaktni topadi — kargo xabari daemon uchun (#43).
+
+        Boshqa `get_*` metodlaridan farqli o'laroq topilmasa xato
+        ko'tarmaydi (`None` qaytaradi): chaqiruvchi (daemon) buni
+        "hozircha xabar yubora olmaymiz, keyingi tick'da urinamiz"
+        deb talqin qiladi — butun tsiklni to'xtatmaydi."""
+        stmt = select(CRMContact).where(
+            CRMContact.id == contact_id, CRMContact.owner_id == self._owner_id
+        )
+        return (await self._session.execute(_fresh(stmt))).scalar_one_or_none()
+
     async def find_contact_by_chat_id(self, chat_id: int) -> CRMContact | None:
         stmt = select(CRMContact).where(
             CRMContact.owner_id == self._owner_id, CRMContact.telegram_chat_id == chat_id

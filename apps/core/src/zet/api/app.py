@@ -81,6 +81,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from zet.deploy.automation_daemon import AutomationDaemon
     from zet.deploy.bootstrap import bootstrap_agents, load_persisted_agents
     from zet.deploy.daemon import DailyScheduleDaemon
+    from zet.deploy.shipment_daemon import ShipmentNotifyDaemon
 
     settings = get_settings()
     configure_logging(
@@ -161,6 +162,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     shop_bot = get_shop_bot()
     await shop_bot.start()  # type: ignore[attr-defined]
 
+    # Kargo chiqishi bilan mijozga avtomatik xabar (Z51, #43). LLM/agent
+    # kerak emas — mexanik tekshiruv, shuning uchun boshqa daemon'lardan
+    # ALOHIDA, eng oddiy tsikl.
+    shipment_daemon = ShipmentNotifyDaemon(
+        session_factory=get_session_factory(),
+        settings=settings,
+    )
+    shipment_daemon_task = asyncio.create_task(shipment_daemon.run_forever())
+
     yield
 
     log.info("zet.shutdown")
@@ -172,6 +182,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     automation_daemon_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await automation_daemon_task
+    shipment_daemon.stop()
+    shipment_daemon_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await shipment_daemon_task
+    with contextlib.suppress(Exception):
+        await shipment_daemon.aclose()
     with contextlib.suppress(Exception):
         await telegram_bot.stop()  # type: ignore[attr-defined]
     with contextlib.suppress(Exception):

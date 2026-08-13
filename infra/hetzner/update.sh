@@ -107,9 +107,17 @@ else
 fi
 
 if grep -qE '^ZET_TELEGRAM_BOT_TOKEN=.+' .env; then
-    log "Telegram: BOR"
+    log "Telegram (ega boti): BOR"
 else
     warn "TELEGRAM TOKENI YO'Q — kunlik hisobot va bildirishnomalar yuborilmaydi."
+fi
+
+if grep -qE '^ZET_SHOP_BOT_TOKEN=.+' .env; then
+    log "Telegram (mijoz do'kon boti): BOR"
+else
+    warn "SHOP BOT TOKENI YO'Q — mijoz DM'lariga javob va kargo xabari ishlamaydi (#42/#43)."
+    warn "  Tuzatish: @BotFather'da YANGI (alohida) bot yarating, tokenini"
+    warn "  ZET_SHOP_BOT_TOKEN=... qatoriga yozing (ega botining tokenidan BOSHQA bo'lishi shart)."
 fi
 
 printf '\n\033[1;32mTayyor.\033[0m Web: http://%s   Backend: http://%s:8000\n\n' \
