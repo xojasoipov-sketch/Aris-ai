@@ -47,7 +47,6 @@ from zet.domain.command import Command
 from zet.domain.enums import MissionStatus, PermissionLevel, RiskLevel
 
 if TYPE_CHECKING:
-    from zet.core.capability import CapabilityRegistry
     from zet.core.context import ContextEngine
     from zet.core.executor import Executor
     from zet.core.planner import Planner
@@ -101,7 +100,7 @@ class MissionOrchestrator:
     def __init__(
         self,
         *,
-        capability_registry: _CapabilityRegistryLike | CapabilityRegistry,
+        capability_registry: _CapabilityRegistryLike,
         context_engine: ContextEngine | Any,
         mission_engine: MissionEngine,
         planner: Planner | Any,

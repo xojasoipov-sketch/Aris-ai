@@ -6,17 +6,22 @@ Tasdiqni chetlab o'tish mumkin emas (kod + test bilan isbot).
 Bog'liq qarorlar:
     V-32 — majburiy tasdiq
     A-01 — AWAITING_APPROVAL holati
+    AR-01 — restart-safe (session_factory berilsa DB'ga write-through)
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from zet.domain.enums import ApprovalStatus, PermissionLevel, RiskLevel
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 log = structlog.get_logger(__name__)
 
@@ -165,11 +170,37 @@ class ApprovalService:
     Z1.11 (Executor) shu orqali tasdiq so'raydi.
     """
 
-    def __init__(self, *, ttl_minutes: int = 30) -> None:
+    def __init__(
+        self,
+        *,
+        ttl_minutes: int = 30,
+        session_factory: "async_sessionmaker[AsyncSession] | None" = None,
+    ) -> None:
         self._ttl_minutes = ttl_minutes
         self._requests: dict[uuid.UUID, ApprovalRequest] = {}
         self._by_run: dict[uuid.UUID, list[uuid.UUID]] = {}
         self._by_mission: dict[uuid.UUID, list[uuid.UUID]] = {}
+        # AR-01: None bo'lsa persist no-op; berilsa DB write-through.
+        self._session_factory = session_factory
+
+    def _persist(self, req: ApprovalRequest) -> None:
+        """Approval'ni DB'ga yozib qo'yadi — fail-open, background task.
+
+        Sync interfeys API bilan mos (request_approval/approve/reject
+        sync); async persist background task sifatida rejalashtiriladi.
+        Event loop bo'lmasa (test) — silent skip.
+        """
+        if self._session_factory is None:
+            return
+        from zet.core.run_checkpoint import persist_approval
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Event loop yo'q — sync context, background task
+            # yaratib bo'lmaydi. Test'lar bunday chaqirmaydi.
+            return
+        loop.create_task(persist_approval(self._session_factory, req))
 
     def request_approval(
         self,
@@ -213,6 +244,8 @@ class ApprovalService:
             permission=requested_permission.value,
             tool=tool_name,
         )
+        # AR-01 KRITIK: restart'da approval yo'qolmasin.
+        self._persist(req)
         return req
 
     def get(self, approval_id: uuid.UUID) -> ApprovalRequest:
@@ -268,6 +301,8 @@ class ApprovalService:
         """
         req = self._requests[approval_id]
         req.approve(note=note, now=now)
+        # AR-01: decided_at yangilanishi DB'ga tushsin
+        self._persist(req)
         return req
 
     def reject(
@@ -286,6 +321,8 @@ class ApprovalService:
         """
         req = self._requests[approval_id]
         req.reject(note=note, now=now)
+        # AR-01: rad etilgan holat DB'ga tushsin
+        self._persist(req)
         return req
 
     def expire_all_pending(self, now: datetime | None = None) -> list[ApprovalRequest]:

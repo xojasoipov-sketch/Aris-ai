@@ -116,6 +116,31 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         log.warning("zet.killswitch_restore_failed")
 
+    # AR-01 (BLOCK-4): AWAITING_APPROVAL run va PENDING approval'larni
+    # DB'dan tiklash. Restart'da ega "kecha boshlagan run"ga qayta ulana
+    # olsin. Fail-open: DB yetib bo'lmasa asosiy oqim davom etadi.
+    try:
+        from zet.api.deps import get_approval_service, get_run_store
+        from zet.core.run_checkpoint import (
+            load_pending_approvals,
+            load_pending_runs,
+        )
+
+        restored_runs = await load_pending_runs(
+            get_session_factory(), get_run_store()
+        )
+        restored_approvals = await load_pending_approvals(
+            get_session_factory(), get_approval_service()
+        )
+        if restored_runs or restored_approvals:
+            log.warning(
+                "zet.run_state_restored",
+                runs=restored_runs,
+                approvals=restored_approvals,
+            )
+    except Exception:
+        log.warning("zet.run_state_restore_failed")
+
     # SR-06: `engage()` chaqirilishi bilan barcha faol capability
     # tokenlarni bekor qiladigan hook. REST route ham, Telegram runner
     # ham revocation'ni AWAIT bilan alohida chaqiradi — bu callback

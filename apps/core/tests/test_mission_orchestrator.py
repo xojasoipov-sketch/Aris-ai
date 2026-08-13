@@ -454,3 +454,31 @@ class TestMissionShape:
 
         mission: Mission = await orch.run(_command(), owner_id=owner.id)
         assert rid in mission.run_ids
+
+
+class TestCapabilityInterfaceContract:
+    """Regression: `capability_registry` param FAQAT `compose()` shartnomasini qabul qiladi.
+
+    Bug tarixi: `mission_orchestrator.py:104` type hint ilgari
+    `_CapabilityRegistryLike | CapabilityRegistry` edi. Ammo raw
+    `CapabilityRegistry.resolve()` beradi, `.compose()` bermaydi.
+    Line 173'da `self._capabilities.compose(...)` mypy'da union-attr xato
+    berardi va noto'g'ri narsa uzatilsa runtime'da AttributeError bilan
+    yiqilardi. Endi type hint faqat Protocol. `CapabilityRegistryComposer`
+    haqiqiy adapter.
+    """
+
+    def test_registry_composer_provides_compose(self) -> None:
+        """`CapabilityRegistryComposer` `.compose()` metodini beradi."""
+        from zet.core.capability import CapabilityRegistry
+        from zet.core.mission_orchestrator import CapabilityRegistryComposer
+
+        registry = CapabilityRegistry()
+        composer = CapabilityRegistryComposer(registry)
+        assert hasattr(composer, "compose"), (
+            "CapabilityRegistryComposer .compose() metodini bermayapti — "
+            "MissionOrchestrator ishlamaydi"
+        )
+        # compose() aniq bo'sh registry uchun bo'sh bundle qaytarishi kerak
+        bundle = composer.compose("test objective", {})
+        assert bundle is not None

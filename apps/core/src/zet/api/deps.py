@@ -310,15 +310,32 @@ def get_permission_policy() -> PermissionPolicy:
 
 @lru_cache(maxsize=1)
 def get_approval_service() -> ApprovalService:
-    """Global tasdiq xizmati (singleton) — run so'rovlari orasida saqlanadi."""
+    """Global tasdiq xizmati (singleton) — run so'rovlari orasida saqlanadi.
+
+    AR-01: `session_factory` berilsa har `request_approval`/`approve`/`reject`
+    DB'ga background task orqali yozib qo'yiladi (fail-open). Startup'da
+    `load_pending_approvals()` PENDING approval'larni tiklaydi.
+    """
     settings = get_settings()
-    return ApprovalService(ttl_minutes=settings.approval_ttl_minutes)
+    return ApprovalService(
+        ttl_minutes=settings.approval_ttl_minutes,
+        session_factory=get_session_factory(),
+    )
 
 
 @lru_cache(maxsize=1)
 def get_run_store() -> RunStore:
-    """Global run holatlari do'koni (singleton)."""
-    return RunStore()
+    """Global run holatlari do'koni (singleton).
+
+    AR-01: `session_factory` berilsa `persist()` orqali DB'ga write-through
+    yoziladi (fail-open). Startup'da `load_pending_runs()` AWAITING_APPROVAL
+    run'larni tiklaydi.
+    """
+    settings = get_settings()
+    return RunStore(
+        session_factory=get_session_factory(),
+        owner_external_id=settings.owner_id,
+    )
 
 
 @lru_cache(maxsize=1)

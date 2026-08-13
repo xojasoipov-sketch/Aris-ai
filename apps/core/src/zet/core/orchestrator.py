@@ -25,8 +25,12 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import structlog
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from zet.core.executor import (
     ApprovalRequiredError,
@@ -122,12 +126,22 @@ class RunRecord:
 class RunStore:
     """Run holatlarini xotirada saqlaydi (approval resume uchun).
 
-    Produksiyada DB-backed versiyaga almashtiriladi — hozircha boshqa
-    in-memory do'konlar bilan bir xil naqsh.
+    AR-01 (BLOCK-4): agar `session_factory` berilgan bo'lsa, `persist()`
+    orqali DB'ga write-through yoziladi. Fail-open — DB yiqilsa xotirada
+    davom etadi. Startup'da `load_pending_runs()` (zet.core.run_checkpoint)
+    orqali AWAITING_APPROVAL run'lar tiklanadi.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        session_factory: "async_sessionmaker[AsyncSession] | None" = None,
+        owner_external_id: str = "owner",
+    ) -> None:
         self._runs: dict[uuid.UUID, RunRecord] = {}
+        # None bo'lsa persist() no-op; testlar shu holatda ishlaydi.
+        self._session_factory = session_factory
+        self._owner_external_id = owner_external_id
 
     def create(self, command: Command) -> RunRecord:
         """Yangi run yozuvi yaratadi."""
@@ -145,6 +159,23 @@ class RunStore:
             return self._runs[run_id]
         except KeyError as exc:
             raise RunNotFoundError(f"Run '{run_id}' topilmadi") from exc
+
+    async def persist(self, record: RunRecord) -> None:
+        """Runni DB'ga yozib qo'yadi — fail-open, session_factory bo'lsa.
+
+        AWAITING_APPROVAL holatida chaqirilsa, restart'da tiklash
+        mumkin bo'ladi. Terminal holat (DONE/FAILED) yozilsa audit
+        maqsadida saqlanadi lekin tiklash uchun ishlatilmaydi.
+        """
+        if self._session_factory is None:
+            return
+        from zet.core.run_checkpoint import persist_run
+
+        await persist_run(
+            self._session_factory,
+            record,
+            owner_external_id=self._owner_external_id,
+        )
 
 
 class Orchestrator:
@@ -264,10 +295,12 @@ class Orchestrator:
         except AmbiguousCommandError as exc:
             record.status = RunStatus.FAILED
             record.error = exc.question
+            await self._run_store.persist(record)  # AR-01 audit trail
             return record
         except (IntentError, LLMError) as exc:
             record.status = RunStatus.FAILED
             record.error = f"Intent aniqlab bo'lmadi: {exc}"
+            await self._run_store.persist(record)  # AR-01 audit trail
             return record
 
         try:
@@ -281,6 +314,7 @@ class Orchestrator:
         except (PlannerError, LLMError) as exc:
             record.status = RunStatus.FAILED
             record.error = f"Reja tuzib bo'lmadi: {exc}"
+            await self._run_store.persist(record)  # AR-01 audit trail
             return record
 
         record.plan = plan
@@ -349,10 +383,15 @@ class Orchestrator:
                 approval_id=str(approval.id),
                 step=exc.step.position,
             )
+            # AR-01 KRITIK CHECKPOINT: aynan shu holat restart'da yo'qolardi.
+            # Endi DB'ga yozib qo'yiladi — startup'da load_pending_runs()
+            # tiklaydi va ega approve URL'ini keyingi sessiyada ham topadi.
+            await self._run_store.persist(record)
             return record
         except BudgetExhaustedError as exc:
             record.status = RunStatus.FAILED
             record.error = str(exc)
+            await self._run_store.persist(record)  # AR-01 audit trail
             return record
 
         record.spent_usd += executor.spent_usd
@@ -423,6 +462,10 @@ class Orchestrator:
                 await self._mark_verified_fn(record.run_id, record.verified_ok)
             except Exception:
                 log.warning("orchestrator.mark_verified_failed", run_id=str(record.run_id))
+        # AR-01: terminal holat yozib qo'yiladi (DONE yoki FAILED).
+        # DONE run tiklashga qarab bermaydi (kutmayapti) lekin audit
+        # uchun ko'zga tashlab qo'yilishi zarur.
+        await self._run_store.persist(record)
         return record
 
     def approve(self, approval_id: uuid.UUID, *, note: str | None = None) -> RunRecord:
