@@ -78,6 +78,7 @@ from zet.tools.builtin.telegram_tools import (
 from zet.tools.builtin.time_now import TimeNowTool
 from zet.tools.builtin.video_learn import DEFAULT_MODEL as DEFAULT_VIDEO_MODEL
 from zet.tools.builtin.video_learn import VideoLearnTool
+from zet.tools.builtin.vision_ocr import VisionOcrTool
 from zet.tools.builtin.web_reader import WebReaderTool
 from zet.tools.builtin.web_search import WebSearchTool
 from zet.tools.builtin.workspace_tools import WORKSPACE_TOOL_CLASSES, WorkspaceScope
@@ -189,6 +190,11 @@ def build_default_registry(
     registry.register(
         VideoLearnTool(api_key=gemini_api_key, model=gemini_video_model or DEFAULT_VIDEO_MODEL)
     )
+    # `vision.ocr` ham `gemini_api_key` orqali ishlaydi — kalit yo'q
+    # bo'lsa tool baribir ro'yxatda turadi (Planner ko'radi), lekin
+    # chaqirilganda tushunarli xato beradi (video.learn bilan bir xil
+    # naqsh). Vision agent'ning tool_allowlist'iga qo'shildi.
+    registry.register(VisionOcrTool(api_key=gemini_api_key))
     registry.register(YouTubeSearchTool(api_key=youtube_api_key))
     registry.register(YouTubeChannelStatsTool(api_key=youtube_api_key))
     registry.register(YouTubeVideoStatsTool(api_key=youtube_api_key))

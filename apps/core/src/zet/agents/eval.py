@@ -103,6 +103,7 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "instagram.recent_media": PermissionLevel.READ,
     "instagram.publish_photo": PermissionLevel.WRITE,
     "camera.snapshot": PermissionLevel.READ,
+    "vision.ocr": PermissionLevel.READ,
     "memory.search": PermissionLevel.READ,
     "memory.write": PermissionLevel.WRITE,
     # Jonli manbalar (Z50) — hammasi faqat o'qiydi.

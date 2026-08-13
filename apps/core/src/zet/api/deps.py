@@ -218,7 +218,17 @@ def get_tool_registry() -> ToolRegistry:
     """
     settings = get_settings()
     camera_provider = None
-    if settings.hikvision_host and settings.hikvision_username and settings.hikvision_password:
+    # RTSP umumiyroq drayver — Hikvision'dan ustun. Ega bir vaqtda
+    # ikkalasini ham sozlab qo'ysa (masalan avval Hikvision'dan RTSP'ga
+    # o'tayotganda) — RTSP tanlanadi, chunki generik yo'l.
+    if settings.rtsp_camera_url:
+        from zet.devices.rtsp import RtspCamera
+
+        camera_provider = RtspCamera(
+            rtsp_url=settings.rtsp_camera_url.get_secret_value(),
+            timeout_s=settings.rtsp_camera_timeout_s,
+        )
+    elif settings.hikvision_host and settings.hikvision_username and settings.hikvision_password:
         from zet.devices.hikvision import HikvisionCamera
 
         camera_provider = HikvisionCamera(

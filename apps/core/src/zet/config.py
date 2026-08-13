@@ -230,6 +230,20 @@ class Settings(BaseSettings):
     hikvision_channel: int = Field(default=1, ge=1)
     """Kamera kanal raqami (NVR uchun 101, 201, ...; yagona kamera uchun 1)."""
 
+    rtsp_camera_url: SecretStr | None = None
+    """Umumiy RTSP kamera havolasi (`rtsp://user:pass@host/stream`).
+
+    Bo'lsa — `camera.snapshot` RTSP orqali kadr oladi (Hikvision emas,
+    Dahua/Tapo/Uniview va boshqa RTSP standartini qo'llovchi har qanday
+    kamera uchun). `opencv-python-headless` alohida o'rnatilgan bo'lishi
+    kerak (loyihaning majburiy bog'liqligi emas — Dockerfile'da
+    o'rnatilmagan). Bir vaqtda RTSP va Hikvision berilsa — RTSP ustunlik
+    qiladi (aniqroq generik yo'l). URL parolini log'ga yozmaymiz.
+    """
+
+    rtsp_camera_timeout_s: int = Field(default=10, ge=1)
+    """RTSP oqim ochish/kadr olish uchun vaqt chegarasi."""
+
     # ── Instagram Graph API (Bo'lim 7, C-04) ──────────────────────────
     instagram_access_token: SecretStr | None = None
     """Instagram Business/Creator uchun long-lived access token (Meta App
