@@ -23,8 +23,8 @@ from typing import Any
 
 import structlog
 
-from zet.domain.command import Command, Intent
-from zet.domain.enums import TaskClass
+from zet.domain.command import Command, ConversationTurn, Intent
+from zet.domain.enums import MessageRole, TaskClass
 from zet.llm.base import ChatMessage, ToolSpec
 from zet.llm.router import ModelRouter, RouteResult
 from zet.prompts.intent import INTENT_SYSTEM, INTENT_TOOL_SCHEMA
@@ -33,6 +33,23 @@ log = structlog.get_logger(__name__)
 
 _MAX_RETRIES = 1
 """Buzuq LLM javobi bo'lsa, necha marta qayta urinish."""
+
+
+def _history_to_messages(history: Sequence[ConversationTurn]) -> list[ChatMessage]:
+    """Suhbat tarixini LLM xabarlariga o'giradi (B3 audit, KONSOLIDATSIYA v2).
+
+    `core/executor.py::_history_to_messages` bilan bir xil konvertatsiya
+    — bu yerda alohida nusxa ko'chirilgan, chunki `intent.py` `executor.py`
+    ga bog'lanmasligi kerak (ular Orchestrator ostida parallel qatlamlar,
+    aylanma bog'liqlik yaratmaslik uchun har biri o'z nusxasini saqlaydi).
+    """
+    return [
+        ChatMessage(
+            role="user" if turn.role == MessageRole.USER else "assistant",
+            content=turn.content,
+        )
+        for turn in history
+    ]
 
 
 class IntentError(Exception):
@@ -90,7 +107,18 @@ class IntentRecognizer:
             tools_hint = ", ".join(available_tools)
             system += f"\n\nMAVJUD TOOLLAR: {tools_hint}"
 
-        messages = [ChatMessage(role="user", content=command.text)]
+        # B3 audit fix (KONSOLIDATSIYA v2): ILGARI faqat `command.text`
+        # yuborilardi — "shunga batafsilroq ayt" kabi ergash buyruqlar
+        # oldingi almashuv MATNI bo'lmasa nimani anglatishini aniqlay
+        # olmasdi (LLM context'siz noaniq/xato intent chiqarardi).
+        # `command.history` (ConversationStore'dan) endi LLM'ga
+        # ko'rinadi — bu Executor'ning `_think()` javob yozish
+        # bosqichida allaqachon qilayotgan narsa, endi Intent
+        # bosqichida ham qo'llaniladi.
+        messages = [
+            *_history_to_messages(command.history),
+            ChatMessage(role="user", content=command.text),
+        ]
 
         for attempt in range(_MAX_RETRIES + 1):
             route_result = await self._router.complete(

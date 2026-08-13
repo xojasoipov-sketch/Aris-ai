@@ -359,3 +359,55 @@ class TestIntentRecognizer:
         recognizer = _make_recognizer(session, provider)
         intent = await recognizer.recognize(Command(text="buni qil"))
         assert intent.ambiguity == "high"
+
+
+class TestB3ConversationHistoryThreaded:
+    """B3 audit (KONSOLIDATSIYA v2) — `command.history` LLM'ga uzatilishi
+    kerak, aks holda "shunga..." kabi ergash buyruqlar context'siz."""
+
+    async def test_history_included_in_llm_messages(self, session: AsyncSession) -> None:
+        from zet.domain.command import ConversationTurn
+        from zet.domain.enums import MessageRole
+
+        provider = _fake(
+            scripted=[
+                fake_response(
+                    text="",
+                    tool_uses=(
+                        _intent_tool_use(action="info.explain", objects=["Aris AI"]),
+                    ),
+                ),
+            ]
+        )
+        recognizer = _make_recognizer(session, provider)
+
+        history = [
+            ConversationTurn(role=MessageRole.USER, content="Aris AI haqida ma'lumot ber"),
+            ConversationTurn(
+                role=MessageRole.ASSISTANT,
+                content="Aris AI — shaxsiy AI operatsion tizim.",
+            ),
+        ]
+        await recognizer.recognize(Command(text="shunga batafsilroq ayt", history=history))
+
+        assert len(provider.calls) == 1
+        sent_messages = provider.calls[0]["messages"]
+        contents = [m.content for m in sent_messages]  # type: ignore[union-attr]
+        assert "Aris AI haqida ma'lumot ber" in contents
+        assert "Aris AI — shaxsiy AI operatsion tizim." in contents
+        # Joriy xabar oxirida keladi
+        assert sent_messages[-1].content == "shunga batafsilroq ayt"  # type: ignore[union-attr]
+
+    async def test_no_history_unchanged(self, session: AsyncSession) -> None:
+        """Tarix bo'sh bo'lsa — eski xatti-harakat (faqat joriy xabar)."""
+        provider = _fake(
+            scripted=[
+                fake_response(text="", tool_uses=(_intent_tool_use(),)),
+            ]
+        )
+        recognizer = _make_recognizer(session, provider)
+        await recognizer.recognize(Command(text="oddiy buyruq"))
+
+        sent_messages = provider.calls[0]["messages"]
+        assert len(sent_messages) == 1  # type: ignore[arg-type]
+        assert sent_messages[0].content == "oddiy buyruq"  # type: ignore[union-attr]

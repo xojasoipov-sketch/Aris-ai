@@ -9,20 +9,25 @@ halol recovered=False qaytadi (soxta muvaffaqiyat emas).
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
-from zet.core.executor import ExecutionContext, StepResult
+import pytest
+
+from zet.core.executor import ExecutionContext, Executor, StepResult
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.recovery import (
     DIAGNOSIS_MAX_FIX_STEPS,
     DIAGNOSIS_MAX_OUTPUT_CHARS,
     MAX_RETRIES,
     Diagnosis,
+    RecoveryApprovalRequiredError,
     RecoveryEngine,
     RecoveryOutcome,
 )
 from zet.domain.command import Command
 from zet.domain.enums import (
+    ApprovalStatus,
     PermissionLevel,
     RunStatus,
     StepStatus,
@@ -34,6 +39,8 @@ from zet.llm.base import LLMError
 from zet.security.approvals import ApprovalService
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
+from zet.tools.base import Tool
+from zet.tools.registry import ToolRegistry
 
 # ── Fake yordamchilar ──────────────────────────────────────────────
 
@@ -150,6 +157,7 @@ def _fix_json(
     n_steps: int = 1,
     confidence: float = 0.8,
     expected_outcome: str = "yangi natija",
+    permission_required: str = "read",
 ) -> str:
     steps = []
     for i in range(n_steps):
@@ -159,7 +167,7 @@ def _fix_json(
                 "tool_name": tool_name,
                 "tool_params": {},
                 "expected_outcome": expected_outcome,
-                "permission_required": "read",
+                "permission_required": permission_required,
             }
         )
     return json.dumps(
@@ -642,3 +650,415 @@ class TestFixStepsCapped:
         assert len(outcome.extended_plan.steps) == len(plan.steps) + DIAGNOSIS_MAX_FIX_STEPS
         # Xom LLM javobi to'liq raw'da saqlangan (audit)
         assert len(outcome.diagnoses[0].raw.get("fix_steps", [])) == 10
+
+
+# ── D1/D2/D3 (KONSOLIDATSIYA v2) — real Executor/PermissionPolicy bilan ──
+#
+# Yuqoridagi testlar `_FakeExecutor` ishlatadi — u `approved_steps`ni
+# umuman tekshirmaydi, faqat chaqiruv argumentlarini yozib qo'yadi. Bu
+# D1/D2 uchun YETARLI EMAS: approval-bypass bug'i aynan Executor'ning
+# HAQIQIY `policy.check()` darvozasi bilan `approved_steps` o'rtasidagi
+# munosabatda edi. Shu sabab quyidagi testlar REAL `Executor` + REAL
+# `PermissionPolicy` + REAL `ApprovalService` ishlatadi — soxta emas.
+
+
+class _AlwaysOkTool(Tool):
+    """READ ruxsatli, doim muvaffaqiyatli tool — D2 (autonomous LOW-risk fix)."""
+
+    @property
+    def name(self) -> str:
+        return "test.read"
+
+    @property
+    def description(self) -> str:
+        return "test uchun — doim ok"
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    @property
+    def permission_level(self) -> PermissionLevel:
+        return PermissionLevel.READ
+
+    async def _execute(self, params: dict[str, Any]) -> Any:
+        return {"ok": True}
+
+
+class _TrackingDeleteTool(Tool):
+    """`file.delete` nomli HIGH-risk tool — D1 (approval-bypass) testi uchun.
+
+    NEGA aynan shu nom: `security/permissions.py::HIGH_RISK_TOOLS`da
+    hardcoded — Executor'ning eski `policy.check()` metodi buni ko'rib
+    permission darajasidan qat'i nazar DOIM tasdiq talab qiladi (V-32).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    @property
+    def name(self) -> str:
+        return "file.delete"
+
+    @property
+    def description(self) -> str:
+        return "test uchun — HIGH risk, chaqiruvlarni yozib boradi"
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {"path": {"type": "string"}}}
+
+    @property
+    def permission_level(self) -> PermissionLevel:
+        return PermissionLevel.WRITE
+
+    async def _execute(self, params: dict[str, Any]) -> Any:
+        # MUHIM: shu funksiya chaqirilishi — "fix qadami BAJARILDI"
+        # degani. D1 testi buning approval'dan OLDIN hech qachon
+        # chaqirilmasligini isbotlaydi.
+        self.calls.append(dict(params))
+        return {"deleted": True}
+
+
+def _real_engine(
+    llm: _FakeLLM,
+    *,
+    registry: ToolRegistry,
+    policy: PermissionPolicy,
+    killswitch: KillSwitchState,
+    verifier: _StubVerifier,
+    max_retries: int = MAX_RETRIES,
+    tool_names: set[str] | None = None,
+) -> RecoveryEngine:
+    """`_make_engine`dan farqli — soxta emas, HAQIQIY Executor quradi."""
+
+    def factory() -> Executor:
+        return Executor(
+            registry=registry,
+            policy=policy,
+            killswitch=killswitch,
+            budget_usd=1.0,
+            router=None,
+        )
+
+    return RecoveryEngine(
+        llm_provider=llm,  # type: ignore[arg-type]
+        executor_factory=factory,
+        verifier=verifier,  # type: ignore[arg-type]
+        max_retries=max_retries,
+        tool_names=tool_names or {"test.read", "file.delete"},
+    )
+
+
+class TestD1ApprovalBypassPrevention:
+    """D1 (KONSOLIDATSIYA v2, MAJBURIY) — HIGH-risk fix qadami Approval
+    Engine'ni HECH QACHON chetlab o'tolmaydi.
+
+    Bu — aynan foydalanuvchi talab qilgan "artificial HIGH-risk failure
+    → Recovery Engine attempts a fix → verify the Approval Engine is
+    invoked and the FIX does not execute until approval arrives" testi.
+    """
+
+    async def test_high_risk_fix_raises_and_never_executes_before_approval(
+        self,
+    ) -> None:
+        step = _read_step(position=0)
+        plan = _plan(step)
+        ctx = _ctx_with(
+            plan,
+            {
+                0: StepResult(
+                    step,
+                    status=StepStatus.FAILED,
+                    tool_result=_tool_result(success=False, error="original xato"),
+                )
+            },
+        )
+
+        # LLM "faylni o'chirish orqali tuzataman" deydi — HIGH risk.
+        llm = _FakeLLM(
+            responses=[
+                _fix_json(
+                    tool_name="file.delete",
+                    description="Xato faylni o'chirish",
+                    expected_outcome="o'chirildi",
+                    permission_required="write",
+                )
+            ]
+        )
+
+        registry = ToolRegistry()
+        registry.register(_AlwaysOkTool())
+        delete_tool = _TrackingDeleteTool()
+        registry.register(delete_tool)
+        policy = PermissionPolicy()  # default: "file.delete" HIGH_RISK_TOOLS'da
+        killswitch = KillSwitchState()
+        verifier = _StubVerifier([])  # chaqirilmasligi kerak — quyida tekshiriladi
+
+        engine = _real_engine(
+            llm,
+            registry=registry,
+            policy=policy,
+            killswitch=killswitch,
+            verifier=verifier,
+        )
+
+        with pytest.raises(RecoveryApprovalRequiredError) as exc_info:
+            await engine.attempt(
+                plan=plan,
+                ctx=ctx,
+                failed_verifications=[(step, Verification(ok=False, reason="original xato"))],
+                trust=TrustLevel.OWNER,
+            )
+
+        exc = exc_info.value
+        # 1) Aynan HIGH-risk fix qadami approval so'radi
+        assert exc.step.tool_name == "file.delete"
+        assert exc.decision.needs_approval is True
+        assert "Yuqori xavfli" in exc.decision.reason
+        # 2) `RecoveryApprovalRequiredError` — Orchestrator'ning `resume()`
+        #    keyin TUZATILGAN rejani bajarishi uchun extended_plan yuradi
+        assert any(s.tool_name == "file.delete" for s in exc.extended_plan.steps)
+        # 3) ENG MUHIM DALIL: fix action HECH QACHON bajarilmadi
+        assert delete_tool.calls == [], (
+            "D1 BUZILDI: Recovery Engine HIGH-risk fix qadamini "
+            "Approval Engine'siz bajarib yubordi"
+        )
+        # 4) `verify_step` ham chaqirilmadi — chunki executor hatto
+        #    fix qadamiga yetguncha to'xtadi
+        assert verifier.calls == []
+
+        # ── Approval Engine haqiqatan chaqirilishini/talab qilinishini
+        #    tasdiqlaymiz (Orchestrator._handle_approval_required bilan
+        #    bir xil zanjir) ────────────────────────────────────────
+        approvals = ApprovalService(ttl_minutes=30)
+        approval = approvals.request_approval(
+            run_id=uuid.uuid4(),
+            step_position=exc.step.position,
+            reason=exc.decision.reason,
+            requested_permission=exc.step.permission_required,
+            tool_name=exc.step.tool_name,
+            preview={"description": exc.step.description},
+        )
+        assert approvals.get(approval.id).status == ApprovalStatus.PENDING
+        # Approval so'ralgandan keyin ham HALI bajarilmagan
+        assert delete_tool.calls == []
+
+        # Ega tasdiqlaguncha FIX bajarilmaydi — endi tasdiqlaymiz va
+        # AYNAN shu extended_plan'ni approved_steps bilan qayta ishga
+        # tushiramiz (Orchestrator.resume() qiladigan narsa).
+        approvals.approve(approval.id)
+        retry_executor = Executor(
+            registry=registry, policy=policy, killswitch=killswitch, budget_usd=1.0, router=None
+        )
+        await retry_executor.execute_plan(
+            exc.extended_plan,
+            approved_steps={exc.step.position},
+            trust=TrustLevel.OWNER,
+        )
+        # 5) Tasdiqdan KEYIN — va faqat keyin — fix haqiqatan bajarildi
+        #    (`_fix_json()` `tool_params={}` beradi — bo'sh dict kutiladi)
+        assert delete_tool.calls == [{}]
+
+
+class TestD1OrchestratorLevel:
+    """D1 — xuddi shu isbot, lekin `Orchestrator._run_plan()` orqali
+    (RECOVERING → AWAITING_APPROVAL, `record.pending_approval_id`,
+    real `ApprovalService` qatori) — end-to-end."""
+
+    async def test_orchestrator_pauses_for_approval_not_bypass(
+        self,
+        killswitch: KillSwitchState,
+        permission_policy: PermissionPolicy,
+    ) -> None:
+        registry = ToolRegistry()
+        registry.register(_AlwaysOkTool())
+        delete_tool = _TrackingDeleteTool()
+        registry.register(delete_tool)
+
+        llm = _FakeLLM(
+            responses=[
+                _fix_json(
+                    tool_name="file.delete",
+                    description="Xato holatni o'chirish orqali tuzatish",
+                    permission_required="write",
+                )
+            ]
+        )
+        engine = _real_engine(
+            llm,
+            registry=registry,
+            policy=permission_policy,
+            killswitch=killswitch,
+            verifier=_StubVerifier([]),
+        )
+
+        class _FailingVerifier:
+            """verify_step/verify_run — har doim FAIL (recovery majburan ishga tushsin)."""
+
+            async def verify_step(self, step, tool_result):  # type: ignore[no-untyped-def]
+                return Verification(ok=False, reason="test FAIL")
+
+            def verify_run(self, verifications):  # type: ignore[no-untyped-def]
+                return Verification(ok=False, reason="run FAIL")
+
+        approvals = ApprovalService()
+        run_store = RunStore()
+        orch = Orchestrator(
+            router=None,  # type: ignore[arg-type]
+            tool_registry=registry,
+            permission_policy=permission_policy,
+            approval_service=approvals,
+            killswitch=killswitch,
+            run_store=run_store,
+            budget_usd=1.0,
+            recovery_engine=engine,
+        )
+        orch._verifier = _FailingVerifier()  # type: ignore[assignment]
+
+        step = PlanStep(
+            position=0,
+            description="Fikrla",
+            tool_name=None,
+            permission_required=PermissionLevel.READ,
+        )
+        plan = _plan(step)
+        record = run_store.create(Command(text="test", channel="cli", trust_level=TrustLevel.OWNER))
+        record.plan = plan
+        record.steps_total = 1
+
+        result = await orch._run_plan(record, trust=TrustLevel.OWNER, dry_run=False)
+
+        # D1: AWAITING_APPROVAL — HECH QACHON DONE/FAILED emas
+        assert result.status == RunStatus.AWAITING_APPROVAL
+        assert result.pending_approval_id is not None
+
+        pending = approvals.get(result.pending_approval_id)
+        assert pending.status == ApprovalStatus.PENDING
+        assert pending.tool_name == "file.delete"
+
+        # `record.plan` TUZATILGAN rejaga yangilangan (D1 dizayn talabi —
+        # resume() ASL rejani emas, fix qadami bor rejani bajarishi kerak)
+        assert len(result.plan.steps) == 2
+        assert any(s.tool_name == "file.delete" for s in result.plan.steps)
+
+        # ENG MUHIM: HIGH-risk fix HECH QACHON bajarilmadi
+        assert delete_tool.calls == []
+
+
+class TestD2AutonomousLowRiskFix:
+    """D2 (KONSOLIDATSIYA v2) — LOW/MEDIUM-risk fix qadami approval'siz,
+    AVTOMATIK bajariladi (real Executor/PermissionPolicy orqali, D1'dagi
+    bilan bir xil kod yo'lidan — alohida "avtomatik" tarmoq YO'Q)."""
+
+    async def test_read_permission_fix_executes_without_any_approval(self) -> None:
+        step = _read_step(position=0)
+        plan = _plan(step)
+        ctx = _ctx_with(
+            plan,
+            {
+                0: StepResult(
+                    step,
+                    status=StepStatus.FAILED,
+                    tool_result=_tool_result(success=False, error="original xato"),
+                )
+            },
+        )
+
+        # `_fix_json()` default: tool_name="test.read", permission="read"
+        llm = _FakeLLM(responses=[_fix_json()])
+
+        registry = ToolRegistry()
+        registry.register(_AlwaysOkTool())
+        policy = PermissionPolicy()
+        killswitch = KillSwitchState()
+        verifier = _StubVerifier([Verification(ok=True, reason="tuzatildi", auto=True)])
+
+        engine = _real_engine(
+            llm,
+            registry=registry,
+            policy=policy,
+            killswitch=killswitch,
+            verifier=verifier,
+        )
+
+        # `approved_steps` UMUMAN berilmagan (None) — shunga qaramay
+        # LOW-risk (READ) fix qadami avtomatik bajarilishi kerak.
+        outcome = await engine.attempt(
+            plan=plan,
+            ctx=ctx,
+            failed_verifications=[(step, Verification(ok=False, reason="original xato"))],
+            trust=TrustLevel.OWNER,
+        )
+
+        assert outcome.recovered is True
+        assert outcome.attempts == 1
+
+
+class TestD3AbsoluteRetryCeiling:
+    """D3 (KONSOLIDATSIYA v2, MAJBURIY) — `max_retries` argumenti orqali
+    ham qattiq shiftdan (`_ABSOLUTE_MAX_RETRIES`) oshib bo'lmaydi.
+
+    Isbot: `max_retries=1000` bilan quriladi, lekin haqiqiy urinishlar
+    soni HECH QACHON `_ABSOLUTE_MAX_RETRIES` (5)dan oshmaydi — cheksiz
+    retry loop KOD DARAJASIDA imkonsiz, konfiguratsiya bilan chetlab
+    o'tib bo'lmaydi."""
+
+    async def test_absolute_ceiling_cannot_be_exceeded(self) -> None:
+        from zet.core.recovery import _ABSOLUTE_MAX_RETRIES
+
+        assert _ABSOLUTE_MAX_RETRIES < 1000, "test o'zi ma'nosiz bo'lib qolmasin"
+
+        step = _read_step()
+        plan = _plan(step)
+        failed_result = StepResult(
+            step, status=StepStatus.FAILED, tool_result=_tool_result(success=False, error="x")
+        )
+        ctx = _ctx_with(plan, {0: failed_result})
+
+        # Har urinish uchun bittadan javob — agar cheklov ishlamasa
+        # LLM javoblari darhol tugab `LLMError` ko'tariladi (test buni
+        # aniq tutib oladi, garovsiz "aslida ko'proq urinildi" degan
+        # noaniqlik qolmasin uchun aynan _ABSOLUTE_MAX_RETRIES ta beramiz).
+        llm = _FakeLLM(responses=[_fix_json() for _ in range(_ABSOLUTE_MAX_RETRIES)])
+
+        # Har urinish "hali ham FAIL" deb qaytadigan executor ctx'lari —
+        # recovery HECH QACHON erta to'xtamaydi, faqat chegara bilan.
+        never_fixed = _ctx_with(
+            plan,
+            {
+                0: StepResult(
+                    step,
+                    status=StepStatus.FAILED,
+                    tool_result=_tool_result(success=False, error="hali ham xato"),
+                )
+            },
+        )
+        engine, executors, _verifier = _make_engine(
+            llm,
+            executor_contexts=[never_fixed for _ in range(_ABSOLUTE_MAX_RETRIES)],
+            verify_results=[Verification(ok=False, reason="hali ham xato") for _ in range(_ABSOLUTE_MAX_RETRIES)],
+            max_retries=1000,  # KONFIGURATSIYA katta son so'raydi
+        )
+
+        outcome = await engine.attempt(
+            plan=plan,
+            ctx=ctx,
+            failed_verifications=[(step, Verification(ok=False, reason="x"))],
+            trust=TrustLevel.OWNER,
+        )
+
+        assert outcome.recovered is False
+        # 1000 EMAS — qattiq shift qancha bo'lsa, shuncha
+        assert outcome.attempts == _ABSOLUTE_MAX_RETRIES
+        assert len(llm.calls) == _ABSOLUTE_MAX_RETRIES
+        assert len(executors) == _ABSOLUTE_MAX_RETRIES
+
+    def test_constructor_clamps_even_smaller_default(self) -> None:
+        """Yordamchi birlik test — `__init__` clamp'i to'g'ridan-to'g'ri."""
+        from zet.core.recovery import _ABSOLUTE_MAX_RETRIES
+
+        engine, _executors, _verifier = _make_engine(
+            _FakeLLM(responses=[]), max_retries=999_999
+        )
+        assert engine._max_retries == _ABSOLUTE_MAX_RETRIES

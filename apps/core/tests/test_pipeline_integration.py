@@ -416,6 +416,57 @@ class TestOrchestratorAutoPersist:
         assert row.command_text == "auto-persist test"
         assert row.status.value == "awaiting_approval"
 
+    async def test_approval_row_also_persisted_not_just_run(
+        self, session: AsyncSession, session_factory, tmp_path: Path
+    ) -> None:
+        """A1 audit (KONSOLIDATSIYA v2): real Postgres'da topilgan
+        `ForeignKeyViolationError` regression testi.
+
+        SQLite ham `PRAGMA foreign_keys=ON` bilan ishlaydi
+        (`db/session.py::_enable_sqlite_foreign_keys`) — shuning uchun bu
+        test REAL Postgres'siz ham FK-tartib xatosini ushlay oladi.
+        Ilgari (fix'dan oldin) `request_approval()` `run` qatoridan OLDIN
+        chaqirilardi — `approval.run_id` FK hali mavjud bo'lmagan `run_id`
+        ga ishora qilardi, real Postgres'da bu doim yiqilardi (SQLite'da
+        esa FK yoqilgan bo'lsa ham xato `session_scope`ning o'zi
+        yutmasdi — chunki bu YANGI aniqlangan gap edi, mavjud testlar
+        buni tekshirmagan).
+        """
+        from sqlalchemy import select
+
+        from zet.api.deps import get_approval_service, get_run_store
+        from zet.db.bootstrap import get_or_create_owner
+        from zet.db.models.security import Approval as ApprovalRow
+
+        await get_or_create_owner(session, external_id="auto-persist-owner2")
+        await session.commit()
+
+        store = RunStore(session_factory=session_factory, owner_external_id="auto-persist-owner2")
+        approvals = ApprovalService(ttl_minutes=30, session_factory=session_factory)
+        orch = _make_orchestrator(
+            session, tmp_path, _approval_script(), run_store=store, approvals=approvals,
+        )
+        client = _client_with({
+            get_orchestrator: lambda: orch,
+            get_run_store: lambda: store,
+            get_approval_service: lambda: approvals,
+        })
+
+        resp = client.post("/api/v1/run", json={"message": "fk order test"})
+        assert resp.status_code == 200
+        data = resp.json()
+        approval_id = uuid.UUID(data["pending_approval_id"])
+
+        async with session_factory() as s:
+            row = (
+                await s.execute(select(ApprovalRow).where(ApprovalRow.id == approval_id))
+            ).scalar_one_or_none()
+
+        assert row is not None, (
+            "Approval qatori DB'da bo'lishi kerak edi — FK-tartib bug qaytdi!"
+        )
+        assert row.run_id == uuid.UUID(data["run_id"])
+
 
 # ══════════════════════════════════════════════════════════════════
 # INTEGRATION TEST 5: F1 — Telegram approval xabari (BLOCK-3 audit gap)
@@ -482,3 +533,92 @@ class TestTelegramApprovalNotification:
         resp = client.post("/api/v1/run", json={"message": "xavfli amal"})
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "awaiting_approval"
+
+
+# ══════════════════════════════════════════════════════════════════
+# INTEGRATION TEST: B3 audit (KONSOLIDATSIYA v2) — suhbat konteksti
+# ketma-ket xabarlar orasida yo'qolmasligi (Telegram context-loss bug)
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestB3ConversationContextAcrossMessages:
+    """B3 — 2 ta ketma-ket xabar: birinchi ma'lumot so'raydi, ikkinchisi
+    "shunga" deb oldingisiga ishora qiladi. To'liq `Orchestrator.start()`
+    zanjiri orqali (Intent → Plan → Executor._think()) LLM'ga yuboriladigan
+    HAR BIR xabar tarixni ko'rishi kerak — faqat javob yozish bosqichi
+    emas (bu allaqachon ishlagan), Intent/Plan bosqichlari ham.
+    """
+
+    async def test_second_message_llm_calls_see_first_turn_context(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        from zet.domain.command import Command, ConversationTurn
+        from zet.domain.enums import MessageRole
+        from zet.domain.enums import RunStatus as _RunStatus
+
+        thinking_step = [
+            {
+                "position": 0,
+                "description": "Javob yoz",
+                "tool_name": None,
+                "permission_required": "read",
+                "trust_context": "owner",
+                "depends_on": [],
+            }
+        ]
+        # Har turn uchun 3 ta LLM chaqiruv: intent → plan → thinking javob.
+        scripted = [
+            fake_response(text="", tool_uses=(_intent_tool_use(),)),
+            fake_response(text="", tool_uses=(_plan_tool_use(thinking_step),)),
+            fake_response(text="Aris AI — shaxsiy AI operatsion tizim."),
+            # 2-turn:
+            fake_response(text="", tool_uses=(_intent_tool_use(),)),
+            fake_response(text="", tool_uses=(_plan_tool_use(thinking_step),)),
+            fake_response(text="Batafsil: Aris AI mustaqil vazifalarni bajaradi."),
+        ]
+        orchestrator = _make_orchestrator(session, tmp_path, scripted)
+        provider = orchestrator._router._providers[_PROVIDER_NAME]  # type: ignore[attr-defined]
+
+        # ── 1-xabar: ma'lumot so'raydi, tarix bo'sh ──────────────────
+        record1 = await orchestrator.start(
+            Command(text="Aris AI haqida ma'lumot ber", history=[])
+        )
+        assert record1.status == _RunStatus.DONE
+        answer1 = record1.result_summary
+        assert answer1 == "Aris AI — shaxsiy AI operatsion tizim."
+        assert len(provider.calls) == 3, "1-turn 3 ta LLM chaqiruv qilishi kerak edi"
+
+        # ── 2-xabar: "shunga" — oldingi almashuvni tarix sifatida uzatamiz
+        #    (aynan `get_telegram_bot()._runner` ConversationStore orqali
+        #    qiladigan narsa — bu yerda qo'lda simulyatsiya qilinadi) ──
+        history_turn2 = [
+            ConversationTurn(role=MessageRole.USER, content="Aris AI haqida ma'lumot ber"),
+            ConversationTurn(role=MessageRole.ASSISTANT, content=answer1),
+        ]
+        record2 = await orchestrator.start(
+            Command(text="shunga batafsilroq ayt", history=history_turn2)
+        )
+        assert record2.status == _RunStatus.DONE
+        assert len(provider.calls) == 6, "2-turn yana 3 ta LLM chaqiruv qilishi kerak edi"
+
+        # B3 ENG MUHIM DALIL: 2-turn'ning INTENT chaqiruvi (4-chaqiruv,
+        # index 3) 1-turn kontekstini ko'rgan — bug ILGARI aynan shu
+        # yerda edi (`command.history` Intent bosqichiga UMUMAN
+        # yetib bormasdi).
+        intent_call_messages = provider.calls[3]["messages"]
+        intent_contents = [m.content for m in intent_call_messages]  # type: ignore[union-attr]
+        assert "Aris AI haqida ma'lumot ber" in intent_contents, (
+            "B3 BUZILDI: 2-xabarning Intent bosqichi 1-xabar kontekstini ko'rmadi"
+        )
+        assert answer1 in intent_contents, (
+            "B3 BUZILDI: 2-xabarning Intent bosqichi 1-javobni ko'rmadi"
+        )
+        # Joriy ("shunga...") xabar tarix orqasida, oxirida keladi
+        assert intent_call_messages[-1].content == "shunga batafsilroq ayt"  # type: ignore[union-attr]
+
+        # Plan bosqichi (5-chaqiruv, index 4) ham xuddi shunday
+        plan_call_messages = provider.calls[4]["messages"]
+        plan_contents = [m.content for m in plan_call_messages]  # type: ignore[union-attr]
+        assert "Aris AI haqida ma'lumot ber" in plan_contents, (
+            "B3 BUZILDI: 2-xabarning Plan bosqichi 1-xabar kontekstini ko'rmadi"
+        )

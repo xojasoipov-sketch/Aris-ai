@@ -1,5 +1,12 @@
 # G-03 — Recovery Engine Wire Gap (investigation + plan, NO code changes)
 
+> **YANGILANISH (2026-08-13, KONSOLIDATSIYA v2):** boss implementatsiyaga
+> ruxsat berdi va D1-D4 (shu jumladan quyida "Approval bypass riski"
+> deb belgilangan KRITIK gap) tuzatildi. To'liq natija:
+> [`docs/KONSOLIDATSIYA_V2_REPORT.md`](./KONSOLIDATSIYA_V2_REPORT.md)
+> (BO'LIM D). Ushbu hujjat TARIXIY tekshiruv sifatida o'zgarishsiz
+> qoldirilgan.
+
 **Holat:** faqat tekshiruv va reja. Hech qanday kod o'zgarishi qilinmagan
 va qilinmaydi — ega o'zi qaror qilishi kerak.
 

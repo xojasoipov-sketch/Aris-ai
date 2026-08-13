@@ -44,7 +44,7 @@ from zet.core.executor import (
 )
 from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.planner import Planner, PlannerError
-from zet.core.recovery import RecoveryEngine
+from zet.core.recovery import RecoveryApprovalRequiredError, RecoveryEngine
 from zet.core.verifier import Verifier
 from zet.domain.command import Command
 from zet.domain.enums import RunStatus, StepStatus, TrustLevel
@@ -320,6 +320,11 @@ class Orchestrator:
                 intent,
                 tool_specs=self._tool_registry.tool_signatures(),
                 run_id=record.run_id,
+                # B3 audit fix (KONSOLIDATSIYA v2): Planner ham suhbat
+                # tarixini ko'rishi kerak — aks holda "shunga qo'shimcha
+                # qadam qo'sh" kabi ergash buyruqlar uchun Intent allaqachon
+                # context'siz bo'lgani, reja ham noaniq chiqadi.
+                history=command.history,
             )
         except (PlannerError, LLMError) as exc:
             record.status = RunStatus.FAILED
@@ -377,30 +382,7 @@ class Orchestrator:
                 dry_run=dry_run,
             )
         except ApprovalRequiredError as exc:
-            approval = self._approvals.request_approval(
-                run_id=record.run_id,
-                step_position=exc.step.position,
-                reason=exc.decision.reason,
-                requested_permission=exc.step.permission_required,
-                tool_name=exc.step.tool_name,
-                preview={"description": exc.step.description},
-            )
-            record.status = RunStatus.AWAITING_APPROVAL
-            record.pending_approval_id = approval.id
-            log.info(
-                "orchestrator.awaiting_approval",
-                run_id=str(record.run_id),
-                approval_id=str(approval.id),
-                step=exc.step.position,
-            )
-            # AR-01 KRITIK CHECKPOINT: aynan shu holat restart'da yo'qolardi.
-            # Endi DB'ga yozib qo'yiladi — startup'da load_pending_runs()
-            # tiklaydi va ega approve URL'ini keyingi sessiyada ham topadi.
-            await self._run_store.persist(record)
-            # F1: egaga Telegram inline tugmali xabar — fail-open (xato
-            # bo'lsa run pauza holatida qoladi, lekin run oqimi buzilmaydi).
-            await self._notify_awaiting_approval(record, exc)
-            return record
+            return await self._handle_approval_required(record, exc)
         except BudgetExhaustedError as exc:
             record.status = RunStatus.FAILED
             record.error = str(exc)
@@ -433,13 +415,24 @@ class Orchestrator:
                 run_id=str(record.run_id),
                 failed_steps=[step.position for step, _ in failed_pairs],
             )
-            outcome = await self._recovery_engine.attempt(
-                plan=record.plan,
-                ctx=ctx,
-                failed_verifications=failed_pairs,
-                trust=trust,
-                approved_steps=record.approved_steps,
-            )
+            try:
+                outcome = await self._recovery_engine.attempt(
+                    plan=record.plan,
+                    ctx=ctx,
+                    failed_verifications=failed_pairs,
+                    trust=trust,
+                    approved_steps=record.approved_steps,
+                )
+            except ApprovalRequiredError as exc:
+                # D1 (KONSOLIDATSIYA v2, MAJBURIY talab): Recovery Engine'ning
+                # HIGH-risk fix qadami HECH QACHON o'zining "men tuzataman"
+                # holatidan foydalanib Approval Engine'ni chetlab o'tolmaydi.
+                # AYNAN oddiy reja qadami kabi — bir umumiy `_handle_approval_
+                # required()` orqali — AWAITING_APPROVAL'ga o'tadi (`exc` bu
+                # yerda oddiy `ApprovalRequiredError` yoki uning `extended_
+                # plan` olib yuruvchi `RecoveryApprovalRequiredError`
+                # kichik turi bo'lishi mumkin — handler ikkalasini ham biladi).
+                return await self._handle_approval_required(record, exc)
             if outcome.recovered:
                 record.plan = outcome.extended_plan
                 record.verified_ok = True
@@ -479,6 +472,79 @@ class Orchestrator:
         # DONE run tiklashga qarab bermaydi (kutmayapti) lekin audit
         # uchun ko'zga tashlab qo'yilishi zarur.
         await self._run_store.persist(record)
+        return record
+
+    async def _handle_approval_required(
+        self, record: RunRecord, exc: ApprovalRequiredError
+    ) -> RunRecord:
+        """`ApprovalRequiredError`ni AWAITING_APPROVAL holatiga aylantiradi.
+
+        NEGA umumlashtirildi (D1 audit, KONSOLIDATSIYA v2): ilgari bu
+        mantiq faqat `_run_plan`ning ASOSIY `executor.execute_plan()`
+        chaqiruvi atrofida bor edi. Recovery Engine'ning HIGH-risk fix
+        qadami ham AYNAN shu yo'ldan o'tishi SHART — ikkita alohida/
+        yengillashtirilgan yo'l qolsa, ular orasidagi kelajakdagi farq
+        o'zi bitta yashirin approval-bypass yo'liga aylanib qolishi
+        mumkin edi. Endi ikkalasi — oddiy mission-qadam VA recovery
+        fix-qadam — BITTA kodni chaqiradi.
+
+        `exc` `RecoveryApprovalRequiredError` bo'lsa (`core/recovery.py`),
+        `extended_plan`ni olib yuradi — tasdiqdan keyingi `resume()` ASL
+        emas, fix qadamlari qo'shilgan TUZATILGAN rejani bajarishi kerak,
+        aks holda ega tasdiqlagan qadam rejada umuman topilmay qoladi.
+        """
+        record.status = RunStatus.AWAITING_APPROVAL
+        if isinstance(exc, RecoveryApprovalRequiredError):
+            record.plan = exc.extended_plan
+            record.steps_total = len(exc.extended_plan.steps)
+
+        # KRITIK TARTIB (A1 audit, real Postgres'da topilgan race'ni
+        # yopadi): `run` qatori DB'ga AVVAL yozilishi SHART, chunki
+        # `approval` jadvali `run_id`ga FK bilan bog'langan
+        # (`fk_approval_run_id_run`). Bu run uchun BIRINCHI DB yozuvi —
+        # PLANNING bosqichida persist chaqirilmaydi. Agar tartib
+        # teskari bo'lsa (avval request_approval, keyin run persist),
+        # ApprovalService._persist() fon vazifasi (create_task,
+        # kutilmaydi) run qatori hali committed bo'lmasdan ishga
+        # tushishi mumkin — natija: `ForeignKeyViolationError:
+        # insert or update on table "approval" violates foreign key
+        # constraint`. SQLite'da bu HECH QACHON ko'rinmaydi (FK
+        # cheklovi default o'chirilgan), faqat real Postgres bilan
+        # sinaganda topildi — aynan shuning uchun A1 (real Postgres
+        # tekshiruvi) unit testlardan ko'proq narsani ochib berdi.
+        await self._run_store.persist(record)
+
+        approval = self._approvals.request_approval(
+            run_id=record.run_id,
+            step_position=exc.step.position,
+            reason=exc.decision.reason,
+            requested_permission=exc.step.permission_required,
+            tool_name=exc.step.tool_name,
+            preview={"description": exc.step.description},
+        )
+        record.pending_approval_id = approval.id
+        log.info(
+            "orchestrator.awaiting_approval",
+            run_id=str(record.run_id),
+            approval_id=str(approval.id),
+            step=exc.step.position,
+            via_recovery=isinstance(exc, RecoveryApprovalRequiredError),
+        )
+        # A1 audit fix: `request_approval()` o'zi ham fire-and-forget
+        # background yozuvni rejalashtiradi (`ApprovalService._persist`),
+        # lekin bu yerda DETERMINISTIK kutamiz — `run` qatori endigina
+        # yozilgan (yuqorida), approval FK shu qatorga bog'lanadi, race
+        # bo'lmasligi kafolatlanishi kerak. Fail-open (persist_pending
+        # ichida xato yutiladi).
+        await self._approvals.persist_pending(approval)
+        # Eslatma: `pending_approval_id` DB'da alohida ustun sifatida
+        # saqlanmaydi (`run` jadvalida bunday maydon yo'q) — restart'dan
+        # keyin `load_pending_approvals()` uni `approval.run_id` orqali
+        # mustaqil topadi (run_checkpoint.py), shuning uchun bu yerda
+        # qayta persist() shart emas.
+        # F1: egaga Telegram inline tugmali xabar — fail-open (xato
+        # bo'lsa run pauza holatida qoladi, lekin run oqimi buzilmaydi).
+        await self._notify_awaiting_approval(record, exc)
         return record
 
     async def _notify_awaiting_approval(

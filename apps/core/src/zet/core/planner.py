@@ -25,8 +25,8 @@ from typing import Any
 
 import structlog
 
-from zet.domain.command import Intent
-from zet.domain.enums import PermissionLevel, TaskClass, TrustLevel
+from zet.domain.command import ConversationTurn, Intent
+from zet.domain.enums import MessageRole, PermissionLevel, TaskClass, TrustLevel
 from zet.domain.plan import Plan, PlanStep, PlanValidationError
 from zet.llm.base import ChatMessage, ToolSpec
 from zet.llm.router import ModelRouter, RouteResult
@@ -37,6 +37,20 @@ log = structlog.get_logger(__name__)
 
 _MAX_REPAIR_ATTEMPTS = 1
 """Noto'g'ri reja bo'lsa, necha marta qayta urinish (repair)."""
+
+
+def _history_to_messages(history: Sequence[ConversationTurn]) -> list[ChatMessage]:
+    """Suhbat tarixini LLM xabarlariga o'giradi (B3 audit, KONSOLIDATSIYA v2).
+
+    `core/intent.py::_history_to_messages` bilan bir xil — alohida
+    nusxa, aylanma bog'liqlik yaratmaslik uchun (izohga qarang)."""
+    return [
+        ChatMessage(
+            role="user" if turn.role == MessageRole.USER else "assistant",
+            content=turn.content,
+        )
+        for turn in history
+    ]
 
 
 class PlannerError(Exception):
@@ -97,6 +111,7 @@ class Planner:
         tool_specs: Sequence[ToolSignature] = (),
         task_class: TaskClass | None = None,
         run_id: uuid.UUID | None = None,
+        history: Sequence[ConversationTurn] = (),
     ) -> Plan:
         """Intent'dan Plan yaratadi.
 
@@ -107,6 +122,11 @@ class Planner:
                 promptda nomlar o'rniga imzolar ko'rsatiladi va majburiy
                 parametrlar tekshiriladi. Berilmasa — eski xatti-harakat.
             task_class: model tanlash uchun sinf (None → intent'dagi qiymat)
+            history: suhbat tarixi (B3 audit, KONSOLIDATSIYA v2) — ergash
+                buyruqlarda ("shunga qo'shimcha qadam qo'sh") LLM oldingi
+                almashuv MATNINI ko'rmasa, `intent.original_text` allaqachon
+                context'siz bo'lgani uchun reja ham noaniq/xato chiqadi.
+                Berilmasa (default bo'sh) — eski xatti-harakat.
 
         Returns:
             Validatsiya qilingan Plan
@@ -134,7 +154,13 @@ class Planner:
         )
 
         user_prompt = self._build_user_prompt(intent)
-        messages = [ChatMessage(role="user", content=user_prompt)]
+        # B3 audit fix: tarix + joriy prompt — bir marta prepend qilinadi,
+        # keyingi repair urinishlari (pastda) shu ro'yxatga qo'shiladi,
+        # ya'ni tarix HAR bir repair chaqiruvida ham ko'rinishda qoladi.
+        messages = [
+            *_history_to_messages(history),
+            ChatMessage(role="user", content=user_prompt),
+        ]
 
         for attempt in range(_MAX_REPAIR_ATTEMPTS + 1):
             route_result = await self._router.complete(

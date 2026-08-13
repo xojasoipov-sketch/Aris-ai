@@ -24,8 +24,11 @@ from zet.automation.goal import GoalRegistry
 from zet.business.pg_crm import PgCRM
 from zet.commerce.repository import CommerceRepository
 from zet.config import Settings, get_settings
+from zet.core.executor import Executor
 from zet.core.orchestrator import Orchestrator, RunStore
+from zet.core.recovery import RecoveryEngine
 from zet.core.state import CoreState
+from zet.core.verifier import Verifier
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
@@ -887,6 +890,64 @@ def _build_verifier_judge(router: ModelRouter) -> object:
     return _VerifierJudgeProvider(router)
 
 
+def _build_recovery_engine(
+    *,
+    router: ModelRouter,
+    tool_registry: ToolRegistry,
+    permission_policy: PermissionPolicy,
+    killswitch: KillSwitchState,
+    budget_usd: float,
+    recall: Callable[[str], Awaitable[list[str]]],
+) -> RecoveryEngine:
+    """PART 6 Recovery Engine quradi — D4 (KONSOLIDATSIYA v2): `Orchestrator`
+    doim `recovery_engine=None` bilan ishga tushirilgan wiring gap'ini yopadi.
+
+    NEGA HOZIRGACHA `None` edi: `RecoveryEngine` (`core/recovery.py`, 47+
+    testi bilan sinalgan, FAIL→DIAGNOSE→FIX→RETRY→VERIFY sikli to'liq
+    implementatsiya qilingan) hech qachon bu yerda QURILMAGAN — natijada
+    PART 6 KOD DARAJASIDA mavjud bo'lsa ham ISHLAB CHIQARISHDA hech qachon
+    chaqirilmagan: har muvaffaqiyatsiz `verify_run` darhol `FAILED`ga
+    o'tgan, ega HECH QANDAY tuzatish urinishini ko'rmagan
+    (AUTONOMY_AUDIT §2.5 talabiga zid).
+
+    LLM provider — Verifier LLM-judge bilan BIR XIL arzon T1_FREE tier
+    (`_build_verifier_judge`) — diagnos chaqiruvi qimmat model talab
+    qilmaydi (`recovery.py`da `max_tokens=600` hardcoded).
+
+    MA'LUM CHEKLOV (documented, D1/D2/D3 xavfsizlik talablariga TA'SIR
+    QILMAYDI): retry executor'ning `command_text`/`history`/`run_id`
+    bo'sh/`None` qoladi, chunki bu funksiya Orchestrator QURILISHI
+    PAYTIDA chaqiriladi — `record` (demak uning `command.text`/`history`/
+    `run_id`) hali mavjud emas (`_run_plan()` bosqichigacha yo'q). Natija:
+    recovery RETRY qadamidagi fikrlash (`_think()`) original suhbat
+    tarixini KO'RMAYDI — javob sifati pasayishi mumkin (lekin NOTO'G'RI
+    emas — bo'sh tarix bilan ishlaydi), xarajat esa CostLedger'da
+    run_id'ga bog'lanmay qoladi (jamlanma summasi baribir to'g'ri).
+    Approval gate va hard-limit'lar (D1/D2/D3) `Executor.policy.check()`
+    va `RecoveryEngine._max_retries` darajasida — kontekstdan MUSTAQIL,
+    shuning uchun bu cheklov xavfsizlikka ta'sir qilmaydi.
+    """
+    judge = _build_verifier_judge(router)
+
+    def _executor_factory() -> Executor:
+        return Executor(
+            registry=tool_registry,
+            policy=permission_policy,
+            killswitch=killswitch,
+            budget_usd=budget_usd,
+            router=router,
+            recall=recall,
+        )
+
+    return RecoveryEngine(
+        llm_provider=judge,  # type: ignore[arg-type]
+        executor_factory=_executor_factory,
+        verifier=Verifier(llm_judge_provider=judge),  # type: ignore[arg-type]
+        audit_fn=_default_audit,
+        tool_names=set(tool_registry.tool_names()),
+    )
+
+
 @lru_cache(maxsize=1)
 def get_capability_registry() -> object:
     """Global CapabilityRegistry (singleton) — builtin capability'lar bilan.
@@ -932,6 +993,17 @@ def get_orchestrator(
         run_timeout_s=settings.run_timeout_s,
         concurrency_semaphore=get_run_semaphore(),
         verifier_judge_provider=_build_verifier_judge(router),
+        # D4 (KONSOLIDATSIYA v2): PART 6 Recovery Engine — ilgari doim
+        # `None` edi (verify FAIL → darhol FAILED, tuzatish urinishisiz).
+        # `_build_recovery_engine()`ning "ma'lum cheklov" izohiga qarang.
+        recovery_engine=_build_recovery_engine(
+            router=router,
+            tool_registry=tool_registry,
+            permission_policy=permission_policy,
+            killswitch=killswitch,
+            budget_usd=settings.run_max_usd,
+            recall=recall,
+        ),
         # F1 (BLOCK-3 audit): AWAITING_APPROVAL'ga o'tganda Telegram inline
         # tugmali xabar. Token/owner sozlanmasa get_notifier() StubNotifier
         # qaytaradi — hech qanday tarmoq chaqiruvi bo'lmaydi (fail-open).
@@ -1155,21 +1227,36 @@ def get_telegram_bot() -> object:
             memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
 
             router = ModelRouter(get_llm_providers(), session, settings)
+            tool_registry = get_tool_registry()
+            permission_policy = get_permission_policy()
+            killswitch = get_killswitch()
+            recall = _build_recall(memory)
             orchestrator = Orchestrator(
                 router=router,
-                tool_registry=get_tool_registry(),
-                permission_policy=get_permission_policy(),
+                tool_registry=tool_registry,
+                permission_policy=permission_policy,
                 approval_service=get_approval_service(),
-                killswitch=get_killswitch(),
+                killswitch=killswitch,
                 run_store=get_run_store(),
                 budget_usd=settings.run_max_usd,
                 max_steps=settings.run_max_steps,
-                recall=_build_recall(memory),
+                recall=recall,
                 audit_fn=_default_audit,
                 mark_verified_fn=_default_mark_verified,
                 run_timeout_s=settings.run_timeout_s,
                 concurrency_semaphore=get_run_semaphore(),
                 verifier_judge_provider=_build_verifier_judge(router),
+                # D4 (KONSOLIDATSIYA v2): Telegram oqimi ham PART 6 recovery
+                # oladi — API va Telegram orasida xatti-harakat farqlanib
+                # qolmasin (get_orchestrator() bilan bir xil wiring).
+                recovery_engine=_build_recovery_engine(
+                    router=router,
+                    tool_registry=tool_registry,
+                    permission_policy=permission_policy,
+                    killswitch=killswitch,
+                    budget_usd=settings.run_max_usd,
+                    recall=recall,
+                ),
             )
 
             command = Command(text=text, channel="telegram", history=history)
@@ -1214,16 +1301,32 @@ def get_telegram_bot() -> object:
             owner = await get_or_create_owner(session, external_id=settings.owner_id)
             memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
             router = ModelRouter(get_llm_providers(), session, settings)
+            tool_registry = get_tool_registry()
+            permission_policy = get_permission_policy()
+            killswitch = get_killswitch()
+            recall = _build_recall(memory)
             orchestrator = Orchestrator(
                 router=router,
-                tool_registry=get_tool_registry(),
-                permission_policy=get_permission_policy(),
+                tool_registry=tool_registry,
+                permission_policy=permission_policy,
                 approval_service=approvals,
-                killswitch=get_killswitch(),
+                killswitch=killswitch,
                 run_store=get_run_store(),
                 budget_usd=settings.run_max_usd,
                 max_steps=settings.run_max_steps,
-                recall=_build_recall(memory),
+                recall=recall,
+                # D4 (KONSOLIDATSIYA v2): `resume()` — masalan owner
+                # Recovery Engine'ning HIGH-risk fix qadamini tasdiqlagandan
+                # keyin — ham PART 6 recovery zanjiriga ega bo'lishi kerak
+                # (bir xil wiring, `get_orchestrator()`/`_runner` bilan mos).
+                recovery_engine=_build_recovery_engine(
+                    router=router,
+                    tool_registry=tool_registry,
+                    permission_policy=permission_policy,
+                    killswitch=killswitch,
+                    budget_usd=settings.run_max_usd,
+                    recall=recall,
+                ),
             )
 
             try:

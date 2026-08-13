@@ -189,6 +189,15 @@ class ApprovalService:
         Sync interfeys API bilan mos (request_approval/approve/reject
         sync); async persist background task sifatida rejalashtiriladi.
         Event loop bo'lmasa (test) — silent skip.
+
+        DIQQAT (A1 audit, real Postgres'da topilgan race): bu fire-and-
+        forget yo'l `request_approval()` chaqirilgan zahoti hali `run`
+        qatori DB'ga yozilmagan bo'lsa `ForeignKeyViolationError` xavfini
+        tug'diradi. Shu sabab `Orchestrator._run_plan()` bu background
+        yo'lga tayanmaydi — buning o'rniga `persist_pending()` ni
+        to'g'ridan-to'g'ri KUTADI (deterministik tartib). `_persist()`
+        faqat `approve()`/`reject()` uchun qoladi — ular chaqirilganda
+        run+approval allaqachon uzoq vaqtdan beri DB'da, race xavfi yo'q.
         """
         if self._session_factory is None:
             return
@@ -201,6 +210,23 @@ class ApprovalService:
             # yaratib bo'lmaydi. Test'lar bunday chaqirmaydi.
             return
         loop.create_task(persist_approval(self._session_factory, req))
+
+    async def persist_pending(self, req: ApprovalRequest) -> None:
+        """`req`ni DB'ga DETERMINISTIK yozadi — chaqiruvchi to'g'ridan-to'g'ri
+        kutadi (A1 audit fix).
+
+        `request_approval()` yaratgan so'rovni fire-and-forget'ga
+        tashlamasdan, aynan shu chaqiruv paytida yozib qo'yish kerak
+        bo'lgan joylar (masalan `Orchestrator._run_plan()`, run qatori
+        endigina yozilgan, keyingi qadam approval FK'siga bog'liq) uchun.
+        Fail-open — `session_factory=None` bo'lsa yoki DB xato bersa run
+        oqimi baribir davom etadi (persist_approval o'zi ichida yutadi).
+        """
+        if self._session_factory is None:
+            return
+        from zet.core.run_checkpoint import persist_approval
+
+        await persist_approval(self._session_factory, req)
 
     def request_approval(
         self,
@@ -244,8 +270,20 @@ class ApprovalService:
             permission=requested_permission.value,
             tool=tool_name,
         )
-        # AR-01 KRITIK: restart'da approval yo'qolmasin.
-        self._persist(req)
+        # AR-01: restart'da approval yo'qolmasin — LEKIN bu yerda avtomatik
+        # fire-and-forget YO'Q (A1 audit fix, KONSOLIDATSIYA v2). Sabab:
+        # `request_approval()`ni chaqirgan kod (masalan `Orchestrator.
+        # _run_plan()`) odatda `run` qatorini AYNAN shu payt yozib
+        # bo'lgan — agar bu yerda ham fon vazifasi ishga tushirilsa, u
+        # chaqiruvchining o'z ochiq `persist_pending()` chaqiruvi bilan
+        # BIR XIL `id`ga INSERT urinib, `UNIQUE constraint failed`
+        # (yoki Postgres'da shunga mos xato) berardi — ikkalasi ham
+        # "existing yo'q" deb topib, ikkalasi ham INSERT qilishga
+        # urinardi. Chaqiruvchi durability kerak bo'lsa `persist_pending()`
+        # ni ochiq kutishi kerak (`Orchestrator` shunday qiladi).
+        # `approve()`/`reject()` esa hali ham o'z fon vazifasini saqlaydi
+        # — ular chaqirilganda approval allaqachon uzoq vaqtdan beri
+        # DB'da (yoki umuman yo'q — mission-level holatda), race xavfi yo'q.
         return req
 
     def get(self, approval_id: uuid.UUID) -> ApprovalRequest:

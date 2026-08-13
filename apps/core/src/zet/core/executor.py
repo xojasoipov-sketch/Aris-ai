@@ -66,6 +66,36 @@ _MAX_RETRIES = 2
 """Xatoli qadam uchun maksimal qayta urinish (faqat idempotent toollar)."""
 
 
+def _format_tool_output(output: object) -> str:
+    """Tool natijasini foydalanuvchiga ko'rsatish uchun formatlaydi (B2 audit,
+    KONSOLIDATSIYA v2).
+
+    NEGA kerak: ILGARI shu joyda `str(tool_result.output)` chaqirilardi —
+    agar oxirgi bajarilgan qadam tool-qadam bo'lsa va undan keyin hech
+    qanday fikrlash (`_think()`) qadami bo'lmasa (masalan
+    `telegram.channel_stats` kabi ma'lumot so'rovi bilan tugaydigan
+    reja), bu xom Python natijasi `_build_answer()` orqali TO'G'RIDAN-
+    TO'G'RI eganing Telegram xabariga chiqib ketardi:
+    `{'chat_id': -1003198169639, 'title': '...', 'description': '...'}`.
+    Bundan tashqari, `str(dict)` Python `repr()` qoidalari bilan ichki
+    qatorlarni ESCAPED `\\n` (ikkita belgi: backslash + n) ko'rinishida
+    chiqaradi — HAQIQIY qator ko'chirish (0x0A) EMAS. Telegram HTML
+    parse_mode literal backslash-n'ni hech narsa deb tushunmaydi, shuning
+    uchun ega ekranida aynan shu ikki belgi ko'rinadi.
+
+    Bu funksiya ikkalasini ham yopadi: (1) hech qachon `{'k': 'v'}`
+    Python-repr sintaksisi chiqmaydi, (2) ko'p qiymatli natija HAQIQIY
+    `\\n` (0x0A) bilan qo'shiladi — Telegram buni chinakam qator
+    ko'chirish deb ko'rsatadi.
+    """
+    if isinstance(output, dict):
+        lines = [f"{k}: {v}" for k, v in output.items() if not str(k).startswith("_")]
+        return "\n".join(lines)
+    if isinstance(output, list):
+        return "\n".join(str(item) for item in output)
+    return "" if output is None else str(output)
+
+
 def _history_to_messages(history: Sequence[ConversationTurn]) -> list[ChatMessage]:
     """Domen tarixini LLM xabarlariga o'giradi.
 
@@ -132,7 +162,7 @@ class StepResult:
         if self.output:
             return self.output
         if self.tool_result is not None and self.tool_result.success:
-            return str(self.tool_result.output)
+            return _format_tool_output(self.tool_result.output)
         return ""
 
 

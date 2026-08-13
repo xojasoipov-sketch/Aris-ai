@@ -30,6 +30,20 @@ class Approval(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     step_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("step.id", ondelete="SET NULL"), default=None
     )
+    """`step` jadvaliga FK — HOZIRCHA doim NULL, chunki hech qanday kod
+    `step` jadvaliga yozmaydi (Executor qadam bajarilishini faqat
+    xotirada, `ExecutionContext.results`da kuzatadi — DB'ga yozilmaydi).
+    To'liq per-step DB persistence — alohida, katta ish (Task #57 ruhida).
+    Shu sabab quyidagi `step_position` ustuni qo'shildi — u mavjud
+    `Executor`/`ApprovalRequest` domenidagi `step_position: int` bilan
+    to'g'ridan-to'g'ri mos, `step` jadvaliga bog'liq emas."""
+
+    step_position: Mapped[int | None] = mapped_column(default=None)
+    """Reja ichidagi qadam pozitsiyasi (`PlanStep.position`/
+    `ApprovalRequest.step_position` bilan mos, B1 audit — KONSOLIDATSIYA
+    v2). `step_id`dan FARQLI — bu oddiy int, `step` jadvaliga FK EMAS,
+    shuning uchun `step` jadvali bo'sh bo'lsa ham restart'dan keyin
+    "aynan qaysi qadam tasdiq kutayotgan edi" ma'lumoti saqlanadi."""
 
     reason: Mapped[str] = mapped_column(Text)
     requested_permission: Mapped[PermissionLevel] = mapped_column()

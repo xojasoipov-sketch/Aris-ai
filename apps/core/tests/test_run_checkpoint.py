@@ -103,6 +103,7 @@ async def test_approval_persist_then_load_restores_pending(
     svc1 = ApprovalService(ttl_minutes=30)
     req = svc1.request_approval(
         run_id=record.run_id,
+        step_position=2,  # B1 audit fix — restart'dan keyin ham saqlanishi kerak
         reason="test approval",
         requested_permission=PermissionLevel.WRITE,
         tool_name="test.tool",
@@ -123,6 +124,9 @@ async def test_approval_persist_then_load_restores_pending(
     assert tiklangan.reason == "test approval"
     assert tiklangan.tool_name == "test.tool"
     assert tiklangan.preview == {"key": "value"}
+    assert tiklangan.step_position == 2, (
+        "B1 audit fix: step_position restart'dan keyin yo'qolmasligi kerak"
+    )
 
 
 async def test_expired_approvals_not_restored(
@@ -208,3 +212,48 @@ async def test_fail_open_when_db_unreachable() -> None:
     # Load ham fail-open
     result = await load_pending_runs(_BrokenFactory(), store)  # type: ignore[arg-type]
     assert result == 0
+
+
+async def test_mission_level_approval_skipped_gracefully(
+    session_factory: async_sessionmaker[AsyncSession],
+    session: AsyncSession,
+) -> None:
+    """A1 audit (KONSOLIDATSIYA v2) topgan tizimli gap: mission-darajali
+    approval'lar (`run_id=mission.id`, haqiqiy `run` qatorisiz) DOIM FK
+    xatosiga uchraydi, chunki `approval.run_id` `run.id`ga NOT NULL FK.
+
+    Bu funksiya endi bunday holatni OLDINDAN aniqlab, istisnosiz va aniq
+    log bilan o'tkazib yuboradi — real DB xatolaridan farqlanadi.
+
+    ESLATMA: bu FIX EMAS (mission-approval hali ham DB'da saqlanmaydi —
+    faqat xotirada). To'liq yechim — `approval.run_id`ni nullable qilish
+    (Alembic migratsiya) — keyingi bosqich."""
+    import uuid
+
+    from zet.core.run_checkpoint import persist_approval
+    from zet.domain.enums import PermissionLevel
+
+    mission_id = uuid.uuid4()  # HECH QACHON run jadvalida bo'lmaydi
+    svc = ApprovalService(ttl_minutes=30)
+    req = svc.request_approval(
+        run_id=mission_id,
+        mission_id=mission_id,
+        reason="mission-level test",
+        requested_permission=PermissionLevel.WRITE,
+        preview={},
+    )
+
+    # ISTISNO KO'TARILMASLIGI KERAK (fail-open, endi FK xatosigacha
+    # yetib bormaydi — oldindan tekshiruv bilan)
+    await persist_approval(session_factory, req)
+
+    # DB'da yozuv YO'Q (kutilgan — mission-approval hali durable emas)
+    from sqlalchemy import select
+
+    from zet.db.models.security import Approval as ApprovalRow
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(select(ApprovalRow).where(ApprovalRow.id == req.id))
+        ).scalar_one_or_none()
+    assert row is None, "Kutilmagan — mission-approval hali DB'ga yozilmasligi kerak"

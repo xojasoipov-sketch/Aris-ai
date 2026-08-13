@@ -32,10 +32,12 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from zet.core.executor import ApprovalRequiredError
 from zet.domain.enums import PermissionLevel, TrustLevel
 from zet.domain.plan import Plan, PlanStep, PlanValidationError
 from zet.domain.tool import ToolResult, Verification
 from zet.llm.base import ChatMessage, LLMError
+from zet.security.permissions import PermissionDecision
 
 if TYPE_CHECKING:
     from zet.core.executor import ExecutionContext, Executor
@@ -51,6 +53,20 @@ NEGA aynan 2: Executor'ning `_MAX_RETRIES` bilan bir xil — arzon LLM
 chaqiruvi va tuzatish qadami xarajati nazorat ostida bo'lsin. Uchtadan
 ko'p urinish deyarli hech qachon boshqa natija bermaydi (jonli
 kuzatuv), lekin budjetni behuda yeyadi."""
+
+_ABSOLUTE_MAX_RETRIES: int = 5
+"""D3 audit (KONSOLIDATSIYA v2) — SO'NGGI qattiq shift, `__init__`dagi
+`max_retries` argumentidan MUSTAQIL.
+
+NEGA kerak: `max_retries: int = MAX_RETRIES` parametri chaqiruvchiga
+(masalan kelajakda `Settings`dan o'qiladigan konfiguratsiya) katta son
+uzatish imkonini beradi. `MAX_RETRIES=2` — ishlatiladigan amaldagi
+default, lekin bu o'zi hech kimni cheklamaydi (faqat default qiymat).
+Cheksiz retry loop imkonsizligini KOD DARAJASIDA (konfiguratsiya bilan
+chetlab o'tib bo'lmaydigan tarzda) kafolatlash uchun `__init__` har doim
+`min(max_retries, _ABSOLUTE_MAX_RETRIES)` qiladi — hech qanday argument
+bu sonni oshira olmaydi. Test: `test_absolute_ceiling_cannot_be_exceeded`
+(`test_recovery.py`)."""
 
 DIAGNOSIS_MAX_OUTPUT_CHARS: int = 4000
 """LLM'ga uzatiladigan tool chiqishining maksimal uzunligi.
@@ -92,6 +108,27 @@ class DiagnosisParseError(RecoveryEngineError):
     LLM javob butun urinishni yiqitmasin, faqat shu urinish attempts
     hisoblagichini bir kamaytirsin. Aks holda buzilgan LLM cheksiz T1
     chaqiruv yeydi."""
+
+
+class RecoveryApprovalRequiredError(ApprovalRequiredError):
+    """D1 audit (KONSOLIDATSIYA v2, MAJBURIY talab) — recovery fix qadami
+    HIGH-risk bo'lib chiqdi, Executor'ning oddiy approval darvozasi
+    ko'targan.
+
+    NEGA alohida tur kerak (oddiy `ApprovalRequiredError` emas): tasdiqdan
+    keyin `Orchestrator.resume()` ASL emas, TUZATILGAN (fix qadamlari
+    qo'shilgan) rejani bajarishi kerak — aks holda ega tasdiqlagan qadam
+    umuman bajarilmay qoladi (rejada yo'q). `extended_plan` shu ma'lumotni
+    olib yuradi; `Orchestrator._handle_approval_required` uni ko'rib
+    `record.plan`ni yangilaydi. `isinstance(exc, ApprovalRequiredError)`
+    baribir True qoladi — Orchestrator'ning umumiy `except
+    ApprovalRequiredError` handleri ikkalasini ham bir xil ushlaydi."""
+
+    def __init__(
+        self, step: PlanStep, decision: PermissionDecision, *, extended_plan: Plan
+    ) -> None:
+        super().__init__(step, decision)
+        self.extended_plan = extended_plan
 
 
 @dataclass(frozen=True)
@@ -155,13 +192,22 @@ class RecoveryEngine:
 
     Invariantlar (Master Spec PART 6):
         - MAX_RETRIES chegarasi qattiq — hech bir yo'l undan oshib
-          o'tolmaydi (`range(max_retries)` sikli)
+          o'tolmaydi (`range(max_retries)` sikli), va `_ABSOLUTE_MAX_
+          RETRIES` konstruktor argumentidan MUSTAQIL qattiq shift beradi
+          (D3 audit, KONSOLIDATSIYA v2 — konfiguratsiya bu sonni oshira
+          olmaydi)
         - Kirish `Plan` HECH QACHON mutatsiya qilinmaydi — yangi frozen
           instansi yaratiladi
         - Har T1_FREE chaqiruv chegaralangan (max_tokens ~600, kesilgan
           kontekst) — recovery narxi O(MAX_RETRIES * arzon chaqiruv)
         - `attempt()` exhaust'da ISTISNO KO'TARMAYDI — Orchestrator error
           path'i bitta shoxli qoladi (PART 8 halol yiqilish)
+        - `attempt()` HIGH-risk fix qadamida `RecoveryApprovalRequiredError`
+          KO'TARADI (D1 audit, KONSOLIDATSIYA v2, MAJBURIY) — Recovery
+          Engine hech qachon o'zining "men tuzataman" holatidan foydalanib
+          Approval Engine'ni chetlab o'tolmaydi; LOW/MEDIUM-risk fix
+          qadamlari esa Executor'ning oddiy avtomatik yo'lidan
+          (approval kerak emas) o'tadi (D2)
     """
 
     def __init__(
@@ -199,7 +245,11 @@ class RecoveryEngine:
         self._llm = llm_provider
         self._executor_factory = executor_factory
         self._verifier = verifier
-        self._max_retries = max(0, int(max_retries))
+        # D3 audit fix (KONSOLIDATSIYA v2): `_ABSOLUTE_MAX_RETRIES` — hech
+        # qanday chaqiruvchi (konfiguratsiya, kelajakdagi Settings
+        # maydoni, test) bu sonni oshira olmaydi. `max(0, ...)` — manfiy
+        # qiymat himoyasi (avvalgidek).
+        self._max_retries = min(max(0, int(max_retries)), _ABSOLUTE_MAX_RETRIES)
         self._audit_fn = audit_fn
         self._tool_names = tool_names
 
@@ -221,13 +271,20 @@ class RecoveryEngine:
             failed_verifications: FAIL bo'lgan `(step, verification)`
                 juftliklari (Orchestrator yig'ib beradi).
             trust: Recovery bajarilish trust darajasi.
-            approved_steps: Oldindan tasdiqlangan qadamlar; recovery
-                qadamlari ular ustiga qo'shiladi (READ tuzatishlari
-                oddiy holda approval talab qilmaydi).
+            approved_steps: Oldindan tasdiqlangan qadamlar. D1 audit fix
+                (KONSOLIDATSIYA v2): yangi fix qadamlar bu to'plamga
+                QO'SHILMAYDI — har biri Executor'ning o'z ichki
+                `policy.check()` darvozasidan o'tadi (pastga qarang).
 
         Returns:
             `RecoveryOutcome` — hech qachon `RecoveryExhaustedError`
             ko'tarmaydi.
+
+        Raises:
+            RecoveryApprovalRequiredError: bir fix qadam HIGH-risk deb
+                baholandi (D1, MAJBURIY) — Orchestrator buni ushlab
+                AWAITING_APPROVAL'ga o'tkazishi SHART, hech qachon
+                yutib yubormasligi kerak.
         """
         # Defensive: bo'sh kirish — hech qanday tuzatish kerak emas
         if not failed_verifications:
@@ -320,12 +377,42 @@ class RecoveryEngine:
                 )
                 continue
 
-            new_positions = {
+            # D1 audit fix (KONSOLIDATSIYA v2, MAJBURIY talab): ILGARI shu
+            # yerda `approved = approved | new_positions` bo'lardi — bu
+            # LLM taklif qilgan BARCHA yangi fix qadamni ko'r-ko'rona
+            # oldindan tasdiqlangan deb belgilardi, HAQIQIY risk darajasidan
+            # QAT'I NAZAR. Natija: `file.delete`/`network.request`/
+            # `config.modify` kabi HIGH-risk fix qadami ham Executor'ning
+            # approval darvozasini (`step.position not in ctx.approved_
+            # steps`) bypass qilardi — bu aynan V-32'ning MUTLAQO
+            # taqiqlagan holati (Recovery Engine "men tuzataman" deb
+            # Approval Engine'ni chetlab o'tishi).
+            #
+            # ENDI: yangi fix qadamlar `approved`ga UMUMAN QO'SHILMAYDI.
+            # `approved` faqat CHAQIRUVCHIDAN kelgan (asl rejaning oldindan
+            # tasdiqlangan qadamlari) holicha qoladi. Buning o'rniga har
+            # bir yangi qadam quyida Executor'ning O'ZINING ICHKI
+            # `policy.check()` darvozasidan — AYNAN oddiy reja qadami kabi
+            # — o'tadi:
+            #   - LOW/MEDIUM risk (masalan READ, yoki auto_approve_write=
+            #     True bo'lgan WRITE) → `decision.needs_approval=False` →
+            #     `approved_steps`da bo'lish-bo'lmasligidan qat'i nazar
+            #     AVTOMATIK bajariladi (D2).
+            #   - HIGH_RISK_TOOLS yoki EXECUTE/ADMIN → `decision.
+            #     needs_approval=True` va pozitsiya `approved`da yo'q →
+            #     `ApprovalRequiredError` TABIIY tarzda ko'tariladi —
+            #     quyida ushlanadi va `RecoveryApprovalRequiredError`
+            #     sifatida TASHQARIGA chiqariladi (D1).
+            new_positions = sorted(
                 s.position
                 for s in extended_plan.steps
                 if s.position not in {orig.position for orig in plan.steps}
-            }
-            approved = approved | new_positions
+            )
+            log.debug(
+                "recovery.fix_steps_added",
+                attempt=attempt_no,
+                new_positions=new_positions,
+            )
 
             # 4. RETRY — yangi Executor bilan kengaytirilgan rejani
             #    ishga tushiramiz. Har urinish yangi Executor oladi
@@ -337,8 +424,35 @@ class RecoveryEngine:
                     approved_steps=approved,
                     trust=trust,
                 )
+            except ApprovalRequiredError as exc:
+                # D1 (MAJBURIY): fix qadami HIGH-risk — Recovery Engine
+                # BU YERDA TO'XTAYDI va istisnoni tashqariga chiqaradi.
+                # Orchestrator buni oddiy mission-qadam approval'i kabi
+                # AWAITING_APPROVAL'ga aylantiradi (`_handle_approval_
+                # required`). Recovery loop davom ETMAYDI — qolgan
+                # urinishlar (agar bo'lsa) ega tasdig'idan KEYIN, yangi
+                # `resume()` chaqiruvida qayta boshlanadi.
+                log.warning(
+                    "recovery.fix_step_requires_approval",
+                    attempt=attempt_no,
+                    step=exc.step.position,
+                    tool=exc.step.tool_name,
+                    reason=exc.decision.reason,
+                )
+                await self._emit_audit(
+                    event="recovery.fix_requires_approval",
+                    detail={
+                        "attempt": attempt_no,
+                        "step": exc.step.position,
+                        "tool": exc.step.tool_name or "",
+                        "reason": exc.decision.reason[:200],
+                    },
+                )
+                raise RecoveryApprovalRequiredError(
+                    exc.step, exc.decision, extended_plan=extended_plan
+                ) from exc
             except Exception as exc:
-                # Executor darajasidagi istisno (budjet, killswitch, approval)
+                # Executor darajasidagi boshqa istisno (budjet, killswitch)
                 # — recovery bu yerda to'xtaydi va halol yiqiladi.
                 log.warning("recovery.executor_failed", attempt=attempt_no, error=str(exc))
                 last_verification = Verification(
@@ -703,6 +817,7 @@ __all__ = [
     "AuditFn",
     "Diagnosis",
     "DiagnosisParseError",
+    "RecoveryApprovalRequiredError",
     "RecoveryEngine",
     "RecoveryEngineError",
     "RecoveryExhaustedError",

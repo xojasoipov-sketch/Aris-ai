@@ -160,9 +160,42 @@ async def persist_approval(
     """ApprovalRequest'ni `approval` jadvaliga UPSERT qiladi (fail-open).
 
     Har `request_approval()`/`approve()`/`reject()`/`check_expired()`
-    dan keyin chaqiriladi. Idempotent."""
+    dan keyin chaqiriladi. Idempotent.
+
+    MA'LUM CHEKLOV (A1 audit, real Postgres'da topilgan): `approval.run_id`
+    ustuni `run.id`ga FK (NOT NULL). Mission-darajali so'rovlar
+    (`MissionEngine.request_approval`) `run_id=mission.id` beradi — bu
+    UUID `run` jadvalida HECH QACHON bo'lmaydi (mission haqiqiy Run emas).
+    Bunday holatda INSERT DOIM `ForeignKeyViolationError` bilan yiqiladi.
+    Avval bu xato SQLAlchemyError sifatida yutilardi va "persist_failed"
+    warning yozardi — go'yo tasodifiy DB xatosi bo'lgandek, aslida esa
+    HAR SAFAR takrorlanadigan, kutilgan holat edi. Endi run mavjudligini
+    OLDINDAN tekshiramiz va aniq log bilan o'tkazib yuboramiz — real
+    tasodifiy xatolardan (masalan tarmoq uzilishi) farqlanishi uchun.
+    TO'LIQ YECHIM (keyingi bosqich): `approval.run_id`ni nullable qilish +
+    mission-level approval'lar uchun alohida saqlash yo'li — bu Alembic
+    migratsiya talab qiladi, shu funksiya darajasida hal qilinmaydi.
+    """
     try:
         async with session_scope(session_factory) as session:
+            run_exists = (
+                await session.execute(
+                    select(RunRow.id).where(RunRow.id == request.run_id)
+                )
+            ).scalar_one_or_none()
+            if run_exists is None:
+                log.info(
+                    "approval.persist_skipped_no_backing_run",
+                    approval_id=str(request.id),
+                    run_id=str(request.run_id),
+                    mission_id=(
+                        str(request.mission_id)
+                        if getattr(request, "mission_id", None)
+                        else None
+                    ),
+                )
+                return
+
             existing = (
                 await session.execute(
                     select(ApprovalRow).where(ApprovalRow.id == request.id)
@@ -170,13 +203,17 @@ async def persist_approval(
             ).scalar_one_or_none()
 
             if existing is None:
-                # INSERT — `step_id` domen modelda yo'q (ApprovalRequest
-                # `step_position` int'ni ishlatadi, bu DB modeli esa UUID
-                # `step_id`ni). Buni None qoldiramiz — restore uchun kifoya.
+                # INSERT — `step_id` (UUID, `step` jadvaliga FK) doim None:
+                # `step` jadvali hech qachon to'ldirilmaydi. `step_position`
+                # (B1 audit fix, migratsiya 0010) esa ApprovalRequest'ning
+                # `step_position: int`ini to'g'ridan-to'g'ri saqlaydi —
+                # FK'ga bog'liq emas, shuning uchun restart'dan keyin ham
+                # "aynan qaysi reja qadami" ma'lumoti yo'qolmaydi.
                 row = ApprovalRow(
                     id=request.id,
                     run_id=request.run_id,
                     step_id=None,
+                    step_position=request.step_position,
                     tool_name=request.tool_name,
                     reason=request.reason,
                     requested_permission=request.requested_permission,
@@ -193,10 +230,10 @@ async def persist_approval(
                 existing.decided_at = request.decided_at
                 existing.decision_note = request.decision_note
     except SQLAlchemyError:
-        log.warning("approval.persist_failed", approval_id=str(request.id))
+        log.warning("approval.persist_failed", approval_id=str(request.id), exc_info=True)
     except Exception:
         log.warning(
-            "approval.persist_failed_unexpected", approval_id=str(request.id)
+            "approval.persist_failed_unexpected", approval_id=str(request.id), exc_info=True
         )
 
 
@@ -223,12 +260,14 @@ async def load_pending_approvals(
             ).scalars().all()
 
             for row in rows:
-                # ApprovalRequest'ni direct field'lar bilan qurish
-                # (step_id UUID → step_position None, chunki domen
-                # int position ishlatadi va DB'da saqlamadik).
+                # ApprovalRequest'ni direct field'lar bilan qurish.
+                # B1 audit fix: `step_position` endi haqiqiy qiymatdan
+                # tiklanadi (migratsiya 0010'dan oldin yozilgan eski
+                # qatorlarda ustun NULL bo'ladi — bu holatda None qoladi,
+                # fail-open, xato ko'tarilmaydi).
                 req = ApprovalRequest(
                     run_id=row.run_id,
-                    step_position=None,
+                    step_position=row.step_position,
                     reason=row.reason,
                     requested_permission=row.requested_permission,
                     tool_name=row.tool_name,

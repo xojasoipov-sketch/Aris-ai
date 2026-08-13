@@ -27,6 +27,7 @@ from zet.core.executor import (
     ApprovalRequiredError,
     BudgetExhaustedError,
     Executor,
+    StepResult,
 )
 from zet.domain.enums import PermissionLevel, StepStatus, TrustLevel
 from zet.domain.plan import Plan, PlanStep
@@ -795,3 +796,107 @@ class TestExecutorBudgetBetweenBatches:
         # (`execute_plan` bosqichdagi barcha qadamlarni FAILEDga o'tkazadi)
         # Va uning xatosi "Budjet tugadi".
         # ctx qaytmaydi (raise), lekin executor.spent_usd tasdiqladik.
+
+
+class TestStepResultTextFormatting:
+    """B2 audit (KONSOLIDATSIYA v2) — `StepResult.text` xom Python
+    dict/list chiqishini foydalanuvchiga hech qachon oqizmasligi kerak.
+
+    Bug: agar oxirgi bajarilgan qadam tool-qadam bo'lsa va undan keyin
+    fikrlash (`_think()`) qadami bo'lmasa, `str(tool_result.output)`
+    (Python repr) to'g'ridan-to'g'ri eganing Telegram xabariga chiqib
+    ketardi — masalan `{'chat_id': -1003198169639, ...}` va ichidagi
+    haqiqiy qator ko'chirishlar escaped `\\n` (backslash+n) ko'rinishida.
+    """
+
+    def test_dict_output_never_leaks_python_repr_syntax(self) -> None:
+        from zet.domain.tool import ToolResult
+
+        step = PlanStep(
+            position=0,
+            description="Kanal statistikasi",
+            tool_name="telegram.channel_stats",
+            permission_required=PermissionLevel.READ,
+        )
+        result = StepResult(
+            step,
+            status=StepStatus.DONE,
+            tool_result=ToolResult(
+                tool_name="telegram.channel_stats",
+                success=True,
+                output={
+                    "chat_id": -1003198169639,
+                    "title": "Test kanal",
+                    "description": "birinchi qator\nikkinchi qator",
+                },
+            ),
+        )
+
+        text = result.text
+
+        # Python dict-repr sintaksisi hech qachon chiqmasligi kerak
+        assert "{'" not in text
+        assert "}" not in text
+        # Haqiqiy qator ko'chirish (0x0A) bor — escaped "\\n" (backslash+n) EMAS
+        assert "birinchi qator\nikkinchi qator" in text
+        assert "\\n" not in text
+        # Qiymatlar baribir o'qiladi
+        assert "chat_id: -1003198169639" in text
+        assert "title: Test kanal" in text
+
+    def test_list_output_joined_with_real_newlines(self) -> None:
+        from zet.domain.tool import ToolResult
+
+        step = PlanStep(
+            position=0,
+            description="Ro'yxat",
+            tool_name="test.list",
+            permission_required=PermissionLevel.READ,
+        )
+        result = StepResult(
+            step,
+            status=StepStatus.DONE,
+            tool_result=ToolResult(
+                tool_name="test.list", success=True, output=["birinchi", "ikkinchi"]
+            ),
+        )
+
+        assert result.text == "birinchi\nikkinchi"
+
+    def test_plain_string_output_unchanged(self) -> None:
+        from zet.domain.tool import ToolResult
+
+        step = PlanStep(
+            position=0,
+            description="Matn",
+            tool_name="test.text",
+            permission_required=PermissionLevel.READ,
+        )
+        result = StepResult(
+            step,
+            status=StepStatus.DONE,
+            tool_result=ToolResult(tool_name="test.text", success=True, output="oddiy matn"),
+        )
+
+        assert result.text == "oddiy matn"
+
+    def test_thinking_output_still_takes_priority(self) -> None:
+        """`.output` (fikrlash qadami) bor bo'lsa — formatlash umuman chaqirilmaydi."""
+        from zet.domain.tool import ToolResult
+
+        step = PlanStep(
+            position=0,
+            description="Fikrla",
+            tool_name="telegram.channel_stats",
+            permission_required=PermissionLevel.READ,
+        )
+        result = StepResult(
+            step,
+            status=StepStatus.DONE,
+            output="LLM yozgan tabiiy javob",
+            tool_result=ToolResult(
+                tool_name="telegram.channel_stats", success=True, output={"chat_id": -1}
+            ),
+        )
+
+        assert result.text == "LLM yozgan tabiiy javob"

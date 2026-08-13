@@ -430,3 +430,44 @@ class TestPlanner:
 
         assert len(plan.steps) == 4
         assert plan.steps[3].depends_on == [1, 2]
+
+
+class TestB3ConversationHistoryThreaded:
+    """B3 audit (KONSOLIDATSIYA v2) — Planner ham `history`ni ko'rishi
+    kerak, aks holda ergash buyruqdan chiqqan (allaqachon noaniq)
+    Intent asosida reja tuziladi va tarix umuman yo'q bo'lib qoladi."""
+
+    async def test_history_included_in_llm_messages(self, session: AsyncSession) -> None:
+        from zet.domain.command import ConversationTurn
+        from zet.domain.enums import MessageRole
+
+        provider = _fake(scripted=[fake_response(text="", tool_uses=(_plan_tool_use(),))])
+        planner = _make_planner(session, provider)
+
+        history = [
+            ConversationTurn(role=MessageRole.USER, content="Aris AI haqida ma'lumot ber"),
+            ConversationTurn(
+                role=MessageRole.ASSISTANT,
+                content="Aris AI — shaxsiy AI operatsion tizim.",
+            ),
+        ]
+        await planner.plan(
+            _simple_intent(text="shunga batafsilroq ayt"),
+            available_tools=["time.now", "note.write"],
+            history=history,
+        )
+
+        assert len(provider.calls) == 1
+        sent_messages = provider.calls[0]["messages"]
+        contents = [m.content for m in sent_messages]  # type: ignore[union-attr]
+        assert "Aris AI haqida ma'lumot ber" in contents
+        assert "Aris AI — shaxsiy AI operatsion tizim." in contents
+
+    async def test_no_history_unchanged(self, session: AsyncSession) -> None:
+        """Tarix berilmasa (default) — eski xatti-harakat (bitta xabar)."""
+        provider = _fake(scripted=[fake_response(text="", tool_uses=(_plan_tool_use(),))])
+        planner = _make_planner(session, provider)
+        await planner.plan(_simple_intent(), available_tools=["time.now", "note.write"])
+
+        sent_messages = provider.calls[0]["messages"]
+        assert len(sent_messages) == 1  # type: ignore[arg-type]
