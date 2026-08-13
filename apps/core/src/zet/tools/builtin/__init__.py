@@ -21,6 +21,11 @@ from zet.devices.camera import CameraProvider
 if TYPE_CHECKING:
     from zet.agents.registry import AgentRegistry
 from zet.devices.desktop import DesktopProvider
+from zet.tools.builtin.business_tools import (
+    BusinessContactLinkTool,
+    BusinessCreateTool,
+    BusinessListTool,
+)
 from zet.tools.builtin.camera import CameraSnapshotTool
 from zet.tools.builtin.commerce_tools import (
     CommerceScope,
@@ -260,6 +265,11 @@ def build_default_registry(
     registry.register(CRMLeadCreateTool(scope=crm_scope))
     registry.register(CRMDealCreateTool(scope=crm_scope))
     registry.register(CRMStatsTool(scope=crm_scope))
+    # Business Registry (C2, KONSOLIDATSIYA v2) — bir xil `PgCRM` sessiyasi
+    # (`crm_scope`) ham kontaktlarni, ham bizneslarni olib yuradi.
+    registry.register(BusinessCreateTool(scope=crm_scope))
+    registry.register(BusinessListTool(scope=crm_scope))
+    registry.register(BusinessContactLinkTool(scope=crm_scope))
     # HR agent uchun workforce management tool'lari (yangi talab):
     # boshqa AI agentlarni pause/resume/disable qila oladi.
     registry.register(AgentListTool(registry=agent_registry))

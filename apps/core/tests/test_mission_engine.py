@@ -607,3 +607,195 @@ class TestMissionRecoveryAdapterUnit:
 
         assert result.constraints == []
         assert len(llm.calls) == 1
+
+
+# ── A3 SHART (KONSOLIDATSIYA v2, tungi reja Bo'lim A) ────────────────
+#
+# "Recovery harakati HIGH-risk bo'lsa, Approval Engine'dan o'tishi
+# shart — bypass yo'q." D1 shu talabni RecoveryEngine (PlanStep/Run
+# darajasi) uchun qulfladi; bu yerda AYNAN SHU talab Task-Graph
+# mission darajasida — REAL Orchestrator/Executor/PermissionPolicy/
+# ApprovalService bilan (FakeOrchestrator stub EMAS) — qulflanadi.
+
+
+def _real_intent_tool_use(requires_tools: list[str] | None = None) -> Any:
+    from zet.llm.base import ToolUse
+
+    return ToolUse(
+        id=f"tu_{uuid.uuid4().hex[:8]}",
+        name="parse_intent",
+        arguments={
+            "task_class": "normal",
+            "intent_summary": "test",
+            "requires_tools": requires_tools or [],
+            "requires_confirmation": False,
+            "ambiguity": "low",
+        },
+    )
+
+
+def _real_plan_tool_use(steps: list[dict[str, Any]]) -> Any:
+    from zet.llm.base import ToolUse
+
+    return ToolUse(
+        id=f"tu_{uuid.uuid4().hex[:8]}",
+        name="create_plan",
+        arguments={"summary": "test plan", "steps": steps},
+    )
+
+
+def _real_orchestrator(scripted: list[Any], *, session, session_factory, tmp_path, approvals, owner_external_id):
+    from zet.config import Settings
+    from zet.core.orchestrator import Orchestrator, RunStore
+    from zet.llm.fake import FakeProvider
+    from zet.llm.router import ModelRouter
+    from zet.security.killswitch import KillSwitchState
+    from zet.security.permissions import PermissionPolicy
+    from zet.tools.builtin import build_default_registry
+
+    provider = FakeProvider(name="ollama", scripted=scripted)
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    router = ModelRouter(providers={provider.name: provider}, session=session, settings=settings)
+    tool_registry = build_default_registry(notes_dir=tmp_path)
+    return Orchestrator(
+        router=router,
+        tool_registry=tool_registry,
+        permission_policy=PermissionPolicy(),
+        approval_service=approvals,
+        killswitch=KillSwitchState(),
+        run_store=RunStore(session_factory=session_factory, owner_external_id=owner_external_id),
+        budget_usd=1.0,
+    )
+
+
+class TestA3ApprovalBypassPrevention:
+    """A3 SHART: `MissionRecoveryAdapter` orqali qayta urinilgan mission
+    ham, xuddi birinchi urinish kabi, HIGH-risk qadamda Approval
+    Engine'ni chetlab o'ta olmaydi.
+
+    `MissionRecoveryAdapter` faqat `mission.constraints`ga matn
+    yozadi (hech qanday tool chaqirmaydi, hech qanday approval
+    bermaydi) — shuning uchun arxitektura jihatidan bypass STRUKTURAVIY
+    RAVISHDA imkonsiz. Bu test buni REAL Orchestrator/Executor/
+    PermissionPolicy/ApprovalService bilan (FakeOrchestrator emas)
+    isbotlaydi: 1-urinish HAQIQIY xato bilan yiqiladi (note.read —
+    mavjud bo'lmagan eslatma, D4'dagi bilan bir xil texnika),
+    real MissionRecoveryAdapter LLM'dan diagnos oladi va
+    constraints'ga yozadi, 2-urinishda reja HIGH-risk (EXECUTE)
+    qadamga ega — va HECH QACHON avtomatik bajarilmaydi, mission
+    WAITING_APPROVAL'da to'xtaydi."""
+
+    async def test_recovery_retry_with_high_risk_step_still_requires_approval(
+        self,
+        repo: MissionRepository,
+        approvals: ApprovalService,
+        session: AsyncSession,
+        owner: Owner,
+        session_factory,
+        tmp_path,
+    ) -> None:
+        from zet.core.mission import MissionRecoveryAdapter
+        from zet.llm.fake import fake_response
+
+        # 1-urinish: note.read mavjud bo'lmagan eslatmani so'raydi —
+        # HAQIQIY ToolError, Run FAILED bo'ladi (D4'dagi live-diagnos
+        # texnikasi bilan bir xil, soxta emas).
+        attempt1 = [
+            fake_response(text="", tool_uses=(_real_intent_tool_use(requires_tools=["note.read"]),)),
+            fake_response(
+                text="",
+                tool_uses=(
+                    _real_plan_tool_use(
+                        [
+                            {
+                                "position": 0,
+                                "description": "Eslatmani o'qish",
+                                "tool_name": "note.read",
+                                "tool_params": {"title": "MissingMissionNote"},
+                                "permission_required": "read",
+                                "trust_context": "owner",
+                                "depends_on": [],
+                            }
+                        ]
+                    ),
+                ),
+            ),
+        ]
+        # 2-urinish (recovery'dan keyin): reja HIGH-risk EXECUTE
+        # qadamga ega (tool_name=None — `_approval_script()` bilan bir
+        # xil, `test_pipeline_integration.py::TestApprovalRoundTrip`da
+        # qulflangan naqsh) — bu qadam HECH QACHON avtomatik
+        # bajarilmasligi kerak.
+        attempt2 = [
+            fake_response(text="", tool_uses=(_real_intent_tool_use(),)),
+            fake_response(
+                text="",
+                tool_uses=(
+                    _real_plan_tool_use(
+                        [
+                            {
+                                "position": 0,
+                                "description": "HIGH risk amal — recovery'dan keyin ham tasdiq talab qiladi",
+                                "tool_name": None,
+                                "permission_required": "execute",
+                                "trust_context": "owner",
+                                "depends_on": [],
+                            }
+                        ]
+                    ),
+                ),
+            ),
+        ]
+
+        orch = _real_orchestrator(
+            [*attempt1, *attempt2],
+            session=session,
+            session_factory=session_factory,
+            tmp_path=tmp_path,
+            approvals=approvals,
+            owner_external_id=owner.external_id,
+        )
+
+        llm = _FakeMissionLLM(
+            responses=["note.read xato — eslatma nomini tekshirib qayta urin."]
+        )
+        recovery = MissionRecoveryAdapter(llm_provider=llm, repository=repo)
+
+        engine = MissionEngine(
+            repository=repo,
+            capability_registry=FakeCapabilityRegistry(FakeBundle(tools=["note.read"])),
+            context_engine=FakeContextEngine({}),
+            planner=SimpleNamespace(),
+            orchestrator=orch,
+            approvals=approvals,
+            recovery=recovery,  # type: ignore[arg-type]
+        )
+
+        m = await engine.submit(owner_id=owner.id, objective="Eslatmani tekshirib xulosa chiqarish")
+        m = await engine.run_to_completion(m.id)
+
+        # ENG MUHIM DALIL #1: recovery HAQIQATAN ishga tushdi (1-urinish
+        # haqiqatan yiqilgani uchun) — LLM chaqirilgan, diagnos
+        # constraints'ga yozilgan.
+        assert len(llm.calls) == 1, "Recovery LLM chaqirilmadi — 1-urinish yiqilmagan bo'lishi mumkin"
+        final_mission = await repo.get(m.id)
+        assert any("note.read xato" in c for c in final_mission.constraints)
+
+        # ENG MUHIM DALIL #2 (SHART — bypass yo'q): 2-urinish HIGH-risk
+        # qadamga yetganda mission WAITING_APPROVAL'da TO'XTAYDI —
+        # recovery hech qanday holatda uni chetlab o'tmaydi, avtomatik
+        # ravishda COMPLETED/EXECUTING'ga o'tmaydi.
+        assert m.status is MissionStatus.WAITING_APPROVAL, (
+            f"A3 SHART BUZILDI: recovery'dan keyingi HIGH-risk qadam Approval "
+            f"Engine'ni chetlab o'tdi (mission.status={m.status})"
+        )
+        assert m.pending_approval_id is not None
+        pending = approvals.get(m.pending_approval_id)
+        assert pending.status.value == "pending"
+
+        # ENG MUHIM DALIL #3: real Orchestrator ikki marta chaqirilgan
+        # (1-urinish + recovery'dan keyingi 2-urinish) — recovery
+        # genuinely retried orqali qayta ishga tushirilgan, birinchi
+        # urinishning o'zi to'xtab qolmagan.
+        assert len(orch._router._providers["ollama"].calls) == 4
+

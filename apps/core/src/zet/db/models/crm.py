@@ -14,11 +14,55 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, String, Text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from zet.business.crm import DealStage, LeadStatus
-from zet.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
+from zet.db.base import Base, JSONType, TimestampMixin, UUIDPrimaryKeyMixin, enum_column
+
+
+class Business(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Biznes (do'kon/kanal/mijoz-tashkilot) — C2 (KONSOLIDATSIYA v2).
+
+    NEGA bu jadval kerak bo'ldi: odamlar uchun `CRMContact` allaqachon
+    bor edi (`telegram_chat_id` bilan "ism → chat_id" xaritasi), lekin
+    BIZNESLAR (masalan Ingestion Router'ning qaysi kanaldan kelgan
+    xabar QAYSI mijozga tegishli ekanini aniqlashi kerak bo'lgan
+    tashkilotlar) uchun hech qanday struktura yo'q edi.
+
+    Obsidian'da PARALLEL biznes-indeksi QURILMAYDI (foydalanuvchi
+    taklifi ko'rib chiqilgan va rad etilgan — `docs/
+    KONSOLIDATSIYA_V2_C_PLANS.md::C2` bo'limida sabab yozilgan):
+    Postgres — strukturaviy haqiqat manbai, ikkita parallel manba
+    drift xavfi tug'diradi.
+    """
+
+    __tablename__ = "business"
+
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("owner.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+
+    aliases: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    """Muqobil nomlar/yozilishlar — qidiruvda moslashtirish uchun
+    (masalan "Zetlab" va "ZET Lab")."""
+
+    vault_folder: Mapped[str] = mapped_column(String(200), default="")
+    """Obsidian vault'dagi ixtiyoriy ko'zgu-papka nomi (bo'sh — hali yo'q)."""
+
+    telegram_channel_ids: Mapped[list[int]] = mapped_column(JSONType, default=list)
+    """Ushbu biznesga tegishli Telegram kanal/guruh chat_id'lari."""
+
+    keywords: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    """Kelgusidagi Ingestion Router (C1) uchun fallback qidiruv so'zlari —
+    `crm_contact.telegram_chat_id` aniq mos kelmasa ishlatiladi."""
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    __table_args__ = (Index("ix_business_owner_name", "owner_id", "name"),)
 
 
 class CRMContact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -44,6 +88,15 @@ class CRMContact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     bo'lsa. Do'kon boti mijoz yozganda buni avtomatik to'ldiradi."""
 
     notes: Mapped[str] = mapped_column(Text, default="")
+
+    business_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("business.id", ondelete="SET NULL"), default=None, index=True
+    )
+    """C2 (KONSOLIDATSIYA v2): kontakt qaysi biznesga tegishli — ixtiyoriy.
+
+    `ON DELETE SET NULL` — `workspace.py::Task.project_id` bilan bir xil
+    naqsh: biznes o'chirilsa, kontaktning O'ZI yo'qolmaydi, faqat
+    bog'lanish tozalanadi."""
 
     __table_args__ = (Index("ix_crm_contact_owner_name", "owner_id", "name"),)
 
@@ -96,4 +149,4 @@ class CRMDeal(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-__all__ = ["CRMContact", "CRMDeal", "CRMLead"]
+__all__ = ["Business", "CRMContact", "CRMDeal", "CRMLead"]

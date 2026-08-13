@@ -57,6 +57,23 @@ class Contact(BaseModel, frozen=True):
     phone: str = ""
     telegram: str = ""
     notes: str = ""
+    business_id: str | None = None
+    """C2 (KONSOLIDATSIYA v2): qaysi biznesga tegishli — ixtiyoriy."""
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class Business(BaseModel, frozen=True):
+    """Biznes — C2 (KONSOLIDATSIYA v2). `PgCRM` orqali DB'ga saqlanadi."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    vault_folder: str = ""
+    telegram_channel_ids: list[int] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    is_active: bool = True
+    notes: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

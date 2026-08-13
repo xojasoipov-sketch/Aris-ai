@@ -48,7 +48,9 @@ const CAPABILITY_LABELS: Record<string, string> = {
   "instagram.webhook": "Instagram izoh/Direct obunasi kerak",
   crm: "Mijozlar bazasi",
   task_board: "Vazifa doskasi",
-  "approval.timed": "Taymerli tasdiq — 'sukut = rozilik' rejimi kerak",
+  // B2 (KONSOLIDATSIYA v2): "approval.timed" ("sukut = rozilik"
+  // taymerli tasdiq) BUTUNLAY OLIB TASHLANDI — V-32'ga zid edi.
+  // Kontent nashri endi oddiy tasdiq (ApprovalService) orqali ishlaydi.
 };
 
 /** Cron ifodasini soatga o'giradi: "20 9 * * *" → "09:20".

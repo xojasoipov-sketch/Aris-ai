@@ -8,7 +8,7 @@ from zet.db.models.agent import Agent
 from zet.db.models.automation import AutomationState
 from zet.db.models.commerce import Order, Product
 from zet.db.models.cost import CostLedger, QuotaLedger
-from zet.db.models.crm import CRMContact, CRMDeal, CRMLead
+from zet.db.models.crm import Business, CRMContact, CRMDeal, CRMLead
 from zet.db.models.device import CapabilityToken, Device
 from zet.db.models.memory import MemoryEntry
 from zet.db.models.mission import Mission, MissionRunLink
@@ -24,6 +24,7 @@ __all__ = [
     "AuditLog",
     "AutomationState",
     "Base",
+    "Business",
     "CRMContact",
     "CRMDeal",
     "CRMLead",

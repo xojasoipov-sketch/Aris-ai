@@ -130,11 +130,17 @@ class TestCapabilityDetection:
         )
         for capability in (
             Capability.MEETING_LINK,
-            Capability.TIMED_APPROVAL,
             Capability.TELEGRAM_READ_GROUPS,
             Capability.INSTAGRAM_WEBHOOK,
         ):
             assert capability not in available, capability
+
+    def test_timed_approval_capability_no_longer_exists(self) -> None:
+        """B2 (KONSOLIDATSIYA v2, tungi reja): "sukut = rozilik" taymerli
+        tasdiq V-32'ga zid edi — konsepsiya BUTUNLAY olib tashlangan
+        (nafaqat "hali yo'q" ro'yxatida, umuman enum'da yo'q)."""
+        assert "TIMED_APPROVAL" not in Capability.__members__
+        assert "approval.timed" not in {c.value for c in Capability}
 
     def test_stt_requires_elevenlabs_key(self) -> None:
         """Kalitsiz `StubSTT` qotgan matn qaytaradi — bu imkoniyat emas."""
@@ -228,6 +234,53 @@ class TestHonestyWithRealConfig:
         recipe = get_recipe("T03")
         assert recipe is not None
         assert Capability.TELEGRAM_READ_GROUPS in evaluate(recipe, available).missing
+
+    def test_t04_no_longer_needs_a_new_capability(self, tool_registry: ToolRegistry) -> None:
+        """B2 (KONSOLIDATSIYA v2, tungi reja): T04 ilgari HECH QACHON
+        qurilmaydigan `TIMED_APPROVAL`ga muhtoj bo'lgani uchun DOIM
+        bloklangan edi. Endi faqat allaqachon aniqlanadigan `content.
+        publish`ga muhtoj — real sozlamada (Telegram bot ulangan) READY
+        bo'ladi, ApprovalService orqali (aniq tasdiq, sukut emas)."""
+        available = detect_capabilities(
+            _settings(anthropic_api_key="k", telegram_bot_token="t"), tool_registry
+        )
+        recipe = get_recipe("T04")
+        assert recipe is not None
+        readiness = evaluate(recipe, available)
+        assert readiness.status == RecipeStatus.READY, readiness.missing
+
+
+class TestSequentialStepBlocking:
+    """B4 (KONSOLIDATSIYA v2, tungi reja): qadamlar bitta ketma-ket
+    agent chaqiruvida bajariladi (`_command_for()`) — alohida bajarish
+    mexanizmi YO'Q. Shuning uchun N-qadam o'z ehtiyojini qondirsa ham,
+    undan OLDINGI biror qadam bloklangan bo'lsa, N-qadamga navbat
+    UMUMAN yetmaydi."""
+
+    def test_downstream_steps_blocked_when_earlier_step_blocked(self) -> None:
+        """T05: 1-qadam (INSTAGRAM_WEBHOOK, hali yo'q) bloklansa, 2/3
+        -qadam O'Z ehtiyojini (LLM/CRM/CALENDAR) qondirsa ham blocked
+        sifatida ko'rsatiladi — interfeys ularni "ishlaydi" deb
+        yolg'on ko'rsatmasin."""
+        recipe = get_recipe("T05")
+        assert recipe is not None
+        available = frozenset({Capability.LLM, Capability.CRM, Capability.CALENDAR, Capability.CRON})
+        readiness = evaluate(recipe, available)
+        assert readiness.blocked_steps == [1, 2, 3]
+
+    def test_earlier_unblocked_step_stays_unblocked(self) -> None:
+        """T01: 1-qadam (faqat LLM) hech qachon 2/3 tufayli bloklanmasin
+        — propagatsiya faqat OLDINGA, ortga emas."""
+        recipe = get_recipe("T01")
+        assert recipe is not None
+        readiness = evaluate(recipe, frozenset({Capability.LLM}))
+        assert 1 not in readiness.blocked_steps
+        assert readiness.blocked_steps == [2, 3]
+
+    def test_no_capability_missing_means_nothing_blocked(self) -> None:
+        for recipe in RECIPES:
+            readiness = evaluate(recipe, ALL_CAPABILITIES)
+            assert readiness.blocked_steps == [], recipe.code
 
 
 class TestInstall:

@@ -10,15 +10,15 @@ Har bir retsept: TRIGGER → 3 QADAM → NATIJA.
     01 Uchrashuv kotibi   — yozishmani o'qib uchrashuv qo'yadi
     02 Ovozdan rejaga     — ovozli xabar → vazifa + deadline
     03 Guruh razvedkasi   — ish guruhlarini o'qib "nima yonmoqda" hisoboti
-    04 Kontent konveyeri  — post tayyorlaydi, sukut bo'lsa chop etadi
+    04 Kontent konveyeri  — post tayyorlaydi, ega ANIQ tasdiqlagach chop etadi
     05 Lid yo'li          — izoh/Direct → savol → slot taklifi
     06 Kunlik puls        — doskalarni tekshirib 3 qatorli hisobot
 
 ENG MUHIM QARQOR — HALOL HOLAT.
 
 Retseptlarning bir qismi ZET'da hali BO'LMAGAN tashqi imkoniyatlarga
-tayanadi (MTProto guruh o'qish, Instagram webhook, uchrashuv havolasi,
-taymerli tasdiq). Ikki yo'l bor edi:
+tayanadi (MTProto guruh o'qish, Instagram webhook, uchrashuv havolasi).
+Ikki yo'l bor edi:
 
     (a) baribir "yoqilgan" deb ko'rsatib, ichida stub ishlatish
     (b) yetishmayotganini OCHIQ aytish
@@ -33,10 +33,31 @@ standartining backend ko'rinishi.
 o'rnatilmaydi — chala ishlaydigan avtomatlashtirish umuman yo'q
 avtomatlashtirishdan yomonroq.
 
+MUHIM TUZATISH (KONSOLIDATSIYA v2, tungi reja Bo'lim B, B2): T04
+ilgari "TIMED_APPROVAL" ("sukut = rozilik" — javob berilmasa
+belgilangan vaqtda avtomatik nashr) deb nomlangan HALI QURILMAGAN
+imkoniyatga tayanardi. Bu boshqa to'rtta yetishmovchilikdan (MTProto,
+Instagram webhook, uchrashuv havolasi) TUBDAN FARQLI edi: ular
+"hali yo'q, lekin qo'shilishi mumkin" — TIMED_APPROVAL esa V-32
+("EXECUTE — DOIM ANIQ tasdiq, sukut ovoz emas") tamoyiliga TO'G'RIDAN
+-TO'G'RI zid, ya'ni HECH QACHON qo'shilmasligi kerak bo'lgan dizayn
+edi. Ega buyrug'i aniq: "'sukut=rozilik' rejimini TAKLIF QILMA".
+Shuning uchun `Capability.TIMED_APPROVAL` BUTUNLAY OLIB TASHLANDI (nafaqat
+T04'dan — konsepsiyaning o'zi kod bazasidan chiqarildi) va T04 endi
+ODDIY, ALLAQACHON ISHLAYDIGAN `ApprovalService` yo'lidan foydalanadi:
+kontent tayyorlanadi → ega ANIQ tasdig'i so'raladi (`content.publish`
+tool'lari `security/risk.py`da HIGH-risk, `PermissionPolicy` orqali
+avtomatik `ApprovalRequiredError`) → FAQAT tasdiqdan keyin nashr
+qilinadi. Bonus: bu T04'ni ENDI YANGI IMKONIYAT KUTMAYDIGAN qildi —
+`content.publish` allaqachon aniqlanadigan (`detect_capabilities()`)
+imkoniyat, ya'ni Telegram/Instagram/YouTube ulanishi bo'lsa T04
+darhol READY bo'ladi.
+
 Bog'liq qarorlar:
     Yangi zip — 6 TIZIM retsepti
     docs/12-AUTONOMY-GAP.md — imkoniyat matritsasi
-    V-32 — tasdiq (04 va 05 yozuv amallarini o'z ichiga oladi)
+    V-32 — tasdiq (04 va 05 yozuv amallarini o'z ichiga oladi, HECH QACHON
+        taymerli/sukut emas — faqat ANIQ tasdiq)
     A-05 — izoh/Direct/guruh xabari UNTRUSTED
 """
 
@@ -113,12 +134,14 @@ class Capability(StrEnum):
     `task.update`/`task.pulse` tool'lari qo'shildi — ya'ni agent doskani
     HAQIQATAN o'qiy va yoza oladi."""
 
-    TIMED_APPROVAL = "approval.timed"
-    """"Sukut = rozilik" taymerli tasdiq.
-
-    V-32 faqat ANIQ tasdiqni biladi; "belgilangan vaqtgacha e'tiroz
-    bo'lmasa davom et" rejimi hali yo'q.
-    """
+    # `TIMED_APPROVAL` ("approval.timed" — "sukut = rozilik" taymerli
+    # tasdiq) ATAYLAB OLIB TASHLANDI (KONSOLIDATSIYA v2, B2). Bu
+    # boshqa "hali yo'q" imkoniyatlardan farqli — V-32'ga ("EXECUTE
+    # har doim ANIQ tasdiq talab qiladi") to'g'ridan-to'g'ri zid dizayn
+    # edi, shuning uchun "hali qurilmagan" emas, "hech qachon
+    # qurilmaydi" toifasiga tegishli. T04 endi ODDIY `content.publish`
+    # + mavjud `ApprovalService` (aniq tasdiq) orqali ishlaydi —
+    # pastdagi T04 ta'rifiga qarang.
 
 
 class RecipeStatus(StrEnum):
@@ -252,7 +275,18 @@ RECIPES: Final[tuple[Recipe, ...]] = (
                 needs=frozenset({Capability.MEETING_LINK, Capability.CALENDAR}),
             ),
         ],
-        result="Kalendarda uchrashuv + ikkala tomonga 10 daqiqalik eslatma",
+        # B3 audit fix (KONSOLIDATSIYA v2): ilgari bu matn 3-qadam
+        # (havola yaratish, MEETING_LINK — ZET'da hali yo'q, doim
+        # bloklangan) muvaffaqiyatli bo'lgandek "ikkala tomonga 10
+        # daqiqalik eslatma"ni SO'ZSIZ va'da qilardi. Endi natija
+        # matnining o'zi shartli: eslatma FAQAT havola yaratilgach
+        # yuboriladi — bu shart hozir ham, MEETING_LINK qo'shilgan
+        # kunda ham TO'G'RI qoladi.
+        result=(
+            "Kalendarda vaqt taklif qilinadi; ikkala tomonga eslatma "
+            "FAQAT uchrashuv havolasi yaratilgach yuboriladi (bu "
+            "funksiya hozircha yo'q — 3-qadam bloklangan)."
+        ),
     ),
     Recipe(
         code="T02",
@@ -331,12 +365,26 @@ RECIPES: Final[tuple[Recipe, ...]] = (
             ),
             RecipeStep(
                 order=3,
-                title="'To'xta' demasangiz davom etadi",
+                title="Ega ANIQ tasdiqlagach nashr qilish",
                 agent_name="smm",
-                needs=frozenset({Capability.TIMED_APPROVAL, Capability.CONTENT_PUBLISH}),
+                # B2 audit fix (KONSOLIDATSIYA v2): ilgari
+                # `Capability.TIMED_APPROVAL` ("sukut = rozilik") ham
+                # talab qilinardi — bu ZET'da HECH QACHON qurilmaydigan,
+                # V-32'ga zid dizayn edi (ega buyrug'i: "TAKLIF QILMA").
+                # Endi bu qadam ODDIY, allaqachon ishlaydigan yo'ldan
+                # boradi: `content.publish` toollari (instagram.publish_
+                # photo/youtube.publish/telegram.channel_post) HIGH-risk
+                # (`security/risk.py`), `PermissionPolicy` ularni avtomatik
+                # `ApprovalRequiredError`ga yo'naltiradi — ega ANIQ
+                # tasdiqlamaguncha (yoki rad etmaguncha) nashr BO'LMAYDI.
+                needs=frozenset({Capability.CONTENT_PUBLISH}),
             ),
         ],
-        result="17:00 da avtomatik chop etadi va havolani yuboradi",
+        result=(
+            "Kontent tayyor bo'lgach ega tasdig'i so'raladi — FAQAT "
+            "aniq 'ha/tasdiqlayman' javobidan keyin nashr qilinadi va "
+            "havola yuboriladi. Sukut = hech narsa qilinmaydi, nashr EMAS."
+        ),
     ),
     Recipe(
         code="T05",
@@ -445,8 +493,10 @@ def detect_capabilities(
     # Quyidagilar ATAYLAB qo'shilmaydi — ZET'da hali yo'q. Ular
     # qo'shilganda shu yerga bitta qator yoziladi, retseptlar esa
     # o'zgarishsiz "ready" bo'ladi:
-    #   MEETING_LINK, TIMED_APPROVAL,
-    #   TELEGRAM_READ_GROUPS (MTProto), INSTAGRAM_WEBHOOK
+    #   MEETING_LINK, TELEGRAM_READ_GROUPS (MTProto), INSTAGRAM_WEBHOOK
+    # (`TIMED_APPROVAL` bu ro'yxatda YO'Q — u "hali qurilmagan" emas,
+    # KONSOLIDATSIYA v2 B2'da butunlay OLIB TASHLANGAN, chunki V-32'ga
+    # zid edi va hech qachon qo'shilmaydi.)
     return frozenset(available)
 
 
@@ -461,9 +511,30 @@ def _connected(tools: list[Any], *names: str) -> bool:
 
 
 def evaluate(recipe: Recipe, available: frozenset[Capability]) -> RecipeReadiness:
-    """Retsept hozir ishlay oladimi — va ishlamasa, nega."""
+    """Retsept hozir ishlay oladimi — va ishlamasa, nega.
+
+    B4 audit fix (KONSOLIDATSIYA v2, tungi reja): qadamlar bitta agent
+    chaqiruvida KETMA-KET bajariladi (`_command_for()` barcha qadam
+    sarlavhalarini bitta buyruqqa yig'adi, alohida bajarish mexanizmi
+    YO'Q) — demak N-qadam O'Z ehtiyojini qondirsa ham, undan OLDIN
+    biror qadam bloklangan bo'lsa, N-qadamga navbat UMUMAN yetmaydi.
+
+    Ilgari har qadam faqat O'Z ehtiyojiga qarab mustaqil bloklanardi.
+    Natijada masalan T05'da (1-qadam INSTAGRAM_WEBHOOK'ga muhtoj, hali
+    yo'q) 2/3-qadamlar o'z ehtiyoji (LLM/CRM/CALENDAR) mavjud bo'lgani
+    uchun interfeysda "ishlaydi" bo'lib ko'rinardi — garchi 1-qadam
+    hech qachon bajarilmagani uchun ular ham hech qachon ishga
+    tushmasa ham. Endi bloklangan birinchi qadamdan KEYINGI barcha
+    qadamlar ham blocked_steps'ga qo'shiladi.
+    """
     missing = sorted(recipe.required - available)
-    blocked = sorted(step.order for step in recipe.steps if step.needs - available)
+    own_blocked = {step.order for step in recipe.steps if step.needs - available}
+    first_blocked = min(own_blocked) if own_blocked else None
+    blocked = sorted(
+        step.order
+        for step in recipe.steps
+        if step.order in own_blocked or (first_blocked is not None and step.order > first_blocked)
+    )
 
     return RecipeReadiness(
         code=recipe.code,

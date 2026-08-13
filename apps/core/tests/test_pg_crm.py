@@ -69,6 +69,87 @@ class TestContacts:
         assert await crm_b.list_contacts() == []
 
 
+class TestBusinesses:
+    """C2 (KONSOLIDATSIYA v2, tungi reja Bo'lim C)."""
+
+    async def test_add_business(self, crm: PgCRM) -> None:
+        business = await crm.add_business(
+            name="ZET Lab",
+            aliases=["Zetlab"],
+            telegram_channel_ids=[-100123456],
+            keywords=["zet", "ai"],
+        )
+        assert business.name == "ZET Lab"
+        assert business.aliases == ["Zetlab"]
+        assert business.telegram_channel_ids == [-100123456]
+        assert business.is_active is True
+        assert business.id != ""
+
+    async def test_get_business(self, crm: PgCRM) -> None:
+        created = await crm.add_business(name="Acme")
+        fetched = await crm.get_business(created.id)
+        assert fetched is not None
+        assert fetched.name == "Acme"
+
+    async def test_get_missing_business_returns_none(self, crm: PgCRM) -> None:
+        assert await crm.get_business("00000000-0000-0000-0000-000000000000") is None
+
+    async def test_get_invalid_id_returns_none(self, crm: PgCRM) -> None:
+        assert await crm.get_business("not-a-uuid") is None
+
+    async def test_list_businesses(self, crm: PgCRM) -> None:
+        await crm.add_business(name="A")
+        await crm.add_business(name="B")
+        businesses = await crm.list_businesses()
+        assert len(businesses) == 2
+
+    async def test_find_business_by_name(self, crm: PgCRM) -> None:
+        await crm.add_business(name="ZET Lab")
+        await crm.add_business(name="Boshqa Kompaniya")
+        results = await crm.find_business("zet")
+        assert len(results) == 1
+        assert results[0].name == "ZET Lab"
+
+    async def test_find_business_by_alias(self, crm: PgCRM) -> None:
+        await crm.add_business(name="ZET Lab", aliases=["Zetlab"])
+        results = await crm.find_business("zetlab")
+        assert len(results) == 1
+
+    async def test_link_contact_to_business(self, crm: PgCRM) -> None:
+        contact = await crm.add_contact(name="Ali")
+        business = await crm.add_business(name="ZET Lab")
+        assert contact.business_id is None
+
+        linked = await crm.link_contact_to_business(contact.id, business.id)
+        assert linked.business_id == business.id
+
+        # Real DB'dan qayta o'qilganda ham saqlangan (session flush edi).
+        refreshed = await crm.get_contact(contact.id)
+        assert refreshed is not None
+        assert refreshed.business_id == business.id
+
+    async def test_link_missing_contact_raises(self, crm: PgCRM) -> None:
+        business = await crm.add_business(name="ZET Lab")
+        with pytest.raises(CRMNotFoundError):
+            await crm.link_contact_to_business("00000000-0000-0000-0000-000000000000", business.id)
+
+    async def test_link_missing_business_raises(self, crm: PgCRM) -> None:
+        contact = await crm.add_contact(name="Ali")
+        with pytest.raises(CRMNotFoundError):
+            await crm.link_contact_to_business(contact.id, "00000000-0000-0000-0000-000000000000")
+
+    async def test_business_owner_isolation(self, session: AsyncSession, owner: Owner) -> None:
+        crm_a = PgCRM(session, owner_id=owner.id)
+        await crm_a.add_business(name="Faqat A uchun")
+
+        other_owner = Owner(external_id="other-owner-biz")
+        session.add(other_owner)
+        await session.flush()
+        crm_b = PgCRM(session, owner_id=other_owner.id)
+
+        assert await crm_b.list_businesses() == []
+
+
 class TestLeads:
     async def test_add_lead(self, crm: PgCRM) -> None:
         contact = await crm.add_contact(name="Ali")

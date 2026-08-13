@@ -81,22 +81,25 @@ qism va **yetishmayotgan tashqi imkoniyat**.
 | 01 | **Uchrashuv kotibi** — yozishmani o'qib, bo'sh slot topib, Zoom link bilan uchrashuv qo'yadi | xodisa | LLM tahlil, Telegram o'qish | **Google Calendar** (bo'sh slot, event yaratish), **Zoom/Meet** link API, eslatma yuborish |
 | 02 | **Ovozdan rejaga** — ovozli xabar → vazifalar + deadline | xodisa | Telegram voice, **ElevenLabs Scribe STT** ✅, **`task.create`/`calendar.add`** ✅ | — **TAYYOR** (Z48) |
 | 03 | **Guruh razvedkasi** — 12 ta ish guruhini o'qib, vazifa/shikoyat/muammoni ajratadi | vaqt (19:00) | Cron, LLM tasniflash, Telegram yuborish | **Guruh tarixini o'qish** — Bot API bot qo'shilgan guruhdagina va faqat yangi xabarlarni beradi; to'liq tarix uchun **MTProto (Telethon)** kerak |
-| 04 | **Kontent konveyeri** — post tayyorlaydi, ko'rsatadi, "to'xta" demasangiz 17:00da chop etadi | vaqt (10:00) | SMM agent, Instagram/YouTube/Telegram **publish tool'lari** ✅ | **"Sukut = rozilik" taymerli approval** — hozir V-32 faqat aniq tasdiqni biladi, kutish-va-davom-etish rejimi yo'q |
+| 04 | **Kontent konveyeri** — post tayyorlaydi, ega ANIQ tasdiqlagach chop etadi | vaqt (10:00) | SMM agent, Instagram/YouTube/Telegram **publish tool'lari** ✅, `ApprovalService` (aniq tasdiq) ✅ | — **TAYYOR** (KONSOLIDATSIYA v2, B2 — "sukut=rozilik" ATAYLAB OLIB TASHLANDI, V-32'ga zid edi; endi oddiy tasdiq yo'li, Telegram/Instagram/YouTube ulanishi bo'lsa darhol READY) |
 | 05 | **Lid yo'li** — izoh/Direct → savol berib ehtiyoj+budjet aniqlaydi → slot taklif qiladi | xodisa | CRM (kontakt→lid), LLM | **Instagram webhook** (izoh/Direct), **ko'p qadamli suhbat holati**, kalendar |
 | 06 | **Kunlik puls** — doskalarni tekshirib, 3 qatorli hisobot | vaqt (09:20, 18:40) | Cron, Telegram yuborish, **`task.pulse`** ✅ (siljidi/turib qoldi/qaror kutmoqda — kodda ajratiladi) | — **TAYYOR** (Z48) |
 
 ### Takrorlanuvchi yetishmovchiliklar
 
 Oltita retseptdan **to'rttasi** bitta narsaga tayanadi — **kalendar**.
-Uchtasi **ko'p qadamli, holatli suhbat**ga tayanadi. Ikkitasi **haqiqiy
-STT**ga. Demak keyingi tashqi integratsiyalar tartibi shu og'irlikdan
-kelib chiqadi:
+Bittasi **ko'p qadamli, holatli suhbat**ga tayanadi (T05). Ikkitasi
+**haqiqiy STT**ga. Demak keyingi tashqi integratsiyalar tartibi shu
+og'irlikdan kelib chiqadi:
 
 1. ~~Kalendar (4 retsept)~~ — ✅ **Z48**: ichki kalendar
-2. Holatli suhbat / taymerli approval (3 retsept)
+2. Holatli suhbat (1 retsept, T05)
 3. ~~STT (2 retsept)~~ — ✅ **Z48**: ElevenLabs Scribe
 4. Telegram MTProto guruh o'qish (1 retsept)
 5. ~~Loyiha doskasi modeli (1 retsept)~~ — ✅ **Z46 jadval + Z48 tool**
+6. ~~Taymerli approval / "sukut=rozilik" (1 retsept, T04)~~ — ✅
+   **KONSOLIDATSIYA v2, B2**: OLIB TASHLANDI (V-32'ga zid edi), T04
+   endi oddiy `ApprovalService` orqali READY bo'lishi mumkin
 
 ---
 
@@ -131,9 +134,9 @@ qoldi. Og'irlik tartibi (nechta retsept ochilishi bo'yicha):
 | ~~1~~ | ~~`calendar`~~ | ✅ **Z48** | ICHKI kalendar: `calendar_event` jadvali + `calendar.add`/`calendar.list` |
 | ~~2~~ | ~~`task_board`~~ | ✅ **Z48** | `project`/`task` jadvallari + `task.list`/`.create`/`.update`/`.pulse` |
 | ~~4~~ | ~~`stt`~~ | ✅ **Z48** | `ElevenLabsSTT` (Scribe) — `ELEVENLABS_API_KEY` bo'lsa |
+| ~~6~~ | ~~`timed_approval`~~ | ✅ **KONSOLIDATSIYA v2, B2** | OLIB TASHLANDI (V-32'ga zid dizayn edi, hech qachon qurilmaydi) — T04 endi `content.publish` + oddiy `ApprovalService`ga tayanadi |
 | 3 | `meeting_link` | 1 (T01) | Zoom/Meet API |
 | 5 | `telegram.read_groups` | 1 (T03) | MTProto (Telethon) sessiyasi |
-| 6 | `timed_approval` | 1 (T04) | "Sukut = rozilik" taymerli tasdiq (V-32 kengaytmasi) |
 | 7 | `instagram.webhook` | 1 (T05) | Instagram webhook obunasi |
 
 Har bir imkoniyat qo'shilganda `detect_capabilities()` ga bitta qator
@@ -181,9 +184,12 @@ va bloklangan yuqori muhimlikdagi vazifani "qaror kutilmoqda" deb
 to'g'ri ajratdi. Backend to'liq redeploy qilingandan keyin ham yoqilgan
 T06 jadvallari joyida qoldi.
 
-Qolgan to'rttasi tashqi ulanishga tayanadi: `meeting_link` (T01),
-`telegram.read_groups` (T03), `timed_approval` (T04),
-`instagram.webhook` (T05).
+Qolgan uchtasi tashqi ulanishga tayanadi: `meeting_link` (T01),
+`telegram.read_groups` (T03), `instagram.webhook` (T05). T04 endi
+bu ro'yxatda YO'Q — `timed_approval` OLIB TASHLANDI (KONSOLIDATSIYA
+v2, B2: V-32'ga zid dizayn edi), T04 endi faqat mavjud `content.
+publish` + `ApprovalService`ga tayanadi va Telegram/Instagram/YouTube
+ulanishi bo'lsa READY bo'ladi.
 
 ---
 

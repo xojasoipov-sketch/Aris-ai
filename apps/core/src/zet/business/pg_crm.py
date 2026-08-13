@@ -25,14 +25,15 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from zet.business.crm import Contact, Deal, DealStage, Lead, LeadStatus
+from zet.business.crm import Business, Contact, Deal, DealStage, Lead, LeadStatus
+from zet.db.models.crm import Business as BusinessRow
 from zet.db.models.crm import CRMContact, CRMDeal, CRMLead
 
 log = structlog.get_logger(__name__)
 
 
 class CRMNotFoundError(ValueError):
-    """Bog'liq yozuv (kontakt/lead) topilmadi."""
+    """Bog'liq yozuv (kontakt/lead/biznes) topilmadi."""
 
 
 def _contact_from_row(row: CRMContact) -> Contact:
@@ -43,6 +44,21 @@ def _contact_from_row(row: CRMContact) -> Contact:
         email=row.email,
         phone=row.phone,
         telegram=row.telegram,
+        notes=row.notes,
+        business_id=str(row.business_id) if row.business_id is not None else None,
+        created_at=row.created_at,
+    )
+
+
+def _business_from_row(row: BusinessRow) -> Business:
+    return Business(
+        id=str(row.id),
+        name=row.name,
+        aliases=list(row.aliases),
+        vault_folder=row.vault_folder,
+        telegram_channel_ids=list(row.telegram_channel_ids),
+        keywords=list(row.keywords),
+        is_active=row.is_active,
         notes=row.notes,
         created_at=row.created_at,
     )
@@ -123,6 +139,86 @@ class PgCRM:
             for c in contacts
             if q in c.name.lower() or q in c.company.lower() or q in c.email.lower()
         ]
+
+    # ── Bizneslar (C2, KONSOLIDATSIYA v2) ────────────────────────────
+    #
+    # Odamlar uchun yuqoridagi `crm_contact` ishlatiladi; bizneslar
+    # (tashkilotlar/kanallar) uchun alohida, kichik jadval — sabab
+    # `docs/KONSOLIDATSIYA_V2_C_PLANS.md::C2`.
+
+    async def add_business(
+        self,
+        *,
+        name: str,
+        aliases: list[str] | None = None,
+        vault_folder: str = "",
+        telegram_channel_ids: list[int] | None = None,
+        keywords: list[str] | None = None,
+        notes: str = "",
+    ) -> Business:
+        row = BusinessRow(
+            owner_id=self._owner_id,
+            name=name,
+            aliases=list(aliases or []),
+            vault_folder=vault_folder,
+            telegram_channel_ids=list(telegram_channel_ids or []),
+            keywords=list(keywords or []),
+            notes=notes,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        log.info("crm.business_added", id=str(row.id), name=name)
+        return _business_from_row(row)
+
+    async def get_business(self, business_id: str) -> Business | None:
+        row = await self._get_business_row(business_id)
+        return _business_from_row(row) if row is not None else None
+
+    async def list_businesses(self, *, active_only: bool = True) -> list[Business]:
+        stmt = select(BusinessRow).where(BusinessRow.owner_id == self._owner_id)
+        if active_only:
+            stmt = stmt.where(BusinessRow.is_active.is_(True))
+        result = await self._session.execute(stmt)
+        return [_business_from_row(r) for r in result.scalars().all()]
+
+    async def find_business(self, query: str) -> list[Business]:
+        """Nom yoki muqobil nom (`aliases`) bo'yicha qidiradi.
+
+        Ingestion Router (C1, kelgusi ish) qidiruv tartibi: avval
+        `crm_contact.telegram_chat_id` (aniq mos), keyin shu metod
+        (fallback, `keywords`/`aliases` orqali)."""
+        businesses = await self.list_businesses(active_only=False)
+        q = query.lower()
+        return [
+            b
+            for b in businesses
+            if q in b.name.lower() or any(q in a.lower() for a in b.aliases)
+        ]
+
+    async def link_contact_to_business(self, contact_id: str, business_id: str) -> Contact:
+        contact_row = await self._get_contact_row(contact_id)
+        if contact_row is None:
+            raise CRMNotFoundError(f"Kontakt '{contact_id}' topilmadi")
+        business_row = await self._get_business_row(business_id)
+        if business_row is None:
+            raise CRMNotFoundError(f"Biznes '{business_id}' topilmadi")
+
+        contact_row.business_id = business_row.id
+        await self._session.flush()
+        log.info("crm.contact_linked_to_business", contact_id=contact_id, business_id=business_id)
+        return _contact_from_row(contact_row)
+
+    async def _get_business_row(self, business_id: str) -> BusinessRow | None:
+        try:
+            row_id = uuid.UUID(business_id)
+        except ValueError:
+            return None
+        result = await self._session.execute(
+            select(BusinessRow).where(
+                BusinessRow.id == row_id, BusinessRow.owner_id == self._owner_id
+            )
+        )
+        return result.scalar_one_or_none()
 
     # ── Leadlar ───────────────────────────────────────────────────
 

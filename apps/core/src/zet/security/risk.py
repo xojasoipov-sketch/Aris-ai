@@ -88,6 +88,11 @@ _MEDIUM: Final[frozenset[str]] = frozenset(
         "crm.contact_create",
         "crm.lead_create",
         "crm.deal_create",
+        # Business Registry (C2, KONSOLIDATSIYA v2) — CRM yozuvlari bilan
+        # bir xil xavf darajasi (biznes ma'lumotini o'zgartiradi,
+        # qaytariladigan)
+        "business.create",
+        "business.contact_link",
         # Umumiy vault'ga yozuv — bilim bazasini o'zgartiradi
         "note.write",
         # Sayt fayllari generatsiyasi — lokal disk yozuvi, real remote
