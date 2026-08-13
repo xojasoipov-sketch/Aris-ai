@@ -83,6 +83,11 @@ OPERATIONS_AGENT_SPEC = AgentSpec(
         "project.create",
         "calendar.list",
         "calendar.add",
+        # Jonli manbalar (Z50): "bugun havo qanday", "dollar qancha",
+        # "yangiliklar" — bularsiz agent javobni O'YLAB TOPARDI.
+        "weather.now",
+        "news.headlines",
+        "currency.rate",
     ],
     model_policy=ModelTier.T1_FREE,
     # WRITE: vazifa qo'shish va kalendarga yozish uchun. Doska ZET'ning

@@ -87,6 +87,11 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "instagram.publish_photo": PermissionLevel.WRITE,
     "camera.snapshot": PermissionLevel.READ,
     "memory.search": PermissionLevel.READ,
+    # Jonli manbalar (Z50) — hammasi faqat o'qiydi.
+    "weather.now": PermissionLevel.READ,
+    "stocks.quote": PermissionLevel.READ,
+    "news.headlines": PermissionLevel.READ,
+    "currency.rate": PermissionLevel.READ,
     "video.learn": PermissionLevel.READ,
     # Ish maydoni (Z48) — doska ZET'ning ICHKI ma'lumoti, tashqi
     # dunyoga hech narsa yubormaydi, shuning uchun yozish WRITE

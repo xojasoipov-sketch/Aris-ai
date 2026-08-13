@@ -193,6 +193,11 @@ def get_tool_registry() -> ToolRegistry:
         memory_search_fn=_memory_search_fn,
         workspace_scope=_workspace_scope,
         timezone=settings.timezone,
+        feed_latitude=settings.feed_latitude,
+        feed_longitude=settings.feed_longitude,
+        feed_news_url=settings.feed_news_url,
+        feed_stock_symbols=settings.feed_stock_symbols,
+        feed_currency_codes=settings.feed_currency_codes,
     )
 
 

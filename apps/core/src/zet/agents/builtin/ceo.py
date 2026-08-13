@@ -68,6 +68,11 @@ CEO_AGENT_SPEC = AgentSpec(
         "task.list",
         "project.list",
         "calendar.list",
+        # Jonli manbalar (Z50): "bugun havo qanday", "dollar qancha",
+        # "yangiliklar" — bularsiz agent javobni O'YLAB TOPARDI.
+        "weather.now",
+        "news.headlines",
+        "currency.rate",
     ],
     model_policy=ModelTier.T1_FREE,
     permission_level=PermissionLevel.READ,

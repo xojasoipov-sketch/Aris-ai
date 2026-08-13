@@ -172,6 +172,28 @@ class Settings(BaseSettings):
     """Brave Search API kaliti (bepul qatlam: 2000 so'rov/oy). Bo'lsa —
     `web.search` haqiqiy qidiradi; bo'lmasa — stub rejimda ishlaydi."""
 
+    # ── Jonli manbalar (Z50) ──────────────────────────────────────────
+    #
+    # Hammasi KALITSIZ manbalarga tayanadi — ega yana to'rtta API
+    # kalitini boshqarmasin. Sukut qiymatlar Toshkentga sozlangan.
+    feed_latitude: float = 41.3111
+    """Ob-havo uchun kenglik (sukut: Toshkent)."""
+
+    feed_longitude: float = 69.2797
+    """Ob-havo uchun uzunlik (sukut: Toshkent)."""
+
+    feed_news_url: str = "https://www.gazeta.uz/uz/rss/"
+    """Yangiliklar RSS manzili. O'zbekcha manba — ega shu tilda o'qiydi."""
+
+    feed_stock_symbols: str = "NVDA,AAPL,MSFT"
+    """Kuzatiladigan aksiyalar (vergul bilan)."""
+
+    feed_sports_league_id: str = "4328"
+    """TheSportsDB liga ID (4328 — Angliya Premer-ligasi)."""
+
+    feed_currency_codes: str = "USD,EUR,RUB"
+    """Markaziy bank kursi uchun valyutalar."""
+
     # ── Kamera (Bo'lim 8) ─────────────────────────────────────────────
     hikvision_host: str = ""
     """Hikvision kamera/NVR manzili (masalan '192.168.1.64' yoki '...:80').

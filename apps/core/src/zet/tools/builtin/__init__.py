@@ -24,6 +24,12 @@ from zet.tools.builtin.desktop_tools import (
     DesktopScreenshotTool,
     DesktopTypeTextTool,
 )
+from zet.tools.builtin.feed_tools import (
+    CurrencyRateTool,
+    NewsHeadlinesTool,
+    StockQuoteTool,
+    WeatherNowTool,
+)
 from zet.tools.builtin.github import GitHubReadTool, GitHubWriteTool
 from zet.tools.builtin.instagram import (
     InstagramAccountStatsTool,
@@ -75,6 +81,11 @@ def build_default_registry(
     memory_search_fn: SearchFn | None = None,
     workspace_scope: WorkspaceScope | None = None,
     timezone: str = "Asia/Tashkent",
+    feed_latitude: float = 41.3111,
+    feed_longitude: float = 69.2797,
+    feed_news_url: str = "https://www.gazeta.uz/uz/rss/",
+    feed_stock_symbols: str = "NVDA,AAPL,MSFT",
+    feed_currency_codes: str = "USD,EUR,RUB",
 ) -> ToolRegistry:
     """Barcha builtin toollarni ro'yxatga olib, tayyor `ToolRegistry` qaytaradi.
 
@@ -116,6 +127,11 @@ def build_default_registry(
             `Capability.CALENDAR`ni haqiqiy qiladi — `recipes.py`ga qarang.
         timezone: ega vaqt mintaqasi — kalendar va muddatlar shu mintaqada
             o'qiladi/yoziladi (baza doim UTC saqlaydi).
+        feed_latitude/feed_longitude/feed_news_url/feed_stock_symbols/
+        feed_currency_codes: jonli manba tool'lari uchun (`weather.now`,
+            `stocks.quote`, `news.headlines`, `currency.rate`). Hammasi
+            KALITSIZ manbalarga chiqadi — stub rejim YO'Q, chunki soxta
+            ob-havo yoki soxta kurs ega uchun zararli bo'lardi.
         desktop_provider: `desktop.*` tool'lar uchun ulanish (default:
             `StubDesktop(available=False)` — headless server muhitida). ZET
             foydalanuvchining mahalliy Mac/Win kompyuterida ishga tushirilsa,
@@ -165,6 +181,20 @@ def build_default_registry(
         InstagramPublishPhotoTool(
             access_token=instagram_access_token,
             ig_user_id=instagram_business_account_id,
+        )
+    )
+    registry.register(
+        WeatherNowTool(latitude=feed_latitude, longitude=feed_longitude, timezone=timezone)
+    )
+    registry.register(
+        StockQuoteTool(
+            default_symbols=[s.strip() for s in feed_stock_symbols.split(",") if s.strip()]
+        )
+    )
+    registry.register(NewsHeadlinesTool(feed_url=feed_news_url))
+    registry.register(
+        CurrencyRateTool(
+            default_codes=[c.strip() for c in feed_currency_codes.split(",") if c.strip()]
         )
     )
     for workspace_tool in WORKSPACE_TOOL_CLASSES:

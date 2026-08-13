@@ -259,6 +259,73 @@ export interface SnapshotDto {
   source: string;
 }
 
+/* ── Jonli manbalar (Z50) ──────────────────────────────────────── */
+
+/** Har bir manba ALOHIDA muvaffaqiyat/xato qaytaradi.
+ *
+ * Beshta manbadan bittasi o'chsa qolgani baribir ko'rinadi — shu
+ * sabab `ok` bloklar darajasida, so'rov darajasida emas. */
+export interface FeedBlock<T> {
+  ok: boolean;
+  /** Ma'lumot qayerdan keldi — ega manbani ko'rib tursin. */
+  source: string;
+  data: T | null;
+  error: string | null;
+}
+
+export interface WeatherDto {
+  temperature_c: number;
+  humidity_percent: number;
+  condition: string;
+  high_c: number;
+  low_c: number;
+  observed_at: string;
+  /** Kesh yoshi soniyada — 0 bo'lsa hozirgina olingan. */
+  age_s: number;
+}
+
+export interface QuoteDto {
+  symbol: string;
+  name: string;
+  currency: string;
+  price: number;
+  change: number;
+  change_percent: number;
+  /** Oxirgi ~30 kunlik yopilish narxlari — sparkline uchun. */
+  spark: number[];
+}
+
+export interface HeadlineDto {
+  title: string;
+  link: string;
+  published: string;
+}
+
+export interface MatchDto {
+  home: string;
+  away: string;
+  home_score: string;
+  away_score: string;
+  date: string;
+  league: string;
+}
+
+export interface RateDto {
+  code: string;
+  name: string;
+  rate: number;
+  diff: number;
+  date: string;
+}
+
+export interface FeedsDto {
+  weather: FeedBlock<WeatherDto>;
+  stocks: FeedBlock<QuoteDto[]>;
+  news: FeedBlock<HeadlineDto[]>;
+  sports: FeedBlock<MatchDto[]>;
+  rates: FeedBlock<RateDto[]>;
+}
+
 /* ── Chaqiruvlar ───────────────────────────────────────────────── */
 
 export const api = {
@@ -292,6 +359,9 @@ export const api = {
   },
 
   schedules: () => call<ScheduleRuleDto[]>("/automation/schedules"),
+
+  /** Barcha jonli manbalar bitta so'rovda — NEXUS kartalari uchun. */
+  feeds: () => call<FeedsDto>("/feeds"),
 
   camera: {
     info: () => call<CameraInfoDto>("/camera"),
