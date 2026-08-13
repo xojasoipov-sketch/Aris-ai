@@ -132,6 +132,22 @@ async def _workspace_scope() -> AsyncIterator[WorkspaceRepository]:
         yield WorkspaceRepository(session, owner_id=owner.id)
 
 
+@asynccontextmanager
+async def _crm_scope() -> AsyncIterator[PgCRM]:
+    """`crm.*` tool'lari uchun qisqa sessiya (Sales/Support agent uchun)."""
+    async with session_scope(get_session_factory()) as session:
+        owner = await get_or_create_owner(session, external_id=get_settings().owner_id)
+        yield PgCRM(session, owner_id=owner.id)
+
+
+@asynccontextmanager
+async def _commerce_scope() -> AsyncIterator[CommerceRepository]:
+    """`product.*`/`order.*`/`sales.*` tool'lari uchun qisqa sessiya."""
+    async with session_scope(get_session_factory()) as session:
+        owner = await get_or_create_owner(session, external_id=get_settings().owner_id)
+        yield CommerceRepository(session, owner_id=owner.id)
+
+
 @lru_cache(maxsize=1)
 def get_tool_registry() -> ToolRegistry:
     """Global tool registry (singleton) — barcha builtin toollar bilan.
@@ -195,6 +211,11 @@ def get_tool_registry() -> ToolRegistry:
         camera_provider=camera_provider,
         memory_search_fn=_memory_search_fn,
         workspace_scope=_workspace_scope,
+        crm_scope=_crm_scope,
+        commerce_scope=_commerce_scope,
+        # HR workforce management uchun (yangi talab): agent.list/pause/
+        # resume/disable/stats tool'lari registry orqali ishlaydi.
+        agent_registry=get_agent_registry(),
         timezone=settings.timezone,
         feed_latitude=settings.feed_latitude,
         feed_longitude=settings.feed_longitude,
@@ -224,6 +245,18 @@ def get_approval_service() -> ApprovalService:
 def get_run_store() -> RunStore:
     """Global run holatlari do'koni (singleton)."""
     return RunStore()
+
+
+@lru_cache(maxsize=1)
+def get_rate_limiter() -> object:
+    """Global rate limiter (singleton) — API middleware ishlatadi.
+
+    Ilgari `RateLimiter` qurilgan-u ASGI stack'ga ulanmagan edi
+    (GAP_ANALYSIS SR-03). Endi singleton sifatida `RateLimitMiddleware`
+    dan foydalaniladi."""
+    from zet.security.ratelimit import RateLimiter
+
+    return RateLimiter()
 
 
 @lru_cache(maxsize=1)

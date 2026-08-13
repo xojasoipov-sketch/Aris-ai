@@ -68,7 +68,15 @@ SUPPORT_AGENT_SPEC = AgentSpec(
     role="assistant",
     goal="Foydalanuvchi so'rovlarini tez va sifatli hal qilish, murakkab muammolarni eskalatsiya qilish",
     system_prompt=SUPPORT_SYSTEM_PROMPT,
-    tool_allowlist=["web.search", "time.now"],
+    tool_allowlist=[
+        "web.search",
+        "time.now",
+        # CRM — Support agent kontakt qidirsin (yozish emas, chunki
+        # permission_level=READ). Yangi kontakt yaratish Sales agent
+        # ishi yoki ega tasdig'i orqali.
+        "crm.contact_search",
+        "crm.stats",
+    ],
     model_policy=ModelTier.T1_FREE,
     permission_level=PermissionLevel.READ,
     trust_level=TrustLevel.SYSTEM,

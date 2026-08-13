@@ -18,9 +18,11 @@ Agentlar:
 from zet.agents.builtin.analytics import ANALYTICS_AGENT_SPEC
 from zet.agents.builtin.ceo import CEO_AGENT_SPEC
 from zet.agents.builtin.developer import DEVELOPER_AGENT_SPEC
+from zet.agents.builtin.ecommerce import ECOMMERCE_AGENT_SPEC
 from zet.agents.builtin.finance import FINANCE_AGENT_SPEC
 from zet.agents.builtin.hr import HR_AGENT_SPEC
 from zet.agents.builtin.operations import OPERATIONS_AGENT_SPEC
+from zet.agents.builtin.qa import QA_AGENT_SPEC
 from zet.agents.builtin.research import RESEARCH_AGENT_SPEC
 from zet.agents.builtin.sales import SALES_AGENT_SPEC
 from zet.agents.builtin.security import SECURITY_AGENT_SPEC
@@ -32,9 +34,11 @@ __all__ = [
     "ANALYTICS_AGENT_SPEC",
     "CEO_AGENT_SPEC",
     "DEVELOPER_AGENT_SPEC",
+    "ECOMMERCE_AGENT_SPEC",
     "FINANCE_AGENT_SPEC",
     "HR_AGENT_SPEC",
     "OPERATIONS_AGENT_SPEC",
+    "QA_AGENT_SPEC",
     "RESEARCH_AGENT_SPEC",
     "SALES_AGENT_SPEC",
     "SECURITY_AGENT_SPEC",

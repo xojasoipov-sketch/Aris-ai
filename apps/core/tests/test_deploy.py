@@ -404,7 +404,9 @@ class TestNewAgents:
     def test_hr_agent_spec(self) -> None:
         assert HR_AGENT_SPEC.name == "hr"
         assert HR_AGENT_SPEC.division == "operations"
-        assert HR_AGENT_SPEC.permission_level == PermissionLevel.READ
+        # Yangi versiya — HR AI workforce manager, EXECUTE ruxsat
+        # (agent.pause/resume/disable EXECUTE toollari).
+        assert HR_AGENT_SPEC.permission_level == PermissionLevel.EXECUTE
         assert HR_AGENT_SPEC.trust_level == TrustLevel.SYSTEM
 
     def test_security_agent_spec(self) -> None:
@@ -419,9 +421,9 @@ class TestNewAgents:
         assert ANALYTICS_AGENT_SPEC.permission_level == PermissionLevel.READ
         assert ANALYTICS_AGENT_SPEC.trust_level == TrustLevel.SYSTEM
 
-    def test_all_new_agents_read_only(self) -> None:
-        """Yangi agentlar faqat READ ruxsatga ega."""
-        for spec in [HR_AGENT_SPEC, SECURITY_AGENT_SPEC, ANALYTICS_AGENT_SPEC]:
+    def test_new_analytics_and_security_read_only(self) -> None:
+        """Security va Analytics faqat READ; HR endi EXECUTE (workforce boshqaruvi)."""
+        for spec in [SECURITY_AGENT_SPEC, ANALYTICS_AGENT_SPEC]:
             assert spec.permission_level == PermissionLevel.READ
 
     def test_all_new_agents_system_trust(self) -> None:
@@ -429,11 +431,11 @@ class TestNewAgents:
         for spec in [HR_AGENT_SPEC, SECURITY_AGENT_SPEC, ANALYTICS_AGENT_SPEC]:
             assert spec.trust_level == TrustLevel.SYSTEM
 
-    def test_twelve_total_agents(self) -> None:
-        """Jami 12 ta agent."""
+    def test_total_agents_count(self) -> None:
+        """Phase D'da QA va E-commerce qo'shildi — jami 14."""
         from zet.agents.builtin import __all__
 
-        assert len(__all__) == 12
+        assert len(__all__) == 14
 
     def test_unique_agent_names(self) -> None:
         """Barcha agent nomlari unikal."""

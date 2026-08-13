@@ -14,10 +14,31 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from zet.devices.camera import CameraProvider
+
+if TYPE_CHECKING:
+    from zet.agents.registry import AgentRegistry
 from zet.devices.desktop import DesktopProvider
 from zet.tools.builtin.camera import CameraSnapshotTool
+from zet.tools.builtin.commerce_tools import (
+    CommerceScope,
+    OrdersListTool,
+    OrderStatusUpdateTool,
+    ProductCreateTool,
+    ProductListTool,
+    ProductSearchTool,
+    SalesStatsTool,
+)
+from zet.tools.builtin.crm_tools import (
+    CRMContactCreateTool,
+    CRMContactSearchTool,
+    CRMDealCreateTool,
+    CRMLeadCreateTool,
+    CRMScope,
+    CRMStatsTool,
+)
 from zet.tools.builtin.desktop_tools import (
     DesktopKeyPressTool,
     DesktopMouseClickTool,
@@ -31,6 +52,13 @@ from zet.tools.builtin.feed_tools import (
     WeatherNowTool,
 )
 from zet.tools.builtin.github import GitHubReadTool, GitHubWriteTool
+from zet.tools.builtin.hr_tools import (
+    AgentDisableTool,
+    AgentListTool,
+    AgentPauseTool,
+    AgentResumeTool,
+    AgentStatsTool,
+)
 from zet.tools.builtin.instagram import (
     InstagramAccountStatsTool,
     InstagramPublishPhotoTool,
@@ -81,6 +109,9 @@ def build_default_registry(
     desktop_provider: DesktopProvider | None = None,
     memory_search_fn: SearchFn | None = None,
     workspace_scope: WorkspaceScope | None = None,
+    crm_scope: CRMScope | None = None,
+    commerce_scope: CommerceScope | None = None,
+    agent_registry: AgentRegistry | None = None,
     timezone: str = "Asia/Tashkent",
     feed_latitude: float = 41.3111,
     feed_longitude: float = 69.2797,
@@ -201,6 +232,27 @@ def build_default_registry(
     )
     for workspace_tool in WORKSPACE_TOOL_CLASSES:
         registry.register(workspace_tool(scope=workspace_scope, tz=timezone))
+    # CRM tool'lari (Sales/Support agent uchun) — scope berilmasa
+    # chaqirilganda ochiq xato beradi, "jimgina bo'sh" bo'lmaydi.
+    registry.register(CRMContactSearchTool(scope=crm_scope))
+    registry.register(CRMContactCreateTool(scope=crm_scope))
+    registry.register(CRMLeadCreateTool(scope=crm_scope))
+    registry.register(CRMDealCreateTool(scope=crm_scope))
+    registry.register(CRMStatsTool(scope=crm_scope))
+    # HR agent uchun workforce management tool'lari (yangi talab):
+    # boshqa AI agentlarni pause/resume/disable qila oladi.
+    registry.register(AgentListTool(registry=agent_registry))
+    registry.register(AgentPauseTool(registry=agent_registry))
+    registry.register(AgentResumeTool(registry=agent_registry))
+    registry.register(AgentDisableTool(registry=agent_registry))
+    registry.register(AgentStatsTool(registry=agent_registry))
+    # E-commerce agent uchun mahsulot/buyurtma boshqaruvi (Z51):
+    registry.register(ProductSearchTool(scope=commerce_scope))
+    registry.register(ProductListTool(scope=commerce_scope))
+    registry.register(ProductCreateTool(scope=commerce_scope))
+    registry.register(OrdersListTool(scope=commerce_scope))
+    registry.register(OrderStatusUpdateTool(scope=commerce_scope))
+    registry.register(SalesStatsTool(scope=commerce_scope))
     registry.register(CameraSnapshotTool(provider=camera_provider))
     registry.register(DesktopScreenshotTool(provider=desktop_provider))
     registry.register(DesktopTypeTextTool(provider=desktop_provider))

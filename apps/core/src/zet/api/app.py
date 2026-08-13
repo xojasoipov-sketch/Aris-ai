@@ -37,13 +37,14 @@ from zet.api.deps import (
     get_llm_providers,
     get_notifier,
     get_permission_policy,
+    get_rate_limiter,
     get_shop_bot,
     get_stt,
     get_telegram_bot,
     get_tool_registry,
     get_tts,
 )
-from zet.api.middleware import TokenAuthMiddleware, TraceMiddleware
+from zet.api.middleware import RateLimitMiddleware, TokenAuthMiddleware, TraceMiddleware
 from zet.api.routes import (
     agent,
     alerts,
@@ -247,9 +248,17 @@ def create_app() -> FastAPI:
     )
 
     # Middleware — oxirgi qo'shilgan BIRINCHI ishlaydi (Starlette stack).
-    # Token tekshiruvi trace'dan keyin qo'shiladi, ya'ni rad etilgan
-    # so'rov ham trace_id oladi — 401'larni log'da kuzatish uchun.
+    # Rate limit token tekshiruvidan KEYIN kelsin — birinchi tekshiruv
+    # token bo'lishi, so'ng rate limit; auth muvaffaqiyatsiz bo'lsa rate
+    # limit hisobi buzilmasin.
+    #
+    # Aslida: `add_middleware`da tartib teskari — oxirgi qo'shilgan
+    # birinchi ishlaydi. Shunday tuzganda tashqi zanjir:
+    #   RateLimit → TokenAuth → Trace → handler
+    # Rate limit 429ni token check'dan OLDIN qaytaradi (chunki auth
+    # 401ni oldindan bilib, resurs sarflashdan ham himoyalanamiz).
     app.add_middleware(TokenAuthMiddleware, settings=settings)
+    app.add_middleware(RateLimitMiddleware, limiter=get_rate_limiter())
     app.add_middleware(TraceMiddleware)
 
     # Routerlar

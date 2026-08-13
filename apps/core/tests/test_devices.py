@@ -553,7 +553,8 @@ class TestBuiltinExports:
     def test_twelve_specs_exported(self) -> None:
         from zet.agents.builtin import __all__
 
-        assert len(__all__) == 12
+        # Historically 12; QA + E-commerce agentlari qo'shildi (§5 gap).
+        assert len(__all__) == 14
 
     def test_vision_in_exports(self) -> None:
         from zet.agents.builtin import __all__

@@ -18,8 +18,9 @@ class TestBootstrapAgents:
         try:
             count = bootstrap_agents()
             registry = get_agent_registry()
-            assert count == 12
-            assert len(registry.list_agents()) >= 12
+            # 12 → 14: QA + E-commerce agentlari qo'shildi (§5 gap).
+            assert count == 14
+            assert len(registry.list_agents()) >= 14
         finally:
             get_agent_registry.cache_clear()
 
@@ -40,7 +41,8 @@ class TestBootstrapAgents:
             bootstrap_agents()
             bootstrap_agents()  # xato bermasligi kerak
             registry = get_agent_registry()
-            assert len(registry.list_agents()) == 12
+            # 12 → 14: QA + E-commerce agentlari qo'shildi (§5 gap).
+            assert len(registry.list_agents()) == 14
         finally:
             get_agent_registry.cache_clear()
 

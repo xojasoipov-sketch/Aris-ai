@@ -156,10 +156,69 @@ def _unauthorized(detail: str) -> JSONResponse:
     )
 
 
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Per-caller rate limiting (GAP_ANALYSIS SR-03).
+
+    `security/ratelimit.RateLimiter` moduli ilgari qurilgan-u ASGI
+    stack'ga ulanmagan edi — token o'g'irlansa cheksiz so'rov mumkin
+    edi. Endi asosiy tokenli so'rovlar `RateLimitTier.OWNER` limitiga
+    (60 req/min default) tushadi.
+
+    Sanoq kaliti — client IP + token'ning `SHA-256` prefixi (butun
+    token log/xotirada saqlanmaydi). Public yo'llar (`health`) rate
+    limit'siz.
+    """
+
+    def __init__(self, app: object, *, limiter: object) -> None:
+        super().__init__(app)  # type: ignore[arg-type]
+        self._limiter = limiter
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
+            return await call_next(request)
+
+        # Kalit — IP + tokenning qisqa hash'i. Token o'zi loglanmaydi,
+        # aynan hash ishlatiladi — kalit uzoq yashaydi (dict key), leak
+        # xatarini kamaytirish uchun.
+        import hashlib
+
+        from zet.security.ratelimit import RateLimitTier
+
+        client_ip = request.client.host if request.client else "unknown"
+        auth = request.headers.get("Authorization", "")
+        token_part = ""
+        if auth.startswith(BEARER_PREFIX):
+            token_hash = hashlib.sha256(
+                auth[len(BEARER_PREFIX) :].strip().encode("utf-8")
+            ).hexdigest()[:12]
+            token_part = f":{token_hash}"
+        key = f"{client_ip}{token_part}"
+
+        result = self._limiter.check(key, RateLimitTier.OWNER)  # type: ignore[attr-defined]
+        if not result.allowed:
+            retry_s = int(result.retry_after or 1) + 1
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Rate limit oshdi — birozdan so'ng qayta urinib ko'ring.",
+                    "retry_after": retry_s,
+                },
+                headers={"Retry-After": str(retry_s)},
+            )
+
+        response = await call_next(request)
+        # Har response'ga rate limit headerlari — chaqiruvchi qolgan
+        # limitni ko'rsin.
+        response.headers["X-RateLimit-Limit"] = str(result.limit)
+        response.headers["X-RateLimit-Remaining"] = str(result.remaining)
+        return response
+
+
 __all__ = [
     "BEARER_PREFIX",
     "DEV_PUBLIC_PATHS",
     "PUBLIC_PATHS",
+    "RateLimitMiddleware",
     "TokenAuthMiddleware",
     "TraceMiddleware",
 ]

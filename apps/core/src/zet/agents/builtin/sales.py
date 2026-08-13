@@ -59,7 +59,17 @@ SALES_AGENT_SPEC = AgentSpec(
     role="manager",
     goal="Sotuvlar jarayonini optimallashtirish va mijozlar bazasini samarali boshqarish",
     system_prompt=SALES_SYSTEM_PROMPT,
-    tool_allowlist=["web.search", "time.now", "note.write"],
+    tool_allowlist=[
+        "web.search",
+        "time.now",
+        "note.write",
+        # CRM — Sales agent haqiqatan lead/deal boshqara olsin (GAP §5).
+        "crm.contact_search",
+        "crm.contact_create",
+        "crm.lead_create",
+        "crm.deal_create",
+        "crm.stats",
+    ],
     model_policy=ModelTier.T1_FREE,
     permission_level=PermissionLevel.WRITE,
     trust_level=TrustLevel.SYSTEM,

@@ -46,6 +46,18 @@ def api_auth(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("ZET_API_TOKEN", TEST_API_TOKEN)
     get_settings.cache_clear()
 
+    # RateLimitMiddleware `RateLimiter` singleton'ini ishlatadi
+    # (`@lru_cache` orqali). Testlar cheksiz seriya so'rov yuboradi
+    # — 60 req/min OWNER limitidan oshib, 429 boshlaydi va bir-birini
+    # ta'sirlaydi. Har testdan oldin hisoblagichlarni tozalaymiz:
+    # cheklovni O'ZI (haqiqiy mantiqi) `test_ratelimit_middleware`da
+    # sinaladi, boshqa testlar unga bog'liq bo'lmasligi kerak.
+    from zet.api.deps import get_rate_limiter
+
+    limiter = get_rate_limiter()
+    if hasattr(limiter, "reset_all"):
+        limiter.reset_all()  # type: ignore[attr-defined]
+
     if "no_auto_auth" not in request.keywords:
         original_init = TestClient.__init__
 
