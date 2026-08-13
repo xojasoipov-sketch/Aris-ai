@@ -169,6 +169,92 @@ class RecoveryEngineLike(Protocol):
         ...
 
 
+class LLMJudgeProviderLike(Protocol):
+    """Yengil LLM adapter — `api/deps.py::_VerifierJudgeProvider` bilan
+    bir xil shakl (`.complete(messages=, system=, max_tokens=)`)."""
+
+    async def complete(
+        self, *, messages: Any, system: str | None = None, max_tokens: int = 300, **_: Any
+    ) -> Any:  # pragma: no cover — protocol
+        ...
+
+
+class MissionRecoveryAdapter:
+    """`RecoveryEngineLike` implementatsiyasi — HIGH #3 audit fix
+    (KONSOLIDATSIYA v2): Task-Graph mission darajasida HAQIQIY LLM
+    diagnos, D4'dagi bilan bir xil T1_FREE tier yondashuv.
+
+    NEGA `core.recovery.RecoveryEngine`ning O'ZI EMAS: uning
+    `attempt(plan, ctx, failed_verifications, ...)` PlanStep/
+    ExecutionContext darajasida ishlaydi (bitta Run'ning bitta
+    qadamlari). `MissionEngine.recover()` esa Mission/matn darajasida
+    (`diagnose_and_patch(mission, last_failure: str)`) — Mission bir
+    nechta Run'dan iborat bo'lishi mumkin, alohida qadam/ExecutionContext
+    yo'q. Shu sabab bu — ALOHIDA, YENGIL adapter: T1_FREE LLM'dan
+    mission-darajali diagnos so'raydi va natijani `mission.constraints`ga
+    "recovery hint" sifatida qo'shadi — keyingi urinishda Planner buni
+    ko'radi (`_build_user_prompt` `intent.constraints`ni allaqachon
+    o'qiydi, B3 audit fix bilan `history` ham qo'shildi).
+
+    Ilgari (KONSOLIDATSIYA v2'gacha): `deps.py` har doim `recovery=None`
+    berardi — `recover()`ning o'zi fail-open ("shunchaki qayta
+    urinamiz", diagnossiz) edi. Bu — "dumb retry" — LLM nima xato
+    bo'lganini HECH QACHON ko'rmasdi.
+    """
+
+    def __init__(self, *, llm_provider: LLMJudgeProviderLike, repository: MissionRepository) -> None:
+        self._llm = llm_provider
+        self._repo = repository
+
+    async def diagnose_and_patch(self, mission: Mission, last_failure: str) -> Mission:
+        """T1_FREE LLM'dan bir gaplik diagnos so'raydi va `mission.
+        constraints`ga qo'shadi (DB'ga yozadi — `_transition()` faqat
+        `status`ni yangilaydi, boshqa maydonlarni EMAS).
+
+        Fail-open: LLM xato bersa yoki bo'sh javob qaytarsa — mission
+        O'ZGARTIRILMAY qaytariladi (`recover()`ning o'zi "shunchaki
+        qayta urin" bilan davom etadi — MissionEngine invariantiga mos).
+        """
+        system = (
+            "Sen — mission-darajali recovery diagnostikasi. Bir Mission "
+            "(ko'p qadamli maqsad) muvaffaqiyatsiz tugadi. Bir GAPDA nima "
+            "xato bo'lganini va keyingi urinishda nimaga e'tibor berish "
+            "kerakligini yoz. Faqat matn qaytar, JSON emas."
+        )
+        no_constraints_label = "(yo'q)"
+        user = (
+            f"MAQSAD: {mission.objective}\n"
+            f"XATO: {last_failure[:1000]}\n"
+            f"OLDINGI CHEKLOVLAR: {', '.join(mission.constraints) or no_constraints_label}\n"
+            f"URINISH: {mission.retry_count + 1}"
+        )
+        try:
+            from zet.llm.base import ChatMessage
+
+            response = await self._llm.complete(
+                messages=[ChatMessage(role="user", content=user)],
+                system=system,
+                max_tokens=300,
+            )
+        except Exception as exc:
+            log.warning("mission_recovery.llm_error", mission_id=str(mission.id), error=str(exc)[:200])
+            return mission
+
+        hint = (getattr(response, "text", "") or "").strip()
+        if not hint:
+            log.warning("mission_recovery.empty_diagnosis", mission_id=str(mission.id))
+            return mission
+
+        log.info(
+            "mission_recovery.diagnosed",
+            mission_id=str(mission.id),
+            attempt=mission.retry_count + 1,
+            hint=hint[:200],
+        )
+        new_constraints = [*mission.constraints, f"[recovery] {hint}"]
+        return await self._repo.update(mission.id, constraints=new_constraints)
+
+
 class MemoryStoreLike(Protocol):
     """PgMemoryStore uchun minimal `remember` interfeysi."""
 

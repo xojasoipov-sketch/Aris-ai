@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from zet.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, utcnow
@@ -24,9 +24,39 @@ class Approval(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "approval"
-    __table_args__ = (Index("ix_approval_status_expires", "status", "expires_at"),)
+    __table_args__ = (
+        Index("ix_approval_status_expires", "status", "expires_at"),
+        CheckConstraint(
+            "(run_id IS NOT NULL) OR (mission_id IS NOT NULL)",
+            name="approval_has_run_or_mission",
+        ),
+    )
 
-    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("run.id", ondelete="CASCADE"), default=None, index=True
+    )
+    """HIGH #1 audit fix (KONSOLIDATSIYA v2) — ILGARI NOT NULL edi.
+
+    `MissionEngine.request_approval()` mission-darajali so'rovlarda
+    `run_id=mission.id` berardi — bu UUID `run` jadvalida HECH QACHON
+    bo'lmaydi (mission haqiqiy Run emas). Natija: INSERT DOIM
+    `ForeignKeyViolationError` bilan yiqilardi (A1 audit'da real
+    Postgres bilan topilgan, avval faqat "graceful skip" bilan
+    yumshatilgan edi — approval DB'ga HECH QACHON yozilmasdi). Endi
+    mission-darajali so'rovlar `run_id=None, mission_id=<mission.id>`
+    bilan yoziladi — haqiqiy, mos FK'ga ega qator."""
+
+    mission_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("mission.id", ondelete="CASCADE"), default=None, index=True
+    )
+    """HIGH #1 audit fix — mission-darajali approval'ning HAQIQIY FK'i.
+
+    `run_id`dan FARQLI: `mission` jadvali haqiqatan mavjud va
+    `MissionEngine.request_approval()`ning `mission.id`si shu yerga
+    to'g'ridan-to'g'ri (soxta emas) bog'lanadi. Step-darajali
+    so'rovlarda bu maydon NULL qoladi (`run_id` bilan to'ldiriladi) —
+    `CheckConstraint` ikkalasidan KAMIDA bittasi bo'lishini majburlaydi."""
+
     step_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("step.id", ondelete="SET NULL"), default=None
     )

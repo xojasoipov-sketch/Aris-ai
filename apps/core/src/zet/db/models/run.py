@@ -66,6 +66,43 @@ class Run(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     meta: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
+    completed_steps: Mapped[dict[str, Any] | None] = mapped_column(default=None)
+    """HIGH #2 audit fix (KONSOLIDATSIYA v2 — bo'lim D2). Position (string
+    kalit, JSON talabi) -> serializatsiya qilingan `StepResult`.
+
+    NEGA: `Orchestrator._run_plan()` har chaqiruvda (shu jumladan
+    `resume()`, tasdiqdan keyin) YANGI bo'sh `ExecutionContext` yaratardi
+    — rejaning BOSHIDAN qayta bajarardi. Idempotent bo'lmagan WRITE/
+    EXECUTE qadam (masalan xabar yuborish) tasdiqdan keyingi resume'da
+    IKKINCHI marta bajarilib qolardi. Endi har DONE qadam shu ustunga
+    yoziladi va keyingi `execute_plan()` chaqiruvi ularni QAYTA
+    BAJARMAY, faqat natijasini tiklaydi (`core/run_checkpoint.py::
+    persist_step_result`/`load_completed_steps`).
+
+    Faqat approval-pauza + resume() ssenariysini qamraydi (Executor
+    ikkita batch orasida — TO'LIQ atomik chegara — to'xtaydi); ixtiyoriy
+    jarayon-o'rtasida-halokat (batch ICHIDA) qayta tiklashni QAMRAB
+    OLMAYDI — bu alohida, kattaroq ish (per-step DB yozuvi bilan bir
+    vaqtda commit, Task #57 ruhida)."""
+
+    plan_snapshot: Mapped[dict[str, Any] | None] = mapped_column(default=None)
+    """`zet.domain.plan.Plan` (Pydantic)ning `model_dump(mode="json")`
+    nusxasi — HIGH #2 audit fixni TO'LIQ yopish uchun MAJBURIY topilma.
+
+    NEGA: `completed_steps` (yuqorida) o'zi YETARLI EMAS edi — sinash
+    chog'ida aniqlandi: `RunRecord.plan` HECH QACHON hech qanday DB
+    ustuniga yozilmagan (pastdagi `plan: Mapped[Plan | None] =
+    relationship(...)` — bu `db/models/run.py::Plan`/`Step` ORM
+    jadvallariga, ular hech qachon to'ldirilmaydi, B1 audit'da
+    tasdiqlangan). Natija: real protsess restart'idan keyin
+    `load_pending_runs()` `RunRecord(plan=None)` tiklardi va
+    `Orchestrator.resume()` DARHOL `OrchestratorError("Reja mavjud
+    emas")` bilan yiqilardi — `completed_steps` checkpoint'i hech qachon
+    ISHLATILMAS EDI, chunki `resume()`ning o'ziga yetib bormas edi.
+
+    `Plan`/`PlanStep` frozen Pydantic BaseModel — JSON serializatsiya
+    to'g'ridan-to'g'ri, maxsus kod kerak emas."""
+
     plan: Mapped[Plan | None] = relationship(
         back_populates="run", cascade="all, delete-orphan", uselist=False
     )

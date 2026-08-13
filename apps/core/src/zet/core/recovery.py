@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from zet.core.executor import ApprovalRequiredError
-from zet.domain.enums import PermissionLevel, TrustLevel
+from zet.domain.enums import PermissionLevel, StepStatus, TrustLevel
 from zet.domain.plan import Plan, PlanStep, PlanValidationError
 from zet.domain.tool import ToolResult, Verification
 from zet.llm.base import ChatMessage, LLMError
@@ -417,12 +417,28 @@ class RecoveryEngine:
             # 4. RETRY — yangi Executor bilan kengaytirilgan rejani
             #    ishga tushiramiz. Har urinish yangi Executor oladi
             #    (budjet hisobi toza, per-run holat izolyatsiyalangan).
+            #
+            # HIGH #2 audit fix (KONSOLIDATSIYA v2): `executor.execute_
+            # plan()` har chaqiruvda YANGI bo'sh ExecutionContext bilan
+            # BOSHIDAN bajaradi — bu yerdagi `ctx` (kiruvchi parametr
+            # yoki oldingi urinishning natijasi) ALLAQACHON DONE bo'lgan
+            # qadamlarni o'z ichiga oladi. Ular `completed_steps` orqali
+            # uzatilmasa, HAR bir recovery urinishi ASL rejaning
+            # muvaffaqiyatli WRITE/EXECUTE qadamlarini (masalan xabar
+            # yuborish) QAYTA bajarib yuborardi — bu D1'ning "approval
+            # bypass yo'q" kafolatidan MUSTAQIL, alohida idempotentlik
+            # xatosi edi (approval umuman kerak bo'lmagan, allaqachon
+            # bajarilgan qadamlar uchun).
+            already_done = {
+                pos: res for pos, res in ctx.results.items() if res.status == StepStatus.DONE
+            }
             executor = self._executor_factory()
             try:
                 ctx = await executor.execute_plan(
                     extended_plan,
                     approved_steps=approved,
                     trust=trust,
+                    completed_steps=already_done,
                 )
             except ApprovalRequiredError as exc:
                 # D1 (MAJBURIY): fix qadami HIGH-risk — Recovery Engine

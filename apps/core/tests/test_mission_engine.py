@@ -473,3 +473,137 @@ class TestMissionTaskShape:
         dumped = t.model_dump(mode="json")
         assert dumped["position"] == 0
         assert dumped["tool"] == "website.build"
+
+
+# ── HIGH #3 audit fix (KONSOLIDATSIYA v2) ─────────────────────────
+#
+# Ilgari `deps.py` HAR DOIM `recovery=None` berardi — Task-Graph
+# mission'lar HECH QANDAY LLM diagnos olmasdi, faqat "dumb retry".
+# Bu testlar `MissionRecoveryAdapter`ni (D4 bilan bir xil T1_FREE tier
+# naqsh) HAQIQIY (soxta bo'lmagan) LLM chaqiruvi bilan tekshiradi.
+
+
+class _FakeMissionLLM:
+    """`api/deps.py::_VerifierJudgeProvider` bilan bir xil shaklga ega
+    soxta LLM — `.complete(messages=, system=, max_tokens=)`."""
+
+    def __init__(self, responses: list[str | Exception]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    async def complete(self, *, messages, system=None, max_tokens=300, **_):  # type: ignore[no-untyped-def]
+        self.calls.append(
+            {"messages": list(messages), "system": system, "max_tokens": max_tokens}
+        )
+        if not self._responses:
+            return SimpleNamespace(text="")
+        item = self._responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return SimpleNamespace(text=item)
+
+
+class TestHigh3MissionRecoveryWiring:
+    """HIGH #3 (KONSOLIDATSIYA v2) — Task-Graph mission'lar endi HAQIQIY
+    LLM diagnos oladi, `deps.py`ning `recovery=None` gap'i yopilgan."""
+
+    async def test_mission_recovery_calls_real_llm_and_patches_constraints(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        """Sun'iy xato simulyatsiyasi: 1-run FAIL (ConnectionError), real
+        `MissionRecoveryAdapter` LLM'dan diagnos so'raydi, 2-run OK bilan
+        mission COMPLETED bo'ladi. Isbot: LLM chaqiruvi xato matnini
+        ko'rgan, natija mission.constraints'ga YOZILGAN (DB'da saqlangan)."""
+        from zet.core.mission import MissionRecoveryAdapter
+
+        llm = _FakeMissionLLM(
+            responses=["Tarmoq xatosi — qayta urinishda timeout oshirilsin."]
+        )
+        recovery = MissionRecoveryAdapter(llm_provider=llm, repository=repo)
+
+        engine, orch, _, _ = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            recovery=recovery,  # type: ignore[arg-type]
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(),
+                status=RunStatus.DONE,
+                verified_ok=False,
+                error="ConnectionError: timeout",
+            ),
+            FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="Tashqi API'dan ma'lumot olish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.COMPLETED
+
+        # ENG MUHIM DALIL #1: LLM HAQIQATAN chaqirilgan — "dumb retry" EMAS.
+        assert len(llm.calls) == 1, (
+            "HIGH #3 BUZILDI: Task-Graph mission recovery LLM'ni chaqirmadi"
+        )
+        sent_user_message = llm.calls[0]["messages"][0].content
+        assert "ConnectionError: timeout" in sent_user_message
+        assert "Tashqi API'dan ma'lumot olish" in sent_user_message
+
+        # ENG MUHIM DALIL #2: diagnos natijasi DB'ga yozilgan (patch
+        # haqiqatan qo'llanilgan, faqat log emas).
+        final_mission = await repo.get(m.id)
+        assert any(
+            "Tarmoq xatosi" in c for c in final_mission.constraints
+        ), f"Recovery hint constraints'ga yozilmagan: {final_mission.constraints}"
+
+    async def test_llm_error_is_fail_open_mission_still_retries(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        """LLM xato bersa — mission BARIBIR qayta urinadi (fail-open),
+        faqat diagnos matni bo'lmaydi. `recover()`ning o'z fail-open
+        falsafasiga mos (`except Exception` mission'ni yiqitmaydi)."""
+        from zet.core.mission import MissionRecoveryAdapter
+
+        llm = _FakeMissionLLM(responses=[RuntimeError("LLM provayder ishlamadi")])
+        recovery = MissionRecoveryAdapter(llm_provider=llm, repository=repo)
+
+        engine, orch, _, _ = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            recovery=recovery,  # type: ignore[arg-type]
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=False, error="e1"
+            ),
+            FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.COMPLETED
+        assert len(llm.calls) == 1
+        final_mission = await repo.get(m.id)
+        assert final_mission.constraints == []  # patch qo'llanilmagan, lekin yiqilmagan ham
+
+
+class TestMissionRecoveryAdapterUnit:
+    """`MissionRecoveryAdapter.diagnose_and_patch()`ning o'zini,
+    MissionEngine kompozitsiyasisiz, to'g'ridan-to'g'ri tekshiradi."""
+
+    async def test_empty_llm_response_returns_mission_unchanged(
+        self, repo: MissionRepository, owner
+    ) -> None:
+        from zet.core.mission import MissionRecoveryAdapter
+
+        llm = _FakeMissionLLM(responses=[""])
+        adapter = MissionRecoveryAdapter(llm_provider=llm, repository=repo)
+
+        mission = await repo.create(Mission(owner_id=owner.id, objective="test"))
+        result = await adapter.diagnose_and_patch(mission, "xato matni")
+
+        assert result.constraints == []
+        assert len(llm.calls) == 1

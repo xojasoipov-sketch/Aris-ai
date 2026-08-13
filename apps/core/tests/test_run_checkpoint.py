@@ -214,26 +214,28 @@ async def test_fail_open_when_db_unreachable() -> None:
     assert result == 0
 
 
-async def test_mission_level_approval_skipped_gracefully(
+async def test_mission_level_approval_skipped_when_mission_missing(
     session_factory: async_sessionmaker[AsyncSession],
     session: AsyncSession,
 ) -> None:
-    """A1 audit (KONSOLIDATSIYA v2) topgan tizimli gap: mission-darajali
-    approval'lar (`run_id=mission.id`, haqiqiy `run` qatorisiz) DOIM FK
-    xatosiga uchraydi, chunki `approval.run_id` `run.id`ga NOT NULL FK.
+    """A1 audit (KONSOLIDATSIYA v2) topgan tizimli gap — QOLDIQ holat:
+    haqiqatan mavjud bo'lmagan `mission_id` bilan yozishga urinish
+    (masalan buzuq/eskirgan ma'lumot) istisnosiz, aniq log bilan
+    o'tkazib yuboriladi.
 
-    Bu funksiya endi bunday holatni OLDINDAN aniqlab, istisnosiz va aniq
-    log bilan o'tkazib yuboradi — real DB xatolaridan farqlanadi.
-
-    ESLATMA: bu FIX EMAS (mission-approval hali ham DB'da saqlanmaydi —
-    faqat xotirada). To'liq yechim — `approval.run_id`ni nullable qilish
-    (Alembic migratsiya) — keyingi bosqich."""
+    ESLATMA: BU TEST 2026-08-13'GACHA "mission-approval umuman DB'ga
+    yozilmaydi" degan holatni tekshirar edi — HIGH #1 audit fix
+    (KONSOLIDATSIYA v2, 2-bo'lim) BUNI TO'LIQ TUZATDI: haqiqiy mission
+    mavjud bo'lsa, approval endi DB'ga yoziladi (pastdagi
+    `TestMissionApprovalDurability`ga qarang). Bu test faqat "mission
+    HAQIQATAN yo'q" chekka holatini — fail-open, xato ko'tarilmasligini
+    — tekshiradi."""
     import uuid
 
     from zet.core.run_checkpoint import persist_approval
     from zet.domain.enums import PermissionLevel
 
-    mission_id = uuid.uuid4()  # HECH QACHON run jadvalida bo'lmaydi
+    mission_id = uuid.uuid4()  # HECH QACHON mission jadvalida bo'lmaydi
     svc = ApprovalService(ttl_minutes=30)
     req = svc.request_approval(
         run_id=mission_id,
@@ -243,11 +245,10 @@ async def test_mission_level_approval_skipped_gracefully(
         preview={},
     )
 
-    # ISTISNO KO'TARILMASLIGI KERAK (fail-open, endi FK xatosigacha
-    # yetib bormaydi — oldindan tekshiruv bilan)
+    # ISTISNO KO'TARILMASLIGI KERAK (fail-open)
     await persist_approval(session_factory, req)
 
-    # DB'da yozuv YO'Q (kutilgan — mission-approval hali durable emas)
+    # DB'da yozuv YO'Q — mission HAQIQATAN mavjud emas
     from sqlalchemy import select
 
     from zet.db.models.security import Approval as ApprovalRow
@@ -256,4 +257,80 @@ async def test_mission_level_approval_skipped_gracefully(
         row = (
             await s.execute(select(ApprovalRow).where(ApprovalRow.id == req.id))
         ).scalar_one_or_none()
-    assert row is None, "Kutilmagan — mission-approval hali DB'ga yozilmasligi kerak"
+    assert row is None, "Mission mavjud bo'lmasa yozuv bo'lmasligi kerak"
+
+
+class TestMissionApprovalDurability:
+    """HIGH #1 audit fix (KONSOLIDATSIYA v2) — TO'LIQ YECHIM.
+
+    Foydalanuvchi talabi: "approval.run_id NOT NULL FK muammosini hal
+    qil — mission-level approval ham Postgres'ga yozilsin. Real
+    Postgres bilan: approval yaratilsin -> restart qilinsin -> approval
+    holati saqlanganini tasdiqla (aynan AR-01'da qilingan uslubda)."
+
+    Bu klass AYNAN shu ssenariyni SQLite bilan qulflaydi (real Postgres
+    dalili — `docs/KONSOLIDATSIYA_V2_REPORT.md`da, A1 bilan bir xil
+    ikkinchi-sessiya usuli)."""
+
+    async def test_mission_approval_persists_and_survives_restart(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        session: AsyncSession,
+    ) -> None:
+        from sqlalchemy import select
+
+        from zet.core.mission import Mission
+        from zet.core.mission_repository import MissionRepository
+        from zet.db.models.security import Approval as ApprovalRow
+        from zet.domain.enums import ApprovalStatus, PermissionLevel
+
+        owner = await get_or_create_owner(session, external_id="e2e-mission-approval")
+        await session.commit()
+
+        # Haqiqiy Mission qatori — mission_id endi HAQIQIY FK (soxta emas)
+        repo = MissionRepository(session, owner_id=owner.id)
+        mission = await repo.create(
+            Mission(owner_id=owner.id, objective="Yangi veb-sayt qurish")
+        )
+        await session.commit()
+
+        # ── 1-SESSIYA: approval yaratamiz va DB'ga yozamiz ───────────
+        svc1 = ApprovalService(ttl_minutes=30, session_factory=session_factory)
+        req = svc1.request_approval(
+            run_id=mission.id,  # MissionEngine.request_approval() naqshi
+            mission_id=mission.id,
+            reason="Mission risk level requires owner approval",
+            requested_permission=PermissionLevel.EXECUTE,
+            preview={"objective": mission.objective},
+        )
+        await svc1.persist_pending(req)
+
+        # ENG MUHIM DALIL #1: DB'da HAQIQIY qator bor — run_id=NULL,
+        # mission_id=<mission.id> (soxta run_id emas).
+        async with session_factory() as s:
+            row = (
+                await s.execute(select(ApprovalRow).where(ApprovalRow.id == req.id))
+            ).scalar_one_or_none()
+        assert row is not None, "HIGH #1 BUZILDI: mission-approval DB'ga yozilmadi"
+        assert row.run_id is None
+        assert row.mission_id == mission.id
+        assert row.status == ApprovalStatus.PENDING
+
+        # ── "RESTART": butunlay yangi ApprovalService, faqat DB'dan ──
+        svc2 = ApprovalService(ttl_minutes=30, session_factory=session_factory)
+        assert req.id not in svc2._requests
+
+        restored = await load_pending_approvals(session_factory, svc2)
+        assert restored == 1
+
+        # ENG MUHIM DALIL #2: restart'dan keyin approval TO'LIQ holati
+        # bilan (mission_id, sabab, ruxsat darajasi) tiklangan.
+        tiklangan = svc2.get(req.id)
+        assert tiklangan.mission_id == mission.id
+        assert tiklangan.run_id == mission.id  # in-memory shartnoma saqlangan
+        assert tiklangan.status == ApprovalStatus.PENDING
+        assert tiklangan.reason == "Mission risk level requires owner approval"
+        assert tiklangan.requested_permission == PermissionLevel.EXECUTE
+
+        # `_by_mission` indeksi ham tiklangan — `pending_for_mission()` ishlaydi
+        assert svc2.pending_for_mission(mission.id) == [tiklangan]

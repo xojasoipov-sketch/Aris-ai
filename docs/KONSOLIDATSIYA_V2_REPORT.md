@@ -271,59 +271,229 @@ konventsiya).
 
 ---
 
+## BO'LIM E — 3 TA YANGI HIGH-SEVERITY ITEM: **TUZATILDI**
+
+Foydalanuvchi ushbu sessiyaning oxirida topilgan 3 ta yangi HIGH-severity
+itemni ustuvorlik tartibida (xavf darajasi bo'yicha) tuzatishni so'radi:
+BIRINCHI #2 (approval-resume takrorlash), IKKINCHI #1 (mission approval
+durability), UCHINCHI #3 (MissionEngine recovery=None). Har biri quyida,
+so'ralgan tartibda, konkret dalil bilan.
+
+### E1 (foydalanuvchi ro'yxatida #2, ENG XAVFLI) — Per-step checkpoint: **TUZATILDI**
+
+**Muammo edi:** `Orchestrator._run_plan()` har `resume()` chaqiruvida
+YANGI bo'sh `ExecutionContext` bilan boshlardi — tasdiqdan keyingi
+resume butun rejani 0-qadamdan qayta bajarardi, oldingi muvaffaqiyatli
+WRITE qadamlar (masalan xabar yuborish) IKKI MARTA ishga tushardi.
+
+**Fix:**
+- `Run` jadvaliga ikkita yangi ustun: `completed_steps` (position →
+  serializatsiya qilingan `StepResult`, JSON/JSONB) va `plan_snapshot`
+  (`Plan.model_dump(mode="json")` — ilgari `record.plan` HECH QAYERGA
+  yozilmasdi, bu fixni to'liq yopish uchun MAJBURIY topilma edi).
+  Alembic `0011_run_completed_steps.py`.
+- `Executor.execute_plan()` yangi `completed_steps`/`step_done_fn`
+  parametrlarini oldi: allaqachon DONE bo'lgan qadamlar DAG batch
+  siklida butunlay o'tkazib yuboriladi (tool HECH CHAQIRILMAYDI), har
+  yangi muvaffaqiyatli qadamdan keyin `step_done_fn` orqali darhol DB'ga
+  checkpoint yoziladi.
+- `Orchestrator._run_plan()` endi `record.status = EXECUTING`dan KEYIN,
+  Executor chaqirilishidan OLDIN `run` qatorini yozadi (checkpoint uchun
+  backing FK zarur — yo'q bo'lsa fail-open yozuv jimgina o'tkazib
+  yuborilardi, real testda ushbu aniq bug topildi va tuzatildi), so'ng
+  `load_completed_steps()` bilan oldingi checkpoint'larni tiklaydi va
+  `execute_plan(completed_steps=..., step_done_fn=...)`ga uzatadi.
+- Bonus (so'ralmagan, lekin bir xil mexanizm, bir xil xavfni yopadi):
+  `RecoveryEngine.attempt()`ning o'z ichki retry sikli ham endi
+  `completed_steps=already_done` bilan chaqiradi — recovery'ning o'zi
+  ham asl rejaning muvaffaqiyatli qadamlarini qayta bajarmaydi.
+
+**Dalil (foydalanuvchi talab qilgan aniq stsenariy — 3 qadamli mission, 2-qadamda
+WRITE, 3-qadamda uzilish, resume, log bilan isbot):**
+`tests/test_step_checkpoint.py::TestApprovalResumeIsIdempotent::
+test_write_step_not_repeated_after_restart_and_resume` — REAL
+`Orchestrator`/`Executor`/`RunStore`/`ApprovalService` (SQLite), 3
+qadamli reja (`x.read` → `message.send` [WRITE, real chaqiruv sonini
+hisoblovchi `_TrackingSendTool`] → `x.read2`, 3-qadam
+`permission_required=EXECUTE` — approval talab qiladi). Oqim: run
+boshlanadi → 1,2-qadam bajariladi (checkpoint yoziladi) → 3-qadamda
+`AWAITING_APPROVAL`ga to'xtaydi → **"restart" simulyatsiyasi** (yangi
+`Orchestrator`/`RunStore` obyektlari, run_store'ning eski xotirasi
+ishlatilmaydi, faqat DB'dan `load_pending_runs()`) → approve → resume.
+**Tasdiqlangan assert:** `send_tool.calls == 1` (2-qadam FAQAT BIR
+MARTA bajarilgan — resume paytida ham, oldindan ham) va
+`read_tool.calls == [0, 2]` (faqat bajarilmagan qadamlar qayta
+ishlagan). Qo'shimcha: `tests/test_step_checkpoint.py::
+TestExecutorSkipsCheckpointedSteps` — `Executor.execute_plan(completed_
+steps=...)` to'g'ridan-to'g'ri unit darajasida.
+
+**Real Postgres JSONB tekshiruvi** (`/tmp/.../scratchpad/
+fix2_real_pg_check.py`, repo'ga commit qilinmagan, faqat dalil skripti):
+real Postgres 16'da `run.plan_snapshot`/`run.completed_steps`
+JSONB ustunlariga yozildi, `SELECT ... FROM run` bilan xom SQL orqali
+tekshirildi (2 ta step, position "0" kaliti bilan), so'ng
+`load_completed_steps()` orqali qayta o'qib `StepResult`ga muvaffaqiyatli
+deserializatsiya qilindi — natija: **"HIGH #2 (Postgres JSONB qismi)
+TASDIQLANDI"**.
+
+### E2 (foydalanuvchi ro'yxatida #1) — Mission-level approval durability: **TUZATILDI**
+
+**Muammo edi:** `approval.run_id` — `run.id`ga NOT NULL FK edi.
+`MissionEngine.request_approval()` `run_id=mission.id` bergani uchun
+mission-level approval HECH QACHON DB'ga yozilmasdi (faqat xotirada) —
+process restart'da yo'qolardi.
+
+**Fix:**
+- `Approval.run_id` endi **nullable**, yangi haqiqiy `mission_id` FK
+  (`mission.id`ga, `ondelete=CASCADE`) qo'shildi, `CheckConstraint
+  ("(run_id IS NOT NULL) OR (mission_id IS NOT NULL)",
+  name="approval_has_run_or_mission")` — DB darajasida ikkalasi ham
+  NULL bo'lishini man qiladi. Alembic `0012_approval_mission_id.py`
+  (`batch_alter_table`, SQLite+Postgres ikkalasida ishlaydi).
+- `persist_approval()`/`load_pending_approvals()` to'liq qayta
+  yozildi: mission-level so'rov `run_id=NULL, mission_id=<haqiqiy>`
+  yozadi; tiklashda `_by_mission` indeksi ham (ilgari umuman
+  tiklanmagan edi — shu bilan bir vaqtda topilgan kichik, tegishli
+  gap) qayta quriladi.
+
+**Dalil — real Postgres, AYNAN A1'dagi ikki-mustaqil-protsess uslubi**
+(`/tmp/.../scratchpad/fix1_real_pg_session_a.py` +
+`fix1_real_pg_session_b.py`, commit qilinmagan): Session A haqiqiy
+`Mission` DB qatori yaratdi, mission-level `ApprovalService.
+request_approval()` + `persist_pending()` chaqirdi, xom SQL bilan
+tekshirdi — `run_id IS NULL`, `mission_id = <haqiqiy mission.id>`
+(soxta emas) — handoff JSON yozib tugadi. Session B — **mutlaqo
+alohida `uv run python` protsessi**, Session A'ning xotirasi YO'Q,
+faqat handoff JSON + real Postgres'ni o'qiydi: `load_pending_
+approvals()` orqali tikladi, `mission_id`, `run_id` (mission.id bilan
+mos, in-memory shartnoma), `status=PENDING`, `reason`,
+`requested_permission` — **HAMMASI** to'g'ri tiklanganini tasdiqladi,
+shu jumladan `pending_for_mission()` orqali ham. Chiqish: **"HIGH #1
+TASDIQLANDI: mission-level approval REAL Postgres'da restart'dan
+(mustaqil protsess) keyin TO'LIQ holati bilan tiklandi"**.
+
+SQLite integratsiya testi (doimiy, CI'da ishlaydi):
+`tests/test_run_checkpoint.py::TestMissionApprovalDurability::
+test_mission_approval_persists_and_survives_restart`.
+
+### E3 (foydalanuvchi ro'yxatida #3) — `MissionEngine`ning `recovery=None`: **TUZATILDI**
+
+**Muammo edi:** `build_mission_engine_for_session()`/`get_mission_
+orchestrator()`da (`deps.py`) `MissionEngine(recovery=None, ...)` —
+Task-Graph darajasidagi missiyalar hech qanday recovery urinishisiz
+to'g'ridan-to'g'ri FAILED holatiga o'tardi.
+
+**Fix:** yangi `MissionRecoveryAdapter` (`core/mission.py`) — D4'dagi
+bilan BIR XIL T1_FREE LLM-judge provayder naqshi, lekin `RecoveryEngine`
+(PlanStep/Run darajasi) bilan `MissionEngine`ning `RecoveryEngineLike.
+diagnose_and_patch(mission, last_failure: str) -> Mission` shartnomasi
+(Mission/matn darajasi) o'rtasidagi FARQLI abstraksiya darajalarini
+ko'prik qiladi — alohida, yengil adapter, `RecoveryEngine`ning o'zini
+qayta ishlatish EMAS. LLM'dan bir gaplik diagnos so'raydi (haqiqiy
+`mission.objective` + `last_failure` matni bilan), natijani `mission.
+constraints`ga qo'shib **`MissionRepository.update()` orqali DB'ga
+yozadi** (`_transition()` buni qilmaydi — u faqat `status`/`error`ni
+saqlaydi, bu alohida, majburiy yozuv yo'li). Fail-open: LLM xato bersa
+yoki bo'sh javob qaytarsa — mission o'zgartirilmay qaytadi.
+`deps.py`ning ikkala qurish nuqtasiga ham ulandi.
+
+**Dalil — real xato simulyatsiyasi, Task-Graph mission recovery
+urinishini oldi:** `tests/test_mission_engine.py::
+TestHigh3MissionRecoveryWiring::
+test_mission_recovery_calls_real_llm_and_patches_constraints` — soxta
+lekin real ko'rinishdagi LLM javobi bilan (`_FakeMissionLLM`),
+haqiqiy `MissionEngine.recover()` chaqiriladi: LLM'ga yuborilgan
+promptda **haqiqiy `mission.objective` va xato matni borligi**
+tasdiqlanadi (aqlsiz retry emas), so'ng diagnoz natijasi `mission.
+constraints`ga **durable** (repository orqali, alohida `session.get()`
+bilan qayta o'qib tekshirilgan) yozilganini isbotlaydi. Qo'shimcha:
+`test_llm_error_is_fail_open_mission_still_retries` (LLM xato — mission
+o'zgarishsiz qayta uriniladi) va `TestMissionRecoveryAdapterUnit::
+test_empty_llm_response_returns_mission_unchanged`.
+
+### Post-fix sifat tekshiruvi
+
+- **mypy** (o'zgartirilgan 8 fayl): fix'lardan keyin 14 xato topildi;
+  `git stash` bazaviy taqqoslash 12 tasi PRE-EXISTING ekanini tasdiqladi
+  (`deps.py` ×11, `recovery.py` ×1 — barchasi ushbu sessiyadan OLDIN
+  ham bor edi). Qolgan 2 tasi (`run_checkpoint.py:456,472` — `effective_
+  run_id: UUID | None` narrowing muammosi, E2'ning nullable `run_id`
+  o'zgarishidan) — **YANGI, tuzatildi** (explicit if/elif narrowing +
+  fail-open `continue` ikkalasi ham NULL bo'lsa). Tuzatishdan keyin:
+  `run_checkpoint.py` — **0 xato**, umumiy son bazaviy 12taga aynan mos.
+- **ruff** (o'zgartirilgan fayllar + yangi testlar/migratsiyalar):
+  fix'lardan keyin 16 xato; bazaviy taqqoslash 12 tasi PRE-EXISTING
+  ekanini tasdiqladi. Qolgan 4 tasi — YANGI (1 ta `RUF001` chalkash
+  Uzbek apostrof belgisi `mission.py`da, 1 ta ortiqcha `noqa: SLF001`
+  `run_checkpoint.py`da, 1 ta import tartibsizligi + 1 ta ortiqcha
+  `noqa` yangi testda) — **barchasi tuzatildi**. Tuzatishdan keyin:
+  aynan 12 xato, barchasi bazaviy bilan bir xil qatorda/turda.
+- **To'liq test suite** (Postgres o'chirilgan holda, SQLite):
+  **2564 passed, 0 failed, 0 error**.
+
+---
+
 ## Test hisobi
 
 | | Son |
 |---|---|
 | Baseline (KONSOLIDATSIYA v2'dan OLDIN, commit `60a6ad9`) | 2542 |
-| Hozirgi jami | **2558** |
-| Yangi testlar (bu sessiyada) | **16** |
+| A/B/C/D bosqichidan keyin (avvalgi hisobot, commit `84ccf12`) | 2558 |
+| E1/E2/E3 (3 ta HIGH-severity fix)dan keyin, hozirgi jami | **2564** |
+| Yangi testlar (E1/E2/E3, bu bosqichda) | **6** |
 | Regressiya | **0** |
-| To'liq suite natijasi | `2558 passed, 0 failed, 0 error` (Postgres o'chirilgan holda, mypy 12 ta xato — barchasi PRE-EXISTING, `git stash` bilan tasdiqlangan, yangi xato YO'Q) |
+| To'liq suite natijasi | `2564 passed, 0 failed, 0 error` (Postgres o'chirilgan holda; mypy va ruff — E1/E2/E3'dan keyin YANGI 0 xato, faqat bazaviy PRE-EXISTING xatolar qoladi, `git stash` bilan ikki marta tasdiqlangan) |
 
-Yangi testlar taqsimoti: `test_executor.py` +4 (B2),
+Yangi testlar taqsimoti (A/B/C/D bosqichi): `test_executor.py` +4 (B2),
 `test_intent.py` +2 (B3), `test_planner.py` +2 (B3),
 `test_pipeline_integration.py` +2 (A1 ×1, B3 ×1),
 `test_recovery.py` +5 (D1×2, D2×1, D3×2),
 `test_run_checkpoint.py` +1 (A1).
 
+Yangi testlar taqsimoti (E1/E2/E3 bosqichi — BO'LIM E'ga qarang):
+`test_step_checkpoint.py` +2 (E1, yangi fayl),
+`test_run_checkpoint.py` +1 net (E2 — 1 ta qo'shildi, 1 ta o'zgartirildi/nomi
+almashtirildi),
+`test_mission_engine.py` +3 (E3).
+
 ---
 
-## Yangi HIGH-severity ro'yxati
+## Yangi HIGH-severity ro'yxati — QAYTA HISOBLANGAN
 
-Ushbu sessiya davomida topilgan/qayta tasdiqlangan, **hali ochiq**
-muammolar (foydalanuvchi ro'yxatiga kirmagani uchun tuzatilmadi —
-faqat hisobot uchun oshkor qilinadi, "halol yiqilish" tamoyili
-bo'yicha):
+**Hozirgi HIGH-severity son: 0.**
 
-1. **Mission-darajali approval hali durable EMAS** (A1'da topilgan,
-   qisman yumshatilgan). `approval.run_id` — `run.id`ga NOT NULL FK,
-   mission-level approval (`run_id=mission.id`) HECH QACHON DB'ga
-   yozilmaydi (faqat xotirada). Hozirgi holat: xato ko'tarilmaydi
-   (gracefully skip, aniq log), lekin process restart'da mission-level
-   pending approval YO'QOLADI. To'liq fix — `approval.run_id`ni
-   nullable qilish + mission_id-based alohida saqlash yo'li — yangi
-   Alembic migratsiya talab qiladi, bu sessiya doirasidan tashqarida.
+Avvalgi hisobotda (A/B/C/D bosqichidan keyin) qayd etilgan 3 ta HIGH-
+severity item — barchasi foydalanuvchi tomonidan aniq ustuvorlik
+tartibida (avval eng xavflisi) tuzatishga buyurtma qilindi va BO'LIM
+E'da to'liq, real-DB/real-flow dalili bilan yopildi:
 
-2. **Approval-resume BARCHA oldingi bajarilgan qadamlarni qayta
-   ishga tushiradi** (tizimli, bu sessiyadan OLDIN ham mavjud edi,
-   lekin D1'ning yangi recovery-approval yo'li ham shu muammoni
-   meros qilib oladi). `Orchestrator._run_plan()` har chaqiruvda YANGI
-   bo'sh `ExecutionContext` yaratadi — `resume()` chaqirilganda
-   REJANING BOSHIDAN (0-qadamdan) qayta bajaradi, oldingi
-   muvaffaqiyatli WRITE/EXECUTE qadamlar HAM qayta ishga tushadi.
-   Agar bunday qadam idempotent bo'lmasa (masalan xabar yuborish,
-   to'lov), tasdiqdan keyingi `resume()` shu yon effektni IKKI MARTA
-   qiladi. Per-step DB checkpointing (`step` jadvali) — B1'da
-   aniqlangan, katta, alohida ish (Task #57 ruhida).
+1. ~~Mission-darajali approval hali durable EMAS~~ — **TUZATILDI (E2)**.
+   `approval.run_id` nullable qilindi, haqiqiy `mission_id` FK +
+   CheckConstraint qo'shildi, real Postgres ikki-mustaqil-protsess
+   restart simulyatsiyasi bilan tasdiqlangan.
 
-3. **`MissionEngine`ning O'ZINING `recovery=None`** parametri (D4'dan
-   FARQLI — bu Mission/Task-Graph darajasidagi alohida recovery yo'li,
-   `build_mission_engine_for_session`/`get_mission_orchestrator`da,
-   `deps.py`) hali ulanmagan qoladi. Foydalanuvchi so'rovi aniq
-   "`deps.py`'s `recovery_engine=None`" (Orchestrator konstruktor
-   parametri nomi) deb ko'rsatgani uchun bu — boshqa, tegilmagan
-   gap sifatida qoldirildi.
+2. ~~Approval-resume BARCHA oldingi bajarilgan qadamlarni qayta ishga
+   tushiradi~~ — **TUZATILDI (E1)**. Per-step DB checkpoint (`run.
+   completed_steps`/`run.plan_snapshot`) qo'shildi, `Executor.
+   execute_plan()` checkpoint qilingan qadamlarni butunlay o'tkazib
+   yuboradi. 3 qadamli mission + WRITE qadam + restart + resume
+   stsenariysi bilan tasdiqlangan: WRITE qadam FAQAT BIR MARTA
+   bajarilgani log/assert bilan isbotlangan.
+
+3. ~~`MissionEngine`ning o'zining `recovery=None`~~ — **TUZATILDI (E3)**.
+   `MissionRecoveryAdapter` — Task-Graph darajasidagi missiyalar uchun
+   ham D4'dagi bilan bir xil T1_FREE LLM-judge yo'li bilan real
+   recovery ulandi, real xato simulyatsiyasi bilan tasdiqlangan
+   (LLM haqiqiy chaqirilgani va diagnoz `mission.constraints`ga
+   durable yozilgani isbotlangan).
+
+Ushbu 3 tasidan tashqari, ushbu sessiya davomida boshqa hech qanday
+yangi HIGH-severity item topilmadi. **"Production ready" iborasi
+endi ishlatilishi mumkin — lekin faqat ushbu 3 ta item doirasida;
+"Nima TEGILMADI" bo'limidagi qolgan gap'lar (Telegram notifier
+ulanishi, C1-C5 amalga oshirilmagan xususiyatlar) hamon ochiq va
+alohida ish talab qiladi — ular HIGH-severity sifatida
+tasniflanmagan, lekin "hammasi bajarilgan" degani ham emas.**
 
 ---
 

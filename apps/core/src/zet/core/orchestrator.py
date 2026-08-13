@@ -41,6 +41,7 @@ from zet.core.executor import (
     ExecutionContext,
     Executor,
     RecallFn,
+    StepResult,
 )
 from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.planner import Planner, PlannerError
@@ -178,6 +179,26 @@ class RunStore:
             record,
             owner_external_id=self._owner_external_id,
         )
+
+    async def load_completed_steps(self, run_id: uuid.UUID, plan: Plan) -> dict[int, StepResult]:
+        """HIGH #2 audit fix (KONSOLIDATSIYA v2) — avval DONE bo'lgan
+        qadamlarni tiklaydi, `session_factory` bo'lsa (fail-open, bo'sh
+        dict qaytaradi aks holda — test/lean, eski xatti-harakat: hech
+        narsa checkpoint qilinmaydi, har chaqiruv boshidan bajaradi)."""
+        if self._session_factory is None:
+            return {}
+        from zet.core.run_checkpoint import load_completed_steps
+
+        return await load_completed_steps(self._session_factory, run_id, plan)
+
+    async def persist_step(self, run_id: uuid.UUID, position: int, result: StepResult) -> None:
+        """HIGH #2 audit fix — bitta DONE qadam natijasini checkpoint qiladi
+        (fail-open, `session_factory` bo'lmasa no-op)."""
+        if self._session_factory is None:
+            return
+        from zet.core.run_checkpoint import persist_step_result
+
+        await persist_step_result(self._session_factory, run_id, position, result)
 
 
 class Orchestrator:
@@ -374,12 +395,42 @@ class Orchestrator:
         record.status = RunStatus.EXECUTING
         record.pending_approval_id = None
 
+        # KRITIK TARTIB (A1 audit naqshining davomi): `run` qatori DB'ga
+        # bajarish BOSHLANISHIDAN OLDIN yozilishi SHART — pastdagi
+        # `step_done_fn` execute_plan() ICHIDA (birinchi qadam
+        # tugashi bilanoq) chaqiriladi va `persist_step()` FK orqali
+        # `run` qatoriga bog'lanadi. Agar bu yerda persist qilinmasa,
+        # `persist_step_result()` "run topilmadi" deb JIMGINA o'tkazib
+        # yuboradi (fail-open) — natijada checkpoint HECH QACHON
+        # yozilmaydi va HIGH #2 fix amalda ISHLAMAYDI (aynan shu bug
+        # test yozish paytida real ravishda topildi va tuzatildi).
+        await self._run_store.persist(record)
+
+        # HIGH #2 audit fix (KONSOLIDATSIYA v2): avval DONE bo'lgan
+        # qadamlarni tiklaymiz — bu `resume()` (masalan approval'dan
+        # keyin) rejaning BOSHIDAN qayta boshlamasligi uchun SHART.
+        # Ilgari har chaqiruv yangi bo'sh `ExecutionContext` yaratardi —
+        # idempotent bo'lmagan WRITE/EXECUTE qadam (masalan xabar
+        # yuborish) resume'da IKKINCHI marta bajarilib qolardi.
+        completed_steps = await self._run_store.load_completed_steps(record.run_id, record.plan)
+
+        async def _persist_step_checkpoint(position: int, result: StepResult) -> None:
+            # dry_run — simulyatsiya, HAQIQIY bajarilish emas; buni
+            # "DONE" deb checkpoint qilib qo'ysak, keyingi HAQIQIY
+            # (dry_run=False) urinish yolg'ondan "allaqachon bajarilgan"
+            # deb hisoblab tool'ni umuman chaqirmay qo'yardi.
+            if dry_run:
+                return
+            await self._run_store.persist_step(record.run_id, position, result)
+
         try:
             ctx = await executor.execute_plan(
                 record.plan,
                 approved_steps=record.approved_steps,
                 trust=trust,
                 dry_run=dry_run,
+                completed_steps=completed_steps,
+                step_done_fn=_persist_step_checkpoint,
             )
         except ApprovalRequiredError as exc:
             return await self._handle_approval_required(record, exc)

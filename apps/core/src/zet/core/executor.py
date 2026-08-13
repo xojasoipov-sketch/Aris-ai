@@ -166,6 +166,14 @@ class StepResult:
         return ""
 
 
+StepDoneFn = Callable[[int, StepResult], Awaitable[None]]
+"""Bitta DONE qadam bajarilgandan keyin chaqiriladigan callback (HIGH #2
+audit fix, KONSOLIDATSIYA v2) — Orchestrator buni `run_checkpoint.
+persist_step_result()`ga bog'laydi. `StepResult`dan KEYIN e'lon
+qilinadi (module-level type alias — `from __future__ import
+annotations` faqat annotatsiyalarni kechiktiradi, bu qatorni emas)."""
+
+
 class ExecutionContext:
     """Bajarilish konteksti — barcha natijalar va holat."""
 
@@ -247,6 +255,8 @@ class Executor:
         approved_steps: set[int] | None = None,
         trust: TrustLevel = TrustLevel.OWNER,
         dry_run: bool = False,
+        completed_steps: dict[int, StepResult] | None = None,
+        step_done_fn: StepDoneFn | None = None,
     ) -> ExecutionContext:
         """Rejani to'liq bajaradi.
 
@@ -255,6 +265,19 @@ class Executor:
             approved_steps: oldindan tasdiqlangan qadamlar
             trust: kontekst ishonch darajasi
             dry_run: haqiqiy ish bajarmaslik
+            completed_steps: HIGH #2 audit fix (KONSOLIDATSIYA v2) —
+                oldindan DONE bo'lgan qadamlar (`Orchestrator`
+                `run_checkpoint.load_completed_steps()` orqali beradi).
+                Bu pozitsiyalar QAYTA BAJARILMAYDI — natijasi to'g'ridan-
+                to'g'ri `ctx.results`ga qo'yiladi. Approval-resume'da
+                idempotent bo'lmagan WRITE/EXECUTE qadam (masalan xabar
+                yuborish) IKKINCHI marta bajarilib qolishining oldini
+                oladi.
+            step_done_fn: har YANGI (checkpoint'dan tiklanmagan) DONE
+                qadamdan keyin chaqiriladigan callback — Orchestrator
+                buni `run_checkpoint.persist_step_result()`ga bog'laydi
+                (per-step checkpoint yozuvi). Berilmasa — checkpoint
+                yozilmaydi (test/lean, eski xatti-harakat).
 
         Returns:
             ExecutionContext — barcha natijalar bilan
@@ -267,6 +290,16 @@ class Executor:
         ctx = ExecutionContext(plan)
         if approved_steps:
             ctx.approved_steps = approved_steps
+        if completed_steps:
+            # HIGH #2 audit fix: checkpoint'dan tiklangan natijalar —
+            # faqat DONE holatidagilar keladi deb kutiladi (chaqiruvchi
+            # kafolatlaydi), lekin himoya sifatida bu yerda ham
+            # tekshiramiz — buzuq/eski checkpoint butun sikldan qayta
+            # bajarishga majburlasin, aslida "bajarilgan" deb yolg'on
+            # ko'rsatmasin.
+            for pos, result in completed_steps.items():
+                if result.status == StepStatus.DONE:
+                    ctx.record(pos, result)
 
         # DAG bosqichlariga bo'lish: har bosqich ichidagi qadamlar bir-biridan
         # mustaqil (`asyncio.gather` bilan parallel ishga tushiriladi).
@@ -275,6 +308,24 @@ class Executor:
         batches = plan_to_dag(plan.steps)
 
         for batch in batches:
+            # HIGH #2 audit fix: checkpoint'dan allaqachon DONE bo'lgan
+            # qadamlarni bu bosqichdan olib tashlaymiz — ular QAYTA
+            # bajarilmaydi (na tool chaqiriladi, na approval qayta
+            # so'raladi). Butun bosqich checkpoint'dan tiklangan bo'lsa —
+            # killswitch/budjet/approval tekshiruvisiz keyingi bosqichga
+            # o'tamiz (bajarish uchun hech narsa yo'q).
+            pending_in_batch = [
+                s
+                for s in batch
+                if not (s.position in ctx.results and ctx.results[s.position].status == StepStatus.DONE)
+            ]
+            if not pending_in_batch:
+                log.debug(
+                    "executor.batch_skipped_checkpoint",
+                    positions=[s.position for s in batch],
+                )
+                continue
+
             # KillSwitch tekshiruvi (bosqich boshida bir marta).
             self._killswitch.check()
 
@@ -288,7 +339,7 @@ class Executor:
                     spent=self._spent_usd,
                     budget=self._budget_usd,
                 )
-                for step in batch:
+                for step in pending_in_batch:
                     ctx.record(
                         step.position,
                         StepResult(step, status=StepStatus.FAILED, error="Budjet tugadi"),
@@ -308,8 +359,10 @@ class Executor:
             # bosqichda bir qadam yon effekt qildirib bo'lgan, ikkinchisi
             # esa approval kutayotgan holat yuz beradi. Chiziqli rejada
             # xatti-harakat bir xil — hali ham birinchi noto'g'ri qadamda
-            # ko'tariladi.
-            for step in batch:
+            # ko'tariladi. Faqat PENDING (hali bajarilmagan) qadamlar
+            # tekshiriladi — checkpoint'dan tiklangan qadam allaqachon
+            # o'z vaqtida approval'dan o'tgan (yoki umuman kerak bo'lmagan).
+            for step in pending_in_batch:
                 decision = self._policy.check(
                     step.permission_required,
                     effective_trust,
@@ -328,13 +381,15 @@ class Executor:
             # kutilmagan istisno butun run'ni yiqitadi (eski xatti-harakat).
             coros = [
                 self._execute_step(step, ctx, trust=effective_trust, dry_run=dry_run)
-                for step in batch
+                for step in pending_in_batch
             ]
             results = await asyncio.gather(*coros, return_exceptions=False)
 
             # Determinizm uchun position bo'yicha tartibda yozamiz —
             # `ctx.results.items()` iteratsiyasi log/auditga barqaror kirsin.
-            ordered_pairs = sorted(zip(batch, results, strict=True), key=lambda pr: pr[0].position)
+            ordered_pairs = sorted(
+                zip(pending_in_batch, results, strict=True), key=lambda pr: pr[0].position
+            )
             for step, result in ordered_pairs:
                 ctx.record(step.position, result)
                 # Xarajatni bosqich yakunlanganidan keyin qo'shamiz —
@@ -347,6 +402,15 @@ class Executor:
                         step=step.position,
                         error=result.error,
                     )
+                # HIGH #2 audit fix: DONE natijani DARHOL checkpoint
+                # qilamiz — bosqich ICHIDA boshqa qadam yiqilsa ham,
+                # bu qadam ALLAQACHON yozilgan bo'ladi (dry_run bo'lsa
+                # chaqirilmaydi — Orchestrator shart qo'yadi).
+                if result.status == StepStatus.DONE and step_done_fn is not None:
+                    try:
+                        await step_done_fn(step.position, result)
+                    except Exception:
+                        log.warning("executor.step_persist_failed", step=step.position)
 
         return ctx
 

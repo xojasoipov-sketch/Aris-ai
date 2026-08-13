@@ -1027,7 +1027,7 @@ async def build_mission_engine_for_session(
     """
     from zet.core.capability import CapabilityRegistry
     from zet.core.context import ContextEngine
-    from zet.core.mission import MissionEngine
+    from zet.core.mission import MissionEngine, MissionRecoveryAdapter
     from zet.core.mission_orchestrator import (
         CapabilityRegistryComposer,
         ContextEngineAdapter,
@@ -1055,7 +1055,14 @@ async def build_mission_engine_for_session(
         planner=orchestrator._planner,
         orchestrator=orchestrator,
         approvals=approvals,
-        recovery=None,
+        # HIGH #3 audit fix (KONSOLIDATSIYA v2): ilgari doim `None` edi —
+        # Task-Graph mission'lar HECH QANDAY recovery diagnos olmasdi,
+        # faqat "shunchaki qayta urin". D4 bilan bir xil T1_FREE tier
+        # yondashuvi (`_build_verifier_judge` naqshi).
+        recovery=MissionRecoveryAdapter(
+            llm_provider=_build_verifier_judge(orchestrator._router),  # type: ignore[arg-type]
+            repository=repo,
+        ),
         memory_store=memory,
         max_retries=2,
     )
@@ -1079,7 +1086,7 @@ async def get_mission_orchestrator(
     """
     from zet.core.capability import CapabilityRegistry
     from zet.core.context import ContextEngine
-    from zet.core.mission import MissionEngine
+    from zet.core.mission import MissionEngine, MissionRecoveryAdapter
     from zet.core.mission_orchestrator import (
         CapabilityRegistryComposer,
         ContextEngineAdapter,
@@ -1088,7 +1095,10 @@ async def get_mission_orchestrator(
     from zet.core.mission_repository import MissionRepository
     from zet.workspace.repository import WorkspaceRepository
 
-    del router  # kelajakda understand_fn (LLM) uchun
+    # NEGA `router` endi ishlatiladi: HIGH #3 audit fix (KONSOLIDATSIYA
+    # v2) — `MissionRecoveryAdapter`ning T1_FREE LLM judge provider'i
+    # shu router orqali quriladi. Kelajakda `understand_fn` (LLM) uchun
+    # ham qayta ishlatilishi mumkin.
 
     owner = await get_or_create_owner(session, external_id=settings.owner_id)
 
@@ -1114,7 +1124,11 @@ async def get_mission_orchestrator(
         planner=orchestrator._planner,
         orchestrator=orchestrator,
         approvals=approval_service,
-        recovery=None,
+        # HIGH #3 audit fix — ilgari doim `None` (D4 bilan bir xil naqsh).
+        recovery=MissionRecoveryAdapter(
+            llm_provider=_build_verifier_judge(router),  # type: ignore[arg-type]
+            repository=repo,
+        ),
         memory_store=memory,
         max_retries=2,
     )

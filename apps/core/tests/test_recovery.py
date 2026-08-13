@@ -83,7 +83,14 @@ class _FakeExecutor:
         self.spent_usd = 0.0
 
     async def execute_plan(  # type: ignore[no-untyped-def]
-        self, plan, *, approved_steps=None, trust=TrustLevel.OWNER, dry_run=False
+        self,
+        plan,
+        *,
+        approved_steps=None,
+        trust=TrustLevel.OWNER,
+        dry_run=False,
+        completed_steps=None,
+        step_done_fn=None,
     ):
         self.calls.append(
             {
@@ -91,6 +98,7 @@ class _FakeExecutor:
                 "approved_steps": set(approved_steps or set()),
                 "trust": trust,
                 "dry_run": dry_run,
+                "completed_steps": dict(completed_steps or {}),
             }
         )
         if not self._contexts:
