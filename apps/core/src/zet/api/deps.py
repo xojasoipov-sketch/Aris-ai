@@ -20,6 +20,7 @@ from zet.automation.engine import AutomationEngine
 from zet.automation.executor import WorkflowExecutor
 from zet.automation.goal import GoalRegistry
 from zet.business.pg_crm import PgCRM
+from zet.commerce.repository import CommerceRepository
 from zet.config import Settings, get_settings
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.state import CoreState
@@ -495,6 +496,23 @@ async def get_workspace(
     """
     owner = await get_or_create_owner(session, external_id=settings.owner_id)
     return WorkspaceRepository(session, owner_id=owner.id)
+
+
+# ── Savdo ─────────────────────────────────────────────────────────
+
+
+async def get_commerce(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_config),
+) -> CommerceRepository:
+    """So'rov chegarasidagi savdo repozitoriysi (Z51).
+
+    `get_workspace` bilan bir xil naqsh: mahsulot/buyurtma sahifalari
+    ortida hech narsa yo'q edi — endi shu orqali haqiqiy jadvallarga
+    yoziladi/o'qiladi.
+    """
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+    return CommerceRepository(session, owner_id=owner.id)
 
 
 # ── LLM ────────────────────────────────────────────────────────────

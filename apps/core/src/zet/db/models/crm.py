@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text
+from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from zet.business.crm import DealStage, LeadStatus
@@ -34,6 +34,15 @@ class CRMContact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(200), default="")
     phone: Mapped[str] = mapped_column(String(64), default="")
     telegram: Mapped[str] = mapped_column(String(64), default="")
+    """Ko'rinadigan @username — odam o'qiydigan yorliq."""
+
+    telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger, default=None, index=True)
+    """Telegram raqamli chat ID — DM YUBORISH shu orqali (Z51).
+
+    Bot API'da xabar @username'ga emas, faqat SONLI chat_id'ga
+    yuboriladi, va faqat foydalanuvchi botga birinchi bo'lib yozgan
+    bo'lsa. Do'kon boti mijoz yozganda buni avtomatik to'ldiradi."""
+
     notes: Mapped[str] = mapped_column(Text, default="")
 
     __table_args__ = (Index("ix_crm_contact_owner_name", "owner_id", "name"),)

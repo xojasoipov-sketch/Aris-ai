@@ -49,6 +49,7 @@ from zet.api.routes import (
     approvals,
     automation,
     camera,
+    commerce,
     conversation,
     crm,
     feeds,
@@ -217,5 +218,6 @@ def create_app() -> FastAPI:
     app.include_router(vault.router, prefix="/api/v1")
     app.include_router(camera.router, prefix="/api/v1")
     app.include_router(feeds.router, prefix="/api/v1")
+    app.include_router(commerce.router, prefix="/api/v1")
 
     return app
