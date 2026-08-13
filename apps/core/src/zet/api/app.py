@@ -61,6 +61,7 @@ from zet.api.routes import (
     health,
     killswitch,
     memory,
+    missions,
     run,
     state,
     system,
@@ -335,6 +336,7 @@ def create_app() -> FastAPI:
     # Routerlar
     app.include_router(health.router, prefix="/api/v1", tags=["health"])
     app.include_router(run.router, prefix="/api/v1", tags=["run"])
+    app.include_router(missions.router, prefix="/api/v1")
     app.include_router(approvals.router, prefix="/api/v1")
     app.include_router(killswitch.router, prefix="/api/v1", tags=["killswitch"])
     app.include_router(state.router, prefix="/api/v1", tags=["state"])

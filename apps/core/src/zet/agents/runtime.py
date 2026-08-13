@@ -291,10 +291,14 @@ class AgentRuntime:
         # tasdiq kerak bo'lsa — rad etiladi, avtomatik bajarilmaydi.
         if self._tool_registry.has(tool_use.name):
             tool = self._tool_registry.get(tool_use.name)
-            decision = self._permission_policy.check(
-                tool.permission_level,
-                spec.trust_level,
-                tool_name=tool_use.name,
+            # NEGA `requires_approval` (yangi metod): `check()` risk axis
+            # ni ko'rmaydi. Yangi qaror tool.risk_level (LOW/MEDIUM/HIGH)
+            # va autonomy darajasini ham hisobga oladi (V-32
+            # kengaytmasi + ZET_ASS_AUTONOMY_AUDIT §2.8).
+            decision = self._permission_policy.requires_approval(
+                permission=tool.permission_level,
+                trust=spec.trust_level,
+                tool=tool,
             )
             if decision.needs_approval:
                 log.warning(

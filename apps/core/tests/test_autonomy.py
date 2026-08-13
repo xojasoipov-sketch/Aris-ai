@@ -57,9 +57,18 @@ class TestCapabilities:
         assert allows(AutonomyLevel.L3_AGENT, AutonomyCapability.SELF_PLANNING)
         assert not allows(AutonomyLevel.L3_AGENT, AutonomyCapability.SELF_IMPROVE)
 
-    def test_l4_opens_everything(self) -> None:
+    def test_l4_opens_everything_but_continuous_monitoring(self) -> None:
+        # L4 SELF_COMMAND/SELF_IMPROVE ochadi; CONTINUOUS_MONITORING esa
+        # yangi L5_MONITORED darajasining sifatiy farqi (standing mission).
         for capability in AutonomyCapability:
-            assert allows(AutonomyLevel.L4_AUTONOMOUS, capability)
+            if capability is AutonomyCapability.CONTINUOUS_MONITORING:
+                assert not allows(AutonomyLevel.L4_AUTONOMOUS, capability)
+            else:
+                assert allows(AutonomyLevel.L4_AUTONOMOUS, capability)
+
+    def test_l5_opens_everything(self) -> None:
+        for capability in AutonomyCapability:
+            assert allows(AutonomyLevel.L5_MONITORED, capability)
 
     def test_capabilities_are_cumulative(self) -> None:
         """Yuqori daraja pastdagining hamma imkoniyatini o'z ichiga oladi."""

@@ -38,6 +38,7 @@ from zet.core.executor import (
 )
 from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.planner import Planner, PlannerError
+from zet.core.recovery import RecoveryEngine
 from zet.core.verifier import Verifier
 from zet.domain.command import Command
 from zet.domain.enums import RunStatus, StepStatus, TrustLevel
@@ -172,6 +173,7 @@ class Orchestrator:
         run_timeout_s: int | None = None,
         concurrency_semaphore: asyncio.Semaphore | None = None,
         verifier_judge_provider: object | None = None,
+        recovery_engine: RecoveryEngine | None = None,
     ) -> None:
         self._router = router
         # Uzoq muddatli xotira — ega profili va oldingi bilimlar javobga
@@ -200,6 +202,9 @@ class Orchestrator:
         # global concurrency chegarasi. Berilmasa cheklov yo'q.
         self._run_timeout_s = run_timeout_s
         self._concurrency_semaphore = concurrency_semaphore
+        # PART 6 recovery: verify_run FAIL bo'lganda tuzatishga urinish.
+        # Berilmasa — eski xatti-harakat (darhol FAILED).
+        self._recovery_engine = recovery_engine
 
     @property
     def approvals(self) -> ApprovalService:
@@ -356,15 +361,52 @@ class Orchestrator:
         # verify_step endi async (LLM-judge tier qo'shildi). Barchasini
         # ketma-ket tekshirish — tartib deterministik va LLM-judge chaqirish
         # kam holatda ishlaydi, parallelism kerak emas.
-        verifications = [
-            await self._verifier.verify_step(res.step, res.tool_result)
+        record.status = RunStatus.VERIFYING
+        step_verifications = [
+            (res.step, await self._verifier.verify_step(res.step, res.tool_result))
             for res in ctx.results.values()
         ]
+        verifications = [v for _, v in step_verifications]
         overall = self._verifier.verify_run(verifications)
-        record.verified_ok = overall.ok
-        record.status = RunStatus.DONE if overall.ok else RunStatus.FAILED
-        if not overall.ok:
-            record.error = overall.reason
+
+        # PART 6 recovery: verify FAIL bo'lgan bo'lsa va recovery_engine
+        # ulangan bo'lsa — FAIL→DIAGNOSE→FIX→RETRY→VERIFY sikliga
+        # o'tamiz. Ilgari bu yerda darhol FAILED bo'lardi va ega
+        # tuzatish urinishini umuman ko'rmasdi (AUTONOMY_AUDIT §2.5).
+        if not overall.ok and self._recovery_engine is not None:
+            failed_pairs = [(step, ver) for step, ver in step_verifications if not ver.ok]
+            record.status = RunStatus.RECOVERING
+            log.info(
+                "orchestrator.recovering",
+                run_id=str(record.run_id),
+                failed_steps=[step.position for step, _ in failed_pairs],
+            )
+            outcome = await self._recovery_engine.attempt(
+                plan=record.plan,
+                ctx=ctx,
+                failed_verifications=failed_pairs,
+                trust=trust,
+                approved_steps=record.approved_steps,
+            )
+            if outcome.recovered:
+                record.plan = outcome.extended_plan
+                record.verified_ok = True
+                record.status = RunStatus.DONE
+                record.error = None
+            else:
+                record.verified_ok = False
+                record.status = RunStatus.FAILED
+                # Halol yiqilish: sabab — oxirgi diagnos yoki verify sababi
+                # (PART 8 "never fake autonomy").
+                if outcome.diagnoses:
+                    record.error = outcome.diagnoses[-1].root_cause
+                else:
+                    record.error = outcome.final_verification.reason
+        else:
+            record.verified_ok = overall.ok
+            record.status = RunStatus.DONE if overall.ok else RunStatus.FAILED
+            if not overall.ok:
+                record.error = overall.reason
         record.result_summary = _build_answer(ctx, plan_summary=record.plan.summary)
         log.info(
             "orchestrator.run_finished",

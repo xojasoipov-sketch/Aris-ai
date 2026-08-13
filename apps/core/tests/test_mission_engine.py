@@ -1,0 +1,475 @@
+"""MissionEngine testlari (Bo'lim 2, §2.2).
+
+NEGA. MissionEngine ilgari yo'q edi. Bu testlar strategik qatlamning
+xatti-harakatini qulflaydi: happy path, HIGH risk approval,
+verification failure → recovery, MAX_RETRIES cheklovi, cancel,
+CapabilityRegistry va ContextDiscoveryEngine bilan integratsiya,
+kill switch fail-closed, deadline auto-cancel, va invalid transition
+transaction chegarasi.
+
+Soxta bog'liqliklar (SimpleNamespace/dataklass) — real Orchestrator
+ishlashi allaqachon `test_executor.py` va `test_planner.py` da qulflangan.
+MissionEngine testlari faqat kompozitsiya oqimini tekshiradi.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from datetime import timedelta
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from zet.core.mission import (
+    IllegalMissionTransitionError,
+    Mission,
+    MissionEngine,
+    MissionTask,
+)
+from zet.core.mission_repository import MissionRepository
+from zet.db.base import utcnow
+from zet.db.models import Owner
+from zet.db.models.run import Run
+from zet.domain.enums import (
+    MissionStatus,
+    PermissionLevel,
+    RiskLevel,
+    RunStatus,
+    RunTrigger,
+)
+from zet.security.approvals import ApprovalService
+from zet.security.killswitch import KillSwitchEngagedError
+
+# ── Soxta bog'liqliklar ──────────────────────────────────────────
+
+
+@dataclass
+class FakeBundle:
+    capabilities: list[str] = field(default_factory=list)
+    agents: list[str] = field(default_factory=list)
+    tools: list[str] = field(default_factory=list)
+    permissions_required: list[PermissionLevel] = field(default_factory=list)
+    risk_level: RiskLevel = RiskLevel.LOW
+
+
+class FakeCapabilityRegistry:
+    def __init__(self, bundle: FakeBundle) -> None:
+        self.bundle = bundle
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def compose(self, objective: str, context: dict[str, Any]) -> FakeBundle:
+        self.calls.append((objective, context))
+        return self.bundle
+
+
+class FakeRelevantContext:
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._data = data
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self._data)
+
+
+class FakeContextEngine:
+    def __init__(self, data: dict[str, Any] | None = None) -> None:
+        self.data = data or {}
+        self.calls = 0
+
+    async def discover(
+        self, objective: str, *, owner_id: uuid.UUID, constraints: list[str]
+    ) -> FakeRelevantContext:
+        self.calls += 1
+        return FakeRelevantContext(self.data)
+
+
+@dataclass
+class FakeRunRecord:
+    run_id: uuid.UUID
+    status: RunStatus = RunStatus.DONE
+    verified_ok: bool | None = True
+    pending_approval_id: uuid.UUID | None = None
+    error: str | None = None
+
+
+class FakeOrchestrator:
+    """Har chaqiruvda `_runs` navbatidan bir RunRecord qaytaradi."""
+
+    def __init__(self, session: AsyncSession, owner: Owner) -> None:
+        self._session = session
+        self._owner = owner
+        self._queued: list[FakeRunRecord] = []
+        self.start_calls: list[Any] = []
+        self.raise_kill_switch = False
+
+    def queue(self, *records: FakeRunRecord) -> None:
+        self._queued.extend(records)
+
+    async def start(self, command: Any, *, dry_run: bool = False) -> FakeRunRecord:
+        self.start_calls.append(command)
+        if self.raise_kill_switch:
+            raise KillSwitchEngagedError("stop")
+        if not self._queued:
+            raise AssertionError("FakeOrchestrator navbati bo'sh")
+        record = self._queued.pop(0)
+        # Real Run yozuvi — MissionRunLink FK talab qiladi
+        run = Run(
+            id=record.run_id,
+            owner_id=self._owner.id,
+            trigger=RunTrigger.MANUAL,
+            command_text=str(command.text if hasattr(command, "text") else "x"),
+            trace_id="trace",
+        )
+        self._session.add(run)
+        await self._session.flush()
+        return record
+
+
+class FakeMemoryStore:
+    def __init__(self) -> None:
+        self.written: list[tuple[uuid.UUID, str, str]] = []
+
+    async def remember(
+        self,
+        owner_id: uuid.UUID,
+        content: str,
+        *,
+        layer: str,
+        source: str,
+    ) -> None:
+        self.written.append((owner_id, content, layer))
+
+
+class FakeRecovery:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def diagnose_and_patch(self, mission: Mission, last_failure: str) -> Mission:
+        self.calls += 1
+        return mission
+
+
+# ── Fixture'lar ──────────────────────────────────────────────────
+
+
+@pytest.fixture
+def repo(session: AsyncSession, owner: Owner) -> MissionRepository:
+    return MissionRepository(session, owner_id=owner.id)
+
+
+@pytest.fixture
+def approvals() -> ApprovalService:
+    return ApprovalService()
+
+
+def _engine(
+    *,
+    repo: MissionRepository,
+    approvals: ApprovalService,
+    session: AsyncSession,
+    owner: Owner,
+    bundle: FakeBundle | None = None,
+    context: dict[str, Any] | None = None,
+    memory: FakeMemoryStore | None = None,
+    recovery: FakeRecovery | None = None,
+    risk_classifier: Any = None,
+    max_retries: int = 2,
+) -> tuple[MissionEngine, FakeOrchestrator, FakeCapabilityRegistry, FakeContextEngine]:
+    b = bundle or FakeBundle(tools=["note.write"])
+    reg = FakeCapabilityRegistry(b)
+    ctx = FakeContextEngine(context or {})
+    orch = FakeOrchestrator(session, owner)
+    engine = MissionEngine(
+        repository=repo,
+        capability_registry=reg,
+        context_engine=ctx,
+        planner=SimpleNamespace(),  # plan() ni chaqirmaymiz — bundle to'g'ridan-to'g'ri task'ga aylanadi
+        orchestrator=orch,  # type: ignore[arg-type]
+        approvals=approvals,
+        recovery=recovery,
+        memory_store=memory,
+        risk_classifier=risk_classifier,
+        max_retries=max_retries,
+    )
+    return engine, orch, reg, ctx
+
+
+# ── Testlar ──────────────────────────────────────────────────────
+
+
+class TestHappyPath:
+    async def test_low_risk_completes_end_to_end(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        memory = FakeMemoryStore()
+        engine, orch, _, _ = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            memory=memory,
+        )
+        run_id = uuid.uuid4()
+        orch.queue(FakeRunRecord(run_id=run_id, status=RunStatus.DONE, verified_ok=True))
+
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.COMPLETED
+        assert run_id in m.run_ids
+
+    async def test_completed_writes_memory_updates(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        memory = FakeMemoryStore()
+        engine, orch, _, _ = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            memory=memory,
+        )
+        run_id = uuid.uuid4()
+        orch.queue(FakeRunRecord(run_id=run_id, status=RunStatus.DONE, verified_ok=True))
+
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await repo.update(m.id, memory_updates=["fikr: ega loyihani xohladi"])
+        await engine.run_to_completion(m.id)
+
+        assert len(memory.written) == 1
+        assert "fikr:" in memory.written[0][1]
+
+
+class TestApprovalGate:
+    async def test_high_risk_forces_waiting_approval(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        bundle = FakeBundle(tools=["deploy"], risk_level=RiskLevel.HIGH)
+        engine, orch, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, bundle=bundle
+        )
+
+        m = await engine.submit(owner_id=owner.id, objective="deploy")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.WAITING_APPROVAL
+        assert m.pending_approval_id is not None
+        assert orch.start_calls == []  # execute() chaqirilmagan
+
+    async def test_direct_execute_before_approve_illegal(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        bundle = FakeBundle(tools=["deploy"], risk_level=RiskLevel.HIGH)
+        engine, _, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, bundle=bundle
+        )
+        m = await engine.submit(owner_id=owner.id, objective="deploy")
+        m = await engine.run_to_completion(m.id)
+        assert m.status is MissionStatus.WAITING_APPROVAL
+
+        with pytest.raises(IllegalMissionTransitionError):
+            # WAITING_APPROVAL → VERIFYING taqiqlangan
+            await engine.verify(m, FakeRunRecord(run_id=uuid.uuid4(), verified_ok=True))  # type: ignore[arg-type]
+
+    async def test_approve_transitions_to_executing(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        bundle = FakeBundle(tools=["deploy"], risk_level=RiskLevel.HIGH)
+        engine, _orch, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, bundle=bundle
+        )
+        m = await engine.submit(owner_id=owner.id, objective="deploy")
+        m = await engine.run_to_completion(m.id)
+        approval_id = m.pending_approval_id
+        assert approval_id is not None
+
+        m = await engine.approve(m.id, approval_id)
+        assert m.status is MissionStatus.EXECUTING
+
+
+class TestVerificationAndRecovery:
+    async def test_verify_failure_enters_recovering(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        recovery = FakeRecovery()
+        engine, orch, _, _ = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            recovery=recovery,
+        )
+        # 1-urinish: yiqiladi. 2-urinish: yiqiladi. 3-urinish: max_retries=2 → FAILED
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=False, error="e1"
+            ),
+            FakeRunRecord(
+                run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=False, error="e2"
+            ),
+            FakeRunRecord(
+                run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=False, error="e3"
+            ),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.FAILED
+        assert "max retries" in (m.error or "")
+        # 3 ta run biriktirildi (asosiy + 2 recovery)
+        runs = await repo.list_runs(m.id)
+        assert len(runs) == 3
+        assert recovery.calls == 2  # max_retries=2 → recover 2 marta chaqiriladi
+
+    async def test_recovery_recovers_and_completes(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ = _engine(repo=repo, approvals=approvals, session=session, owner=owner)
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=False, error="e1"
+            ),
+            FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.COMPLETED
+        assert m.retry_count == 1
+
+
+class TestCancel:
+    async def test_cancel_from_planning(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, _, _, _ = _engine(repo=repo, approvals=approvals, session=session, owner=owner)
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        # Manually advance to PLANNING
+        m = await repo.set_status(m.id, MissionStatus.UNDERSTANDING)
+        m = await repo.set_status(m.id, MissionStatus.DISCOVERING)
+        m = await repo.set_status(m.id, MissionStatus.PLANNING)
+
+        m = await engine.cancel(m.id, "ega bekor qildi")
+        assert m.status is MissionStatus.CANCELLED
+        assert m.error == "ega bekor qildi"
+
+    async def test_cancel_from_completed_forbidden(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ = _engine(repo=repo, approvals=approvals, session=session, owner=owner)
+        orch.queue(FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True))
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+        assert m.status is MissionStatus.COMPLETED
+
+        with pytest.raises(IllegalMissionTransitionError):
+            await engine.cancel(m.id, "kech")
+
+
+class TestCapabilityAndContext:
+    async def test_capability_registry_output_used(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        bundle = FakeBundle(
+            capabilities=["website.build"],
+            agents=["dev"],
+            tools=["website.build", "instagram.post"],
+        )
+        engine, orch, reg, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, bundle=bundle
+        )
+        orch.queue(FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True))
+
+        m = await engine.submit(owner_id=owner.id, objective="sayt qur")
+        m = await engine.run_to_completion(m.id)
+
+        assert reg.calls  # compose chaqirilgan
+        assert m.tools == ["website.build", "instagram.post"]
+        assert m.capabilities == ["website.build"]
+        # Har tool bitta MissionTask'ga aylanadi
+        titles = [t["title"] if isinstance(t, dict) else t.title for t in m.tasks]
+        assert titles == ["website.build", "instagram.post"]
+
+    async def test_context_engine_output_written(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ctx_engine = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            context={"project_id": "abc", "obsidian_notes": ["note1"]},
+        )
+        orch.queue(FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True))
+
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.context == {"project_id": "abc", "obsidian_notes": ["note1"]}
+        # JSON round-trip qulflandi (fresh repo o'qish orqali)
+        fresh = await repo.get(m.id)
+        assert fresh.context == {"project_id": "abc", "obsidian_notes": ["note1"]}
+
+
+class TestGuards:
+    async def test_kill_switch_causes_failed(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ = _engine(repo=repo, approvals=approvals, session=session, owner=owner)
+        orch.raise_kill_switch = True
+
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.FAILED
+        assert "kill switch" in (m.error or "")
+        runs = await repo.list_runs(m.id)
+        assert runs == []
+
+    async def test_deadline_expired_auto_cancel(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ = _engine(repo=repo, approvals=approvals, session=session, owner=owner)
+        past = utcnow() - timedelta(hours=1)
+
+        m = await engine.submit(owner_id=owner.id, objective="ish", deadline=past)
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.CANCELLED
+        assert "deadline" in (m.error or "")
+        assert orch.start_calls == []
+
+
+class TestStateMachineIntegrity:
+    async def test_invalid_transition_leaves_status_unchanged(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, _, _, _ = _engine(repo=repo, approvals=approvals, session=session, owner=owner)
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        # Manually advance to PLANNING
+        m = await repo.set_status(m.id, MissionStatus.UNDERSTANDING)
+        m = await repo.set_status(m.id, MissionStatus.DISCOVERING)
+        m = await repo.set_status(m.id, MissionStatus.PLANNING)
+
+        # verify() PLANNING dan chaqirilsa VERIFYING → COMPLETED taqiqlangan
+        # (PLANNING → COMPLETED emas; oldindan _transition COMPLETED ni ruxsat etmaydi)
+        with pytest.raises(IllegalMissionTransitionError):
+            await engine.verify(
+                m,
+                FakeRunRecord(run_id=uuid.uuid4(), verified_ok=True),  # type: ignore[arg-type]
+            )
+        fresh = await repo.get(m.id)
+        assert fresh.status is MissionStatus.PLANNING
+
+
+# ── MissionTask smoke ─────────────────────────────────────────────
+
+
+class TestMissionTaskShape:
+    def test_task_serializes(self) -> None:
+        t = MissionTask(position=0, title="build", tool="website.build")
+        dumped = t.model_dump(mode="json")
+        assert dumped["position"] == 0
+        assert dumped["tool"] == "website.build"

@@ -869,6 +869,20 @@ def _build_verifier_judge(router: ModelRouter) -> object:
     return _VerifierJudgeProvider(router)
 
 
+@lru_cache(maxsize=1)
+def get_capability_registry() -> object:
+    """Global CapabilityRegistry (singleton) — builtin capability'lar bilan.
+
+    Registry pastdan yuqoriga bir marta qurilishi shart (aylanma dep
+    hosil qilmaslik uchun) — shu sabab lru_cache ostida singleton.
+    """
+    from zet.core.capability import CapabilityRegistry, builtin_capabilities
+
+    registry = CapabilityRegistry()
+    registry.register_many(builtin_capabilities())
+    return registry
+
+
 def get_orchestrator(
     router: ModelRouter = Depends(get_model_router),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -900,6 +914,129 @@ def get_orchestrator(
         run_timeout_s=settings.run_timeout_s,
         concurrency_semaphore=get_run_semaphore(),
         verifier_judge_provider=_build_verifier_judge(router),
+    )
+
+
+async def build_mission_engine_for_session(
+    session: AsyncSession,
+    orchestrator: Orchestrator,
+    approvals: ApprovalService,
+):  # type: ignore[no-untyped-def]  # local imports return non-exported types
+    """Approve/reject endpoint uchun kichik yordamchi: sessiya ustida MissionEngine.
+
+    Adversarial verify topgan HIGH bug'ni tuzatish uchun kerak: mission-level
+    approval'lar `Orchestrator.approve()` orqali o'ta olmasdi (RunStore'da
+    mission.id yo'q). Endi approvals endpoint mission_id ni ko'rgach shu
+    yordamchi orqali MissionEngine ochib `approve()`/`run_to_completion()`
+    ni chaqiradi. Sessiya ochilgan kontekstda saqlanadi (chaqiruvchi
+    `async with session_scope(...)` bloki ichida).
+    """
+    from zet.core.capability import CapabilityRegistry
+    from zet.core.context import ContextEngine
+    from zet.core.mission import MissionEngine
+    from zet.core.mission_orchestrator import (
+        CapabilityRegistryComposer,
+        ContextEngineAdapter,
+    )
+    from zet.core.mission_repository import MissionRepository
+    from zet.workspace.repository import WorkspaceRepository
+
+    settings = get_settings()
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+
+    memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+    workspace = WorkspaceRepository(session, owner_id=owner.id)
+    context_engine = ContextEngine(
+        owner_id=owner.id,
+        memory_store=memory,
+        workspace_repo=workspace,
+    )
+    capability_registry: CapabilityRegistry = get_capability_registry()  # type: ignore[assignment]
+    composer = CapabilityRegistryComposer(capability_registry)
+    repo = MissionRepository(session, owner_id=owner.id)
+    return MissionEngine(
+        repository=repo,
+        capability_registry=composer,
+        context_engine=ContextEngineAdapter(context_engine),
+        planner=orchestrator._planner,
+        orchestrator=orchestrator,
+        approvals=approvals,
+        recovery=None,
+        memory_store=memory,
+        max_retries=2,
+    )
+
+
+async def get_mission_orchestrator(
+    session: AsyncSession = Depends(get_db_session),
+    orchestrator: Orchestrator = Depends(get_orchestrator),
+    approval_service: ApprovalService = Depends(get_approval_service),
+    permission_policy: PermissionPolicy = Depends(get_permission_policy),
+    killswitch: KillSwitchState = Depends(get_killswitch),
+    notifier: Notifier = Depends(get_notifier),
+    router: ModelRouter = Depends(get_model_router),
+    settings: Settings = Depends(get_config),
+):  # type: ignore[no-untyped-def]  # forward-ref, MissionOrchestrator local import
+    """So'rov chegarasidagi `MissionOrchestrator` — 6 ta yangi qatlamni birlashtiradi.
+
+    Har mission uchun yangi `MissionEngine` va `MissionRepository`
+    quriladi (sessiya scoped). Global qismlar (Orchestrator, Killswitch,
+    CapabilityRegistry, Notifier) singleton'lardan qayta ishlatiladi.
+    """
+    from zet.core.capability import CapabilityRegistry
+    from zet.core.context import ContextEngine
+    from zet.core.mission import MissionEngine
+    from zet.core.mission_orchestrator import (
+        CapabilityRegistryComposer,
+        ContextEngineAdapter,
+        MissionOrchestrator,
+    )
+    from zet.core.mission_repository import MissionRepository
+    from zet.workspace.repository import WorkspaceRepository
+
+    del router  # kelajakda understand_fn (LLM) uchun
+
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+
+    # ContextEngine — memory + workspace bilan (arzon so'rovlar).
+    memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+    workspace = WorkspaceRepository(session, owner_id=owner.id)
+    context_engine = ContextEngine(
+        owner_id=owner.id,
+        memory_store=memory,
+        workspace_repo=workspace,
+    )
+
+    # Capability composer — singleton registry ustidan compose() beradi.
+    capability_registry: CapabilityRegistry = get_capability_registry()  # type: ignore[assignment]
+    composer = CapabilityRegistryComposer(capability_registry)
+
+    # MissionEngine — Bo'lim 2 §2.2 asosiy driver.
+    repo = MissionRepository(session, owner_id=owner.id)
+    engine = MissionEngine(
+        repository=repo,
+        capability_registry=composer,
+        context_engine=ContextEngineAdapter(context_engine),
+        planner=orchestrator._planner,
+        orchestrator=orchestrator,
+        approvals=approval_service,
+        recovery=None,
+        memory_store=memory,
+        max_retries=2,
+    )
+
+    return MissionOrchestrator(
+        capability_registry=composer,
+        context_engine=context_engine,
+        mission_engine=engine,
+        planner=orchestrator._planner,
+        executor=None,  # Executor per-run yaratilib bo'lgan Orchestrator ichida
+        verifier=orchestrator._verifier,
+        recovery_engine=orchestrator._recovery_engine,
+        approval_service=approval_service,
+        permission_policy=permission_policy,
+        notifier=notifier,
+        killswitch=killswitch,
     )
 
 

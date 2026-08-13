@@ -20,11 +20,13 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 
 import structlog
 
+from zet.core.dag import plan_to_dag
 from zet.domain.command import ConversationTurn
 from zet.domain.enums import (
     MessageRole,
@@ -108,6 +110,7 @@ class StepResult:
         error: str | None = None,
         retries: int = 0,
         output: str = "",
+        cost_usd: float = 0.0,
     ) -> None:
         self.step = step
         self.status = status
@@ -115,6 +118,13 @@ class StepResult:
         self.error = error
         self.retries = retries
         self.output = output
+        # NEGA: parallel bosqichda bir nechta `_think()` bir vaqtda
+        # ishlashi mumkin — agar har biri `self._spent_usd += ...`
+        # qilib to'g'ridan-to'g'ri mutatsiya qilsa, race bo'ladi.
+        # Ilgari `_think()` `self._spent_usd`ni o'zi o'zgartirar edi;
+        # endi u xarajatni shu maydonga qaytaradi, Executor esa
+        # `asyncio.gather` yakunlanganidan keyin bir joyda qo'shadi.
+        self.cost_usd = cost_usd
 
     @property
     def text(self) -> str:
@@ -228,79 +238,89 @@ class Executor:
         if approved_steps:
             ctx.approved_steps = approved_steps
 
-        # Topologik tartiblash — DAG bo'yicha bajarish
-        ordered = self._topological_sort(plan.steps)
+        # DAG bosqichlariga bo'lish: har bosqich ichidagi qadamlar bir-biridan
+        # mustaqil (`asyncio.gather` bilan parallel ishga tushiriladi).
+        # Chiziqli reja (0→1→2→3) → to'rt bitta qadamli bosqich — bugungi
+        # ketma-ket xatti-harakat aynan takrorlanadi.
+        batches = plan_to_dag(plan.steps)
 
-        for step in ordered:
-            # KillSwitch tekshiruvi
+        for batch in batches:
+            # KillSwitch tekshiruvi (bosqich boshida bir marta).
             self._killswitch.check()
 
-            # Budget tekshiruvi
+            # Budget tekshiruvi bosqich boshida. Chiziqli rejada bu
+            # eski "har qadam boshida" tekshiruv bilan bir xil bo'ladi;
+            # parallel bosqichda bir yoki bir nechta qadam sarflaydi,
+            # keyingi bosqich yangi jamlangan holatni ko'radi.
             if self.budget_remaining_usd <= 0:
                 log.warning(
                     "executor.budget_exhausted",
                     spent=self._spent_usd,
                     budget=self._budget_usd,
                 )
-                ctx.record(
-                    step.position,
-                    StepResult(step, status=StepStatus.FAILED, error="Budjet tugadi"),
-                )
+                for step in batch:
+                    ctx.record(
+                        step.position,
+                        StepResult(step, status=StepStatus.FAILED, error="Budjet tugadi"),
+                    )
                 raise BudgetExhaustedError(
                     f"Budjet tugadi: {self._spent_usd:.4f}/{self._budget_usd:.4f} USD"
                 )
 
-            # Dependency tekshiruvi.
-            #
-            # Fikrlash qadami ISTISNO. U javob yozadigan qadam va uni
-            # o'tkazib yuborish egani javobsiz qoldiradi. Jonli misol:
-            # Planner "Men kimman?" savoliga o'ylab topilgan
-            # `note.read("user_profile")` qadamini qo'ydi, u yiqildi va
-            # javob qadami "dependency_not_ready" bo'lib ishga tushmadi —
-            # ega mutlaqo hech narsa ko'rmadi. Tool qadami uchun to'siq
-            # o'z kuchida qoladi: yo'q ma'lumot ustida tool ishlatish
-            # noto'g'ri natija beradi.
-            if not ctx.is_step_ready(step):
-                if step.tool_name is not None:
-                    log.warning(
-                        "executor.dependency_not_ready",
-                        step=step.position,
-                        depends_on=step.depends_on,
-                    )
-                    ctx.record(
-                        step.position,
-                        StepResult(
-                            step, status=StepStatus.SKIPPED, error="Dependency bajarilmagan"
-                        ),
-                    )
-                    continue
-                log.info(
-                    "executor.thinking_step_proceeds_without_deps",
-                    step=step.position,
-                    depends_on=step.depends_on,
-                )
-
-            # Qadamni bajarish — trust dinamik: agar oldingi UNTRUSTED
-            # tool natijasi bo'lsa, trust'ni UNTRUSTED'ga tushiramiz.
-            # Bu A-05 ning butun ma'nosi: tashqi (untrusted) ma'lumot
-            # asosida keyingi WRITE/EXECUTE qadam avtomatik bajarilmasin,
-            # `PermissionPolicy` uni approval'ga jo'natishi kerak
-            # (GAP_ANALYSIS AR-02).
+            # Trust bosqich boshida bir marta hisoblanadi (bu bosqichdan
+            # OLDINGI natijalarga qarab). NEGA: parallel qadamlar bir-biriga
+            # trust yubora olmaydi — ular oldindan bir-birining natijasini
+            # ko'rmagan, bu esa aynan sababiyat mantig'iga mos.
             effective_trust = _propagate_trust(baseline=trust, ctx=ctx)
-            result = await self._execute_step(step, ctx, trust=effective_trust, dry_run=dry_run)
-            ctx.record(step.position, result)
 
-            # FAILED bo'lsa — qolgan dependency'li qadamlar skip bo'ladi
-            if result.status == StepStatus.FAILED:
-                log.error(
-                    "executor.step_failed",
-                    step=step.position,
-                    error=result.error,
+            # Approval'ni bosqich BOSHIDA — hech bir qadam ishga
+            # tushirilmasdan turib — tekshiramiz. NEGA: aks holda parallel
+            # bosqichda bir qadam yon effekt qildirib bo'lgan, ikkinchisi
+            # esa approval kutayotgan holat yuz beradi. Chiziqli rejada
+            # xatti-harakat bir xil — hali ham birinchi noto'g'ri qadamda
+            # ko'tariladi.
+            for step in batch:
+                decision = self._policy.check(
+                    step.permission_required,
+                    effective_trust,
+                    tool_name=step.tool_name,
                 )
+                if decision.needs_approval and step.position not in ctx.approved_steps:
+                    log.info(
+                        "executor.approval_required",
+                        step=step.position,
+                        permission=step.permission_required.value,
+                        tool=step.tool_name,
+                    )
+                    raise ApprovalRequiredError(step, decision)
+
+            # Bosqichni parallel bajaramiz. `return_exceptions=False`:
+            # kutilmagan istisno butun run'ni yiqitadi (eski xatti-harakat).
+            coros = [
+                self._execute_step(step, ctx, trust=effective_trust, dry_run=dry_run)
+                for step in batch
+            ]
+            results = await asyncio.gather(*coros, return_exceptions=False)
+
+            # Determinizm uchun position bo'yicha tartibda yozamiz —
+            # `ctx.results.items()` iteratsiyasi log/auditga barqaror kirsin.
+            ordered_pairs = sorted(zip(batch, results, strict=True), key=lambda pr: pr[0].position)
+            for step, result in ordered_pairs:
+                ctx.record(step.position, result)
+                # Xarajatni bosqich yakunlanganidan keyin qo'shamiz —
+                # bir vaqtda ishlagan tasklar `self._spent_usd`ni bir
+                # joyda mutatsiya qilmasin (race yo'q).
+                self._spent_usd += result.cost_usd
+                if result.status == StepStatus.FAILED:
+                    log.error(
+                        "executor.step_failed",
+                        step=step.position,
+                        error=result.error,
+                    )
 
         return ctx
 
-    async def _think(self, step: PlanStep, ctx: ExecutionContext) -> str:
+    async def _think(self, step: PlanStep, ctx: ExecutionContext) -> tuple[str, float]:
         """Fikrlash qadami — LLM egaga javob yozadi.
 
         Oldingi qadamlar natijasi (tool chiqishlari ham) kontekstga
@@ -309,9 +329,16 @@ class Executor:
 
         Router berilmagan bo'lsa (eski chaqiruvchilar, ba'zi testlar) —
         bo'sh matn qaytadi va qadam avvalgidek DONE bo'ladi.
+
+        NEGA `(text, cost)` qaytaradi: parallel bosqichda bir nechta
+        `_think()` bir vaqtda ishlaganda `self._spent_usd += ...` race
+        beradi. Ilgari bu funksiya `self._spent_usd`ni mustaqil
+        o'zgartirar edi; endi xarajatni chaqiruvchiga qaytaradi va
+        Executor uni `asyncio.gather` yakunlangandan keyin bir joyda
+        qo'shadi.
         """
         if self._router is None:
-            return ""
+            return "", 0.0
 
         # Yiqilgan qadam ham kontekstga kiradi — javob halol bo'lsin.
         # Aks holda tool yiqilganda LLM buni bilmaydi va ega "hammasi
@@ -376,10 +403,9 @@ class Executor:
             # Fikrlash qadami butun run'ni yiqitmaydi — javob bo'sh
             # qoladi va Orchestrator buni ochiq ko'rsatadi.
             log.warning("executor.think_failed", step=step.position, error=str(exc))
-            return ""
+            return "", 0.0
 
-        self._spent_usd += result.cost_usd
-        return result.response.text.strip()
+        return result.response.text.strip(), result.cost_usd
 
     async def _execute_step(
         self,
@@ -389,22 +415,31 @@ class Executor:
         trust: TrustLevel,
         dry_run: bool,
     ) -> StepResult:
-        """Bitta qadamni bajaradi — permission + tool + retry."""
-        # Permission tekshiruvi
-        decision = self._policy.check(
-            step.permission_required,
-            trust,
-            tool_name=step.tool_name,
-        )
+        """Bitta qadamni bajaradi — tool + retry.
 
-        if decision.needs_approval and step.position not in ctx.approved_steps:
+        NEGA endi permission tekshiruvi bu yerda yo'q: `execute_plan`
+        uni bosqich BOSHIDA (barcha parallel qadamlar uchun bir marta)
+        bajaradi. Bu — parallel bosqichda bir qadam yon effekt qildirib
+        bo'lmagunicha, ikkinchisi approval kutib turgan holatga tushib
+        qolmasligimizni kafolatlaydi.
+        """
+        # Dependency tayyorligi (bir xil bosqichda dep bo'lmasligi kerak;
+        # ammo invariantni lokal saqlash uchun tekshirib qo'yamiz).
+        # Fikrlash qadami — istisno: dep yiqilsa ham egaga javob yozsin
+        # (`executor.thinking_step_proceeds_without_deps`).
+        if not ctx.is_step_ready(step):
+            if step.tool_name is not None:
+                log.warning(
+                    "executor.dependency_not_ready",
+                    step=step.position,
+                    depends_on=step.depends_on,
+                )
+                return StepResult(step, status=StepStatus.SKIPPED, error="Dependency bajarilmagan")
             log.info(
-                "executor.approval_required",
+                "executor.thinking_step_proceeds_without_deps",
                 step=step.position,
-                permission=step.permission_required.value,
-                tool=step.tool_name,
+                depends_on=step.depends_on,
             )
-            raise ApprovalRequiredError(step, decision)
 
         # Tool bo'lmasa — FIKRLASH qadami: LLM haqiqiy javob yozadi.
         #
@@ -412,9 +447,9 @@ class Executor:
         # ya'ni "Nimalar qilolasan?" kabi savolga javob UMUMAN
         # generatsiya qilinmasdi va ega jarayon hisobotini ko'rardi.
         if step.tool_name is None:
-            output = await self._think(step, ctx)
+            output, cost = await self._think(step, ctx)
             log.info("executor.thinking_step", step=step.position, chars=len(output))
-            return StepResult(step, status=StepStatus.DONE, output=output)
+            return StepResult(step, status=StepStatus.DONE, output=output, cost_usd=cost)
 
         # Tool mavjudligi
         if not self._registry.has(step.tool_name):
@@ -547,14 +582,6 @@ class Executor:
         if step.position in ctx.approved_steps:
             return step.permission_required
         return step.permission_required
-
-    def _topological_sort(self, steps: Sequence[PlanStep]) -> list[PlanStep]:
-        """DAG bo'yicha topologik tartiblash.
-
-        Plan.steps allaqachon validatsiya qilingan (sikl yo'q),
-        shuning uchun bu yerda oddiy tartiblash yetarli.
-        """
-        return sorted(steps, key=lambda s: s.position)
 
 
 _UNTRUSTED_ANNOTATION = (

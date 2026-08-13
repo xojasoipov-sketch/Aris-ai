@@ -17,8 +17,9 @@ from typing import Any
 
 import structlog
 
-from zet.domain.enums import PermissionLevel, TrustLevel
+from zet.domain.enums import PermissionLevel, RiskLevel, TrustLevel
 from zet.domain.tool import ToolResult
+from zet.security.risk import risk_for
 
 log = structlog.get_logger(__name__)
 
@@ -78,6 +79,27 @@ class Tool(ABC):
     def permission_level(self) -> PermissionLevel:
         """Kerakli ruxsat darajasi. Default: READ."""
         return PermissionLevel.READ
+
+    @property
+    def risk_level(self) -> RiskLevel:
+        """Xavf darajasi — ega tasdig'i kerakmi (V-32 kengaytmasi).
+
+        Default: markazlashtirilgan `TOOL_RISK_LEVELS` jadvalidan
+        qidiriladi; topilmasa `RiskLevel.LOW`. Har bir subclass
+        bir qatorli property bilan override qilishi mumkin — jadvaldagi
+        yozuvni bosadi (jadval faqat bo'shliqni to'ldiradi).
+
+        NEGA property jadvaldan yuqori emas: eski subclass'lar
+        `risk_level`ni umuman bilmasdi va default LOW olardi. Endi ular
+        avtomatik jadvaldan tortadi va faqat "men aniq boshqacha
+        beraman" degan subclass override qilib bosadi. Bu — foydali
+        va xavfsiz fallback.
+
+        Ilgari HIGH_RISK_TOOLS frozenset faqat "yuqori xavflimi?"
+        bool qaytarardi; MEDIUM'ni bermas edi va business writes bir
+        tanlovsiz avtomatik ketardi.
+        """
+        return risk_for(self.name)
 
     @property
     def output_trust_level(self) -> TrustLevel:

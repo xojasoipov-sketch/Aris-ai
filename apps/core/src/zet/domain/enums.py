@@ -56,6 +56,84 @@ _PERMISSION_RANK: Final[dict[PermissionLevel, int]] = {
 }
 
 
+class RiskLevel(StrEnum):
+    """Xavf darajasi (Capability + Mission uchun).
+
+    NEGA: MissionEngine PLANNING bosqichida bir necha capability'ni bir
+    reja ostida birlashtiradi. Har bir capability'ning o'z xavf darajasi
+    bor; kompozitsiyaning MAX'i tasdiq (approval) darvozasini boshqaradi
+    — HIGH/CRITICAL bo'lsa WAITING_APPROVAL'ga o'tadi.
+
+    Ilgari xavf har tool darajasida edi; bu bir "biznes ochish" rejasini
+    o'nlab alohida tasdiqqa bo'lardi. Endi mission darajasida bitta darvoza.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+    @property
+    def rank(self) -> int:
+        return _RISK_RANK[self]
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, RiskLevel):
+            return self.rank < other.rank
+        return NotImplemented
+
+    def __le__(self, other: object) -> bool:
+        if isinstance(other, RiskLevel):
+            return self.rank <= other.rank
+        return NotImplemented
+
+    def __gt__(self, other: object) -> bool:
+        if isinstance(other, RiskLevel):
+            return self.rank > other.rank
+        return NotImplemented
+
+    def __ge__(self, other: object) -> bool:
+        if isinstance(other, RiskLevel):
+            return self.rank >= other.rank
+        return NotImplemented
+
+    @property
+    def requires_approval(self) -> bool:
+        """MEDIUM+ mission darajasida ega tasdig'ini talab qiladi (AUTONOMY_AUDIT §2.2)."""
+        return self >= RiskLevel.MEDIUM
+
+
+_RISK_RANK: Final[dict[RiskLevel, int]] = {
+    RiskLevel.LOW: 0,
+    RiskLevel.MEDIUM: 1,
+    RiskLevel.HIGH: 2,
+    RiskLevel.CRITICAL: 3,
+}
+
+
+class VerificationStrategy(StrEnum):
+    """Verifier natijani qanday isbotlashi (Master Spec PART 6).
+
+    NEGA: har bir capability o'z chiqishini isbotlashning turli usuliga
+    ega — sayt qurish HTTP_CHECK, moliya HUMAN_REVIEW, deploy HTTP_CHECK
+    + LOG_INSPECTION. Verifier shu enum bo'yicha dispatch qiladi.
+
+    Ilgari verifier universal edi — barcha vazifalarga bir xil
+    tekshiruv qo'llardi va soxta "muvaffaqiyatli" natijalar berardi.
+    """
+
+    NONE = "none"
+    HTTP_CHECK = "http_check"
+    LINK_CHECK = "link_check"
+    VISUAL_DIFF = "visual_diff"
+    API_ECHO = "api_echo"
+    FILE_EXISTS = "file_exists"
+    TEST_SUITE = "test_suite"
+    HUMAN_REVIEW = "human_review"
+    LOG_INSPECTION = "log_inspection"
+    METRIC_THRESHOLD = "metric_threshold"
+
+
 class TrustLevel(StrEnum):
     """Ma'lumot manbasiga ishonch darajasi (A-05).
 
@@ -113,6 +191,17 @@ class RunStatus(StrEnum):
     AWAITING_APPROVAL = "awaiting_approval"
     EXECUTING = "executing"
     VERIFYING = "verifying"
+    RECOVERING = "recovering"
+    """FAIL→DIAGNOSE→FIX→RETRY→VERIFY siklidagi vaqtinchalik holat (Master
+    Spec PART 6, AUTONOMY_AUDIT §2.5).
+
+    NEGA alohida holat: verify_run ok=False qaytsa, ilgari darhol FAILED
+    ga o'tardi — ega hech qanday tuzatish urinishini ko'rmasdi. Endi
+    Orchestrator RecoveryEngine bilan qadamlarni tuzatishga urinadi va
+    shu davrda RunRecord.status halol RECOVERING deb ko'rsatiladi.
+
+    Terminal EMAS — u DONE/FAILED/CANCELLED ga (yoki qayta EXECUTING/
+    VERIFYING ga) o'tadi."""
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -151,7 +240,22 @@ RUN_TRANSITIONS: Final[dict[RunStatus, frozenset[RunStatus]]] = {
         }
     ),
     RunStatus.VERIFYING: frozenset(
-        {RunStatus.EXECUTING, RunStatus.DONE, RunStatus.FAILED, RunStatus.CANCELLED}
+        {
+            RunStatus.EXECUTING,
+            RunStatus.RECOVERING,
+            RunStatus.DONE,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }
+    ),
+    RunStatus.RECOVERING: frozenset(
+        {
+            RunStatus.EXECUTING,
+            RunStatus.VERIFYING,
+            RunStatus.DONE,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }
     ),
     RunStatus.DONE: frozenset(),
     RunStatus.FAILED: frozenset(),
@@ -236,6 +340,93 @@ AGENT_TRANSITIONS: Final[dict[AgentStatus, frozenset[AgentStatus]]] = {
     AgentStatus.PAUSED: frozenset({AgentStatus.ACTIVE, AgentStatus.DISABLED, AgentStatus.ARCHIVED}),
     AgentStatus.DISABLED: frozenset({AgentStatus.DRAFT, AgentStatus.ARCHIVED}),
     AgentStatus.ARCHIVED: frozenset(),
+}
+
+
+class MissionStatus(StrEnum):
+    """Mission holati (Bo'lim 2, §2.2).
+
+    NEGA alohida enum: Mission strategiya qatlami (nima qilishni
+    tanlash), Run esa bajarish qatlami. Ilgari faqat `RunStatus` bor
+    edi va u ikki roldan biriga to'g'ri kelmasdi — masalan "kontekst
+    izlash" bosqichi Run holat mashinasiga sig'masdi. Endi Mission
+    o'zining fazalari orqali yuradi va har fazada bir yoki bir nechta
+    Run tug'diradi.
+    """
+
+    RECEIVED = "received"
+    UNDERSTANDING = "understanding"
+    DISCOVERING = "discovering"
+    PLANNING = "planning"
+    WAITING_APPROVAL = "waiting_approval"
+    EXECUTING = "executing"
+    VERIFYING = "verifying"
+    RECOVERING = "recovering"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in _TERMINAL_MISSION_STATUSES
+
+    def can_transition_to(self, target: MissionStatus) -> bool:
+        return target in MISSION_TRANSITIONS[self]
+
+
+_TERMINAL_MISSION_STATUSES: Final[frozenset[MissionStatus]] = frozenset(
+    {MissionStatus.COMPLETED, MissionStatus.FAILED, MissionStatus.CANCELLED}
+)
+
+MISSION_TRANSITIONS: Final[dict[MissionStatus, frozenset[MissionStatus]]] = {
+    MissionStatus.RECEIVED: frozenset(
+        {MissionStatus.UNDERSTANDING, MissionStatus.CANCELLED, MissionStatus.FAILED}
+    ),
+    MissionStatus.UNDERSTANDING: frozenset(
+        {MissionStatus.DISCOVERING, MissionStatus.FAILED, MissionStatus.CANCELLED}
+    ),
+    MissionStatus.DISCOVERING: frozenset(
+        {MissionStatus.PLANNING, MissionStatus.FAILED, MissionStatus.CANCELLED}
+    ),
+    MissionStatus.PLANNING: frozenset(
+        {
+            MissionStatus.WAITING_APPROVAL,
+            MissionStatus.EXECUTING,
+            MissionStatus.FAILED,
+            MissionStatus.CANCELLED,
+        }
+    ),
+    MissionStatus.WAITING_APPROVAL: frozenset(
+        {MissionStatus.EXECUTING, MissionStatus.CANCELLED, MissionStatus.FAILED}
+    ),
+    MissionStatus.EXECUTING: frozenset(
+        {
+            MissionStatus.VERIFYING,
+            MissionStatus.WAITING_APPROVAL,
+            MissionStatus.RECOVERING,
+            MissionStatus.FAILED,
+            MissionStatus.CANCELLED,
+        }
+    ),
+    MissionStatus.VERIFYING: frozenset(
+        {
+            MissionStatus.COMPLETED,
+            MissionStatus.RECOVERING,
+            MissionStatus.FAILED,
+            MissionStatus.CANCELLED,
+        }
+    ),
+    MissionStatus.RECOVERING: frozenset(
+        {
+            MissionStatus.EXECUTING,
+            MissionStatus.PLANNING,
+            MissionStatus.FAILED,
+            MissionStatus.CANCELLED,
+        }
+    ),
+    MissionStatus.COMPLETED: frozenset(),
+    MissionStatus.FAILED: frozenset(),
+    MissionStatus.CANCELLED: frozenset(),
 }
 
 

@@ -26,9 +26,11 @@ from zet.security.injection import InjectionType, ScanResult, is_safe, scan_text
 from zet.security.killswitch import KillSwitchEngagedError, KillSwitchState
 from zet.security.permissions import PermissionDecision, PermissionPolicy
 from zet.security.ratelimit import RateLimiter, RateLimitResult, RateLimitTier
+from zet.security.risk import TOOL_RISK_LEVELS, RiskLevel, risk_for
 from zet.security.secrets import SecretManager, SecretMetadata, SecretStatus
 
 __all__ = [
+    "TOOL_RISK_LEVELS",
     "InjectionType",
     "KillSwitchEngagedError",
     "KillSwitchState",
@@ -37,10 +39,12 @@ __all__ = [
     "RateLimitResult",
     "RateLimitTier",
     "RateLimiter",
+    "RiskLevel",
     "ScanResult",
     "SecretManager",
     "SecretMetadata",
     "SecretStatus",
     "is_safe",
+    "risk_for",
     "scan_text",
 ]

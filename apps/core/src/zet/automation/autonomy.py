@@ -48,7 +48,7 @@ class AutonomyViolationError(RuntimeError):
 
 
 class AutonomyLevel(StrEnum):
-    """Avtonomiya darajasi. Tartiblangan: L0 < L1 < L2 < L3 < L4."""
+    """Avtonomiya darajasi. Tartiblangan: L0 < L1 < L2 < L3 < L4 < L5."""
 
     L0_CHAT = "l0_chat"
     """Suhbat — javob beradi, hech narsani bajarmaydi."""
@@ -64,6 +64,18 @@ class AutonomyLevel(StrEnum):
 
     L4_AUTONOMOUS = "l4_autonomous"
     """Mustaqil — o'ziga vazifa qo'yadi va muvaffaqiyatsizlikdan keyin qayta rejalashtiradi."""
+
+    L5_MONITORED = "l5_monitored"
+    """Kuzatuvli mustaqil agent — vazifadan keyin doimiy salomatlik tsikli.
+
+    NEGA yangi daraja: PART 5 (Master Spec) L5 ni "execute + verify +
+    continuously monitor" deb belgilaydi. L4 bir marta rejalashtirib
+    ishga tushiradi va tugatsa yakunlaydi; L5 esa mission tugagach
+    "standing mission" — davriy salomatlik tekshiruvi va drift/xato
+    xabarnomasi bilan ishlaydi (AUTONOMY_AUDIT §2.9). Ruxsat cheki L4
+    bilan bir xil (`EXECUTE`) — daraja tasdiqni chetlab o'tolmaydi
+    (V-32 hech qanday darajada bekor emas).
+    """
 
     @property
     def rank(self) -> int:
@@ -82,6 +94,7 @@ _LEVEL_RANK: Final[dict[AutonomyLevel, int]] = {
     AutonomyLevel.L2_PIPELINE: 2,
     AutonomyLevel.L3_AGENT: 3,
     AutonomyLevel.L4_AUTONOMOUS: 4,
+    AutonomyLevel.L5_MONITORED: 5,
 }
 
 _LEVEL_LABEL: Final[dict[AutonomyLevel, str]] = {
@@ -90,6 +103,7 @@ _LEVEL_LABEL: Final[dict[AutonomyLevel, str]] = {
     AutonomyLevel.L2_PIPELINE: "Pipeline",
     AutonomyLevel.L3_AGENT: "Agent",
     AutonomyLevel.L4_AUTONOMOUS: "Mustaqil agent",
+    AutonomyLevel.L5_MONITORED: "Kuzatuvli mustaqil agent",
 }
 
 
@@ -110,6 +124,14 @@ class AutonomyCapability(StrEnum):
 
     SELF_IMPROVE = "self_improve"
     """Muvaffaqiyatsizlikdan keyin rejani qayta yozib, qayta urinish (L4)."""
+
+    CONTINUOUS_MONITORING = "continuous_monitoring"
+    """Mission tugagach — davriy salomatlik tsikli va drift xabarnomasi (L5).
+
+    NEGA `SELF_COMMAND`dan farq qiladi: `SELF_COMMAND` bir marta
+    "keyingi vazifa" qo'yishdir; `CONTINUOUS_MONITORING` esa muddatsiz
+    kuzatuv — ega to'xtatmagunicha davom etadi (standing mission).
+    """
 
 
 class AutonomyPolicy(BaseModel, frozen=True):
@@ -177,6 +199,21 @@ _POLICIES: Final[dict[AutonomyLevel, AutonomyPolicy]] = {
         max_permission=PermissionLevel.EXECUTE,
         max_goal_iterations=5,
     ),
+    AutonomyLevel.L5_MONITORED: AutonomyPolicy(
+        level=AutonomyLevel.L5_MONITORED,
+        capabilities=frozenset(
+            {
+                AutonomyCapability.USE_TOOLS,
+                AutonomyCapability.TRIGGERED_RUN,
+                AutonomyCapability.SELF_PLANNING,
+                AutonomyCapability.SELF_COMMAND,
+                AutonomyCapability.SELF_IMPROVE,
+                AutonomyCapability.CONTINUOUS_MONITORING,
+            }
+        ),
+        max_permission=PermissionLevel.EXECUTE,
+        max_goal_iterations=5,
+    ),
 }
 
 
@@ -222,7 +259,7 @@ def _min_level_for(capability: AutonomyCapability) -> AutonomyLevel:
     for level in sorted(AutonomyLevel, key=lambda lv: lv.rank):
         if allows(level, capability):
             return level
-    return AutonomyLevel.L4_AUTONOMOUS  # pragma: no cover — har imkoniyat L4'da bor
+    return AutonomyLevel.L5_MONITORED  # pragma: no cover — har imkoniyat L5'da bor
 
 
 def effective_permission(level: AutonomyLevel, requested: PermissionLevel) -> PermissionLevel:

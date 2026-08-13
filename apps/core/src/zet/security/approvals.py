@@ -16,7 +16,7 @@ from typing import Any
 
 import structlog
 
-from zet.domain.enums import ApprovalStatus, PermissionLevel
+from zet.domain.enums import ApprovalStatus, PermissionLevel, RiskLevel
 
 log = structlog.get_logger(__name__)
 
@@ -62,10 +62,19 @@ class ApprovalRequest:
         preview: dict[str, Any] | None = None,
         ttl_minutes: int = 30,
         now: datetime | None = None,
+        mission_id: uuid.UUID | None = None,
+        risk_level: RiskLevel | None = None,
     ) -> None:
         _now = now or datetime.now(tz=UTC)
         self.id: uuid.UUID = uuid.uuid4()
         self.run_id = run_id
+        # Mission-level approval (Bo'lim 2, §2.2). Ega "sayt qur" desa
+        # butun mission ega tomonidan tasdiqlanishi kerak — bitta step
+        # emas. Bu maydon step-darajali approval'ga TA'SIR QILMAYDI:
+        # step approval'lar `step_position` bilan keladi, mission
+        # approval'lar esa `mission_id` bilan; ikkalasi ham bir vaqtda
+        # bo'lishi mumkin.
+        self.mission_id = mission_id
         self.step_position = step_position
         self.reason = reason
         self.requested_permission = requested_permission
@@ -76,6 +85,11 @@ class ApprovalRequest:
         self.expires_at: datetime = _now + timedelta(minutes=ttl_minutes)
         self.decided_at: datetime | None = None
         self.decision_note: str | None = None
+        # NEGA risk_level ochiq maydon: CLI (`z approvals`) va Telegram
+        # bildirishnomasi "nima uchun tasdiq kerak?" degan savolga
+        # darhol javob bera olsin va HIGH ni ustuvor ko'rsatsin. None
+        # bo'lsa — eski chaqiruvchi (risk axis'ni bilmagan) yozgan.
+        self.risk_level: RiskLevel | None = risk_level
 
     def is_expired(self, now: datetime | None = None) -> bool:
         """Muddati tugaganmi."""
@@ -155,6 +169,7 @@ class ApprovalService:
         self._ttl_minutes = ttl_minutes
         self._requests: dict[uuid.UUID, ApprovalRequest] = {}
         self._by_run: dict[uuid.UUID, list[uuid.UUID]] = {}
+        self._by_mission: dict[uuid.UUID, list[uuid.UUID]] = {}
 
     def request_approval(
         self,
@@ -166,6 +181,8 @@ class ApprovalService:
         tool_name: str | None = None,
         preview: dict[str, Any] | None = None,
         now: datetime | None = None,
+        mission_id: uuid.UUID | None = None,
+        risk_level: RiskLevel | None = None,
     ) -> ApprovalRequest:
         """Yangi tasdiq so'rovi yaratadi.
 
@@ -181,9 +198,13 @@ class ApprovalService:
             preview=preview,
             ttl_minutes=self._ttl_minutes,
             now=now,
+            mission_id=mission_id,
+            risk_level=risk_level,
         )
         self._requests[req.id] = req
         self._by_run.setdefault(run_id, []).append(req.id)
+        if mission_id is not None:
+            self._by_mission.setdefault(mission_id, []).append(req.id)
 
         log.info(
             "approval.requested",
@@ -205,6 +226,15 @@ class ApprovalService:
     def pending_for_run(self, run_id: uuid.UUID) -> list[ApprovalRequest]:
         """Run uchun kutilayotgan tasdiqlar."""
         ids = self._by_run.get(run_id, [])
+        return [
+            self._requests[aid]
+            for aid in ids
+            if self._requests[aid].status == ApprovalStatus.PENDING
+        ]
+
+    def pending_for_mission(self, mission_id: uuid.UUID) -> list[ApprovalRequest]:
+        """Mission uchun kutilayotgan tasdiqlar (Bo'lim 2, §2.2)."""
+        ids = self._by_mission.get(mission_id, [])
         return [
             self._requests[aid]
             for aid in ids

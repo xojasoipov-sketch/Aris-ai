@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from zet.api.deps import get_approval_service, get_orchestrator, get_session_factory
 from zet.core.orchestrator import Orchestrator, RunNotFoundError
+from zet.db.session import session_scope
 from zet.security.approvals import (
     ApprovalError,
     ApprovalExpiredError,
@@ -99,12 +100,63 @@ async def approve(
     body: ApprovalDecisionRequest,
     orchestrator: Orchestrator = Depends(get_orchestrator),
 ) -> ApprovalDecisionResponse:
-    """Tasdiqni qabul qilib, run bajarilishini davom ettiradi."""
+    """Tasdiqni qabul qilib, run yoki mission bajarilishini davom ettiradi.
+
+    NEGA MISSION FALLBACK. Adversarial verify topgan bug (HIGH):
+    Mission-level approval'lar `approvals.request_approval(run_id=mission.id)`
+    orqali yoziladi (mission darajasida haqiqiy Run yo'q). Orchestrator.approve()
+    esa RunStore'dan run qidiradi va RunNotFoundError otadi — mission bricked
+    bo'lardi. Endi: agar approval `mission_id` bilan yozilgan bo'lsa (yoki
+    Orchestrator uni topa olmasa), MissionEngine.approve() ga o'tamiz.
+    """
     aid = _parse_uuid(approval_id, "approval_id")
+
+    # Avval approval'ni ko'zdan kechiramiz — mission-level bo'lsa alohida yo'l.
     try:
-        record = orchestrator.approve(aid, note=body.note)
+        pending = orchestrator.approvals.get(aid)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Tasdiq topilmadi") from exc
+
+    if pending.mission_id is not None:
+        # Mission-level approval — MissionEngine orqali (mustaqil sessiya
+        # ochamiz, chunki approve endpoint faqat Orchestrator'ga bog'langan).
+        from zet.api.deps import build_mission_engine_for_session
+
+        try:
+            async with session_scope(get_session_factory()) as session:
+                mission_engine = await build_mission_engine_for_session(
+                    session, orchestrator, orchestrator.approvals
+                )
+                mission = await mission_engine.approve(pending.mission_id, aid)
+                mission = await mission_engine.run_to_completion(mission.id)
+        except ApprovalExpiredError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except ApprovalError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        await write_audit(
+            get_session_factory(),
+            actor="owner",
+            action="approval.granted",
+            target=pending.tool_name,
+            permission_level=pending.requested_permission,
+            run_id=pending.run_id,  # backward compat (mission_id sifatida qayd)
+            detail={
+                "reason": pending.reason,
+                "note": body.note,
+                "mission_id": str(pending.mission_id),
+                "mission_status": mission.status.value,
+            },
+        )
+        return ApprovalDecisionResponse(
+            approval=_to_response(orchestrator.approvals.get(aid)),
+            run_id=str(pending.mission_id),  # UI mission ID ni ko'radi
+            run_status=mission.status.value,
+        )
+
+    # Klassik run-level approval.
+    try:
+        record = orchestrator.approve(aid, note=body.note)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApprovalExpiredError as exc:

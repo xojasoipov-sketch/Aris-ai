@@ -16,6 +16,9 @@ Tekshiriladi:
 
 from __future__ import annotations
 
+import asyncio
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -445,3 +448,350 @@ class TestTrustPropagation:
         # SYSTEM/OWNER trust — tegilmaydi
         result3 = _sanitize_untrusted("Salom", is_untrusted=False)
         assert result3 == "Salom"
+
+
+# ── DAG parallelism testlari (Z1.11+) ─────────────────────────────
+
+
+class _SlowReadTool(Tool):
+    """READ tool — 0.1s kutadi. Parallelizm o'lchash uchun."""
+
+    def __init__(self, delay: float = 0.1) -> None:
+        self._delay = delay
+
+    @property
+    def name(self) -> str:
+        return "test.slow_read"
+
+    @property
+    def description(self) -> str:
+        return "Sekin o'qish"
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    async def _execute(self, params: dict[str, Any]) -> str:
+        await asyncio.sleep(self._delay)
+        return "o'qildi"
+
+
+class _RecordingReadTool(Tool):
+    """READ tool — chaqiriqlar sonini sanaydi."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def name(self) -> str:
+        return "test.recording_read"
+
+    @property
+    def description(self) -> str:
+        return "Yozib boruvchi"
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    async def _execute(self, params: dict[str, Any]) -> str:
+        self.calls += 1
+        return "ok"
+
+
+class TestExecutorDagParallelism:
+    async def test_parallel_batch_runs_concurrently(self) -> None:
+        """3 mustaqil sekin READ qadam — parallel bajarilishi kerak."""
+        registry = _make_registry(_SlowReadTool(delay=0.1))
+        executor = Executor(
+            registry=registry,
+            policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+        )
+        plan = _simple_plan(
+            [
+                PlanStep(
+                    position=i,
+                    description=f"Sekin {i}",
+                    tool_name="test.slow_read",
+                    permission_required=PermissionLevel.READ,
+                )
+                for i in range(3)
+            ]
+        )
+
+        started = time.monotonic()
+        ctx = await executor.execute_plan(plan)
+        elapsed = time.monotonic() - started
+
+        assert all(ctx.results[i].status == StepStatus.DONE for i in range(3))
+        # Ketma-ket bo'lsa 0.3s+ bo'lardi; parallel — ~0.1s.
+        assert elapsed < 0.25, f"Parallel emas: {elapsed:.3f}s"
+
+    async def test_diamond_dag_executes_in_order(self) -> None:
+        """0 → {1, 2} → 3 diamond, hammasi READ."""
+        registry = _make_registry(_ReadTool())
+        executor = Executor(
+            registry=registry,
+            policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+        )
+        plan = _simple_plan(
+            [
+                PlanStep(
+                    position=0,
+                    description="root",
+                    tool_name="test.read",
+                    permission_required=PermissionLevel.READ,
+                ),
+                PlanStep(
+                    position=1,
+                    description="chap",
+                    tool_name="test.read",
+                    permission_required=PermissionLevel.READ,
+                    depends_on=[0],
+                ),
+                PlanStep(
+                    position=2,
+                    description="o'ng",
+                    tool_name="test.read",
+                    permission_required=PermissionLevel.READ,
+                    depends_on=[0],
+                ),
+                PlanStep(
+                    position=3,
+                    description="birlashtir",
+                    tool_name="test.read",
+                    permission_required=PermissionLevel.READ,
+                    depends_on=[1, 2],
+                ),
+            ]
+        )
+
+        ctx = await executor.execute_plan(plan)
+
+        assert all(ctx.results[i].status == StepStatus.DONE for i in range(4))
+
+    async def test_linear_plan_backward_compat(self) -> None:
+        """Chiziqli reja — bugungi ketma-ket xatti-harakat aynan takrorlanadi."""
+        executor = _make_executor()
+        ctx = await executor.execute_plan(_simple_plan())
+
+        assert len(ctx.results) == 2
+        assert ctx.results[0].status == StepStatus.DONE
+        assert ctx.results[1].status == StepStatus.DONE
+        assert executor.spent_usd == 0.0
+
+    async def test_failed_step_skips_dependents_across_batches(self) -> None:
+        """0 yiqiladi → 1 va 2 (deps=[0]) SKIPPED."""
+        plan = _simple_plan(
+            [
+                PlanStep(
+                    position=0,
+                    description="Mavjud emas",
+                    tool_name="nonexistent.tool",
+                    permission_required=PermissionLevel.READ,
+                ),
+                PlanStep(
+                    position=1,
+                    description="O'qi",
+                    tool_name="test.read",
+                    permission_required=PermissionLevel.READ,
+                    depends_on=[0],
+                ),
+                PlanStep(
+                    position=2,
+                    description="O'qi 2",
+                    tool_name="test.read",
+                    permission_required=PermissionLevel.READ,
+                    depends_on=[0],
+                ),
+            ]
+        )
+        executor = _make_executor()
+        ctx = await executor.execute_plan(plan)
+
+        assert ctx.results[0].status == StepStatus.FAILED
+        assert ctx.results[1].status == StepStatus.SKIPPED
+        assert ctx.results[2].status == StepStatus.SKIPPED
+        assert "bajarilmagan" in (ctx.results[1].error or "")
+
+    async def test_approval_required_in_parallel_batch_prevents_launch(self) -> None:
+        """Bosqichda WRITE qadami approval kutsa — READ ham ishga tushmaydi."""
+        recording = _RecordingReadTool()
+        registry = _make_registry(recording, _WriteTool())
+        executor = Executor(
+            registry=registry,
+            policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+        )
+        plan = _simple_plan(
+            [
+                PlanStep(
+                    position=0,
+                    description="O'qish",
+                    tool_name="test.recording_read",
+                    permission_required=PermissionLevel.READ,
+                ),
+                PlanStep(
+                    position=1,
+                    description="Yozish (untrusted → tasdiq)",
+                    tool_name="test.write",
+                    permission_required=PermissionLevel.WRITE,
+                ),
+            ]
+        )
+
+        with pytest.raises(ApprovalRequiredError):
+            # UNTRUSTED baseline → WRITE tasdiq talab qiladi.
+            await executor.execute_plan(plan, trust=TrustLevel.UNTRUSTED)
+
+        # READ tool umuman chaqirilmagan bo'lishi kerak.
+        assert recording.calls == 0
+
+
+@dataclass
+class _FakeLLMResponse:
+    text: str
+
+
+@dataclass
+class _FakeRouteResult:
+    response: _FakeLLMResponse
+    cost_usd: float
+
+
+@dataclass
+class _FakeRouter:
+    """Har complete()ga qat'iy cost qaytaradi."""
+
+    per_call_cost: float = 0.001
+    calls: int = 0
+
+    async def complete(self, **kwargs: Any) -> _FakeRouteResult:
+        self.calls += 1
+        return _FakeRouteResult(
+            response=_FakeLLMResponse(text=f"javob-{self.calls}"),
+            cost_usd=self.per_call_cost,
+        )
+
+
+class TestExecutorCostAggregation:
+    async def test_cost_accumulates_across_parallel_think_steps(self) -> None:
+        """3 mustaqil fikrlash qadami — cost race'siz jamlanadi."""
+        registry = _make_registry(_ReadTool())
+        router = _FakeRouter(per_call_cost=0.001)
+        executor = Executor(
+            registry=registry,
+            policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+            router=router,  # type: ignore[arg-type]
+            command_text="test",
+        )
+        plan = _simple_plan(
+            [
+                PlanStep(
+                    position=i,
+                    description=f"Fikrla {i}",
+                    tool_name=None,
+                    permission_required=PermissionLevel.READ,
+                )
+                for i in range(3)
+            ]
+        )
+
+        ctx = await executor.execute_plan(plan)
+
+        assert all(ctx.results[i].status == StepStatus.DONE for i in range(3))
+        assert router.calls == 3
+        # 3 x 0.001 = 0.003. Float aniqligi — pytest.approx.
+        assert executor.spent_usd == pytest.approx(0.003, rel=1e-9)
+
+
+class TestExecutorTrustPropagationAcrossBatches:
+    async def test_untrusted_trust_propagates_between_batches(self) -> None:
+        """Bosqich A UNTRUSTED tool → Bosqich B WRITE (deps=[0]) → tasdiq."""
+        registry = _make_registry(_UntrustedReadTool(), _WriteTool())
+        executor = Executor(
+            registry=registry,
+            policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+        )
+        plan = _simple_plan(
+            [
+                PlanStep(
+                    position=0,
+                    description="Tashqi o'qish",
+                    tool_name="test.untrusted_read",
+                    permission_required=PermissionLevel.READ,
+                ),
+                PlanStep(
+                    position=1,
+                    description="Yozish",
+                    tool_name="test.write",
+                    permission_required=PermissionLevel.WRITE,
+                    depends_on=[0],
+                ),
+            ]
+        )
+
+        # Caller OWNER berdi, lekin oldingi bosqich UNTRUSTED qaytardi.
+        with pytest.raises(ApprovalRequiredError):
+            await executor.execute_plan(plan, trust=TrustLevel.OWNER)
+
+
+@dataclass
+class _BudgetDrainingRouter:
+    """Har chaqiriqda budjetni butunlay yeb qo'yadi."""
+
+    drain_cost: float = 1.0
+    calls: int = 0
+
+    async def complete(self, **kwargs: Any) -> _FakeRouteResult:
+        self.calls += 1
+        return _FakeRouteResult(
+            response=_FakeLLMResponse(text="ha"),
+            cost_usd=self.drain_cost,
+        )
+
+
+class TestExecutorBudgetBetweenBatches:
+    async def test_budget_exhausted_before_next_batch(self) -> None:
+        """Bosqich A budjetni to'liq sarflaydi — Bosqich B BudgetExhausted."""
+        registry = _make_registry(_ReadTool())
+        router = _BudgetDrainingRouter(drain_cost=0.005)
+        executor = Executor(
+            registry=registry,
+            policy=PermissionPolicy(),
+            killswitch=KillSwitchState(),
+            budget_usd=0.001,
+            router=router,  # type: ignore[arg-type]
+            command_text="test",
+        )
+        # Bosqich A: bitta fikrlash qadami (sarflaydi). Bosqich B: 1 dep=[0].
+        plan = _simple_plan(
+            [
+                PlanStep(
+                    position=0,
+                    description="Fikrla",
+                    tool_name=None,
+                    permission_required=PermissionLevel.READ,
+                ),
+                PlanStep(
+                    position=1,
+                    description="O'qish",
+                    tool_name="test.read",
+                    permission_required=PermissionLevel.READ,
+                    depends_on=[0],
+                ),
+            ]
+        )
+
+        with pytest.raises(BudgetExhaustedError):
+            await executor.execute_plan(plan)
+
+        assert executor.spent_usd >= 0.005
+        # Bosqich B qadami FAILED bilan yozib qo'yilishi kerak.
+        # (`execute_plan` bosqichdagi barcha qadamlarni FAILEDga o'tkazadi)
+        # Va uning xatosi "Budjet tugadi".
+        # ctx qaytmaydi (raise), lekin executor.spent_usd tasdiqladik.

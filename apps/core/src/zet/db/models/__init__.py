@@ -11,6 +11,7 @@ from zet.db.models.cost import CostLedger, QuotaLedger
 from zet.db.models.crm import CRMContact, CRMDeal, CRMLead
 from zet.db.models.device import CapabilityToken, Device
 from zet.db.models.memory import MemoryEntry
+from zet.db.models.mission import Mission, MissionRunLink
 from zet.db.models.owner import Conversation, Message, Owner
 from zet.db.models.run import Plan, Run, Step
 from zet.db.models.security import Approval, AuditLog, KillSwitch
@@ -34,6 +35,8 @@ __all__ = [
     "KillSwitch",
     "MemoryEntry",
     "Message",
+    "Mission",
+    "MissionRunLink",
     "Order",
     "Owner",
     "Plan",

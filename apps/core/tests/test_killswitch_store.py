@@ -140,10 +140,14 @@ async def test_load_reasserts_token_revocation_after_restart(
     # 3. Token endi revoked bo'lishi kerak
     async with session_factory() as session:
         rows = (
-            await session.execute(sa_select(CapabilityTokenRow).where(
-                CapabilityTokenRow.token_hash == "a" * 64
-            ))
-        ).scalars().all()
+            (
+                await session.execute(
+                    sa_select(CapabilityTokenRow).where(CapabilityTokenRow.token_hash == "a" * 64)
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
         assert rows[0].revoked_at is not None, (
             "Restart'da tokenlar qayta revoke bo'lmadi — SR-06 invariant buzilgan"
