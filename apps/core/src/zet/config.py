@@ -162,6 +162,17 @@ class Settings(BaseSettings):
     Bo'sh bo'lsa — hech kimga ruxsat yo'q (fail-closed).
     """
 
+    # ── Mijoz do'kon boti (Z51, #42) ─────────────────────────────────
+    #
+    # ATAYIN alohida token/bot — `ZetBot` OwnerMiddleware bilan
+    # fail-closed qurilgan (faqat egaga javob beradi). Bu bot esa
+    # aksincha — HAR QANDAY mijozga javob berishi kerak, lekin HECH
+    # QANDAY tool'ga (fayl, terminal, boshqa Telegram xabar) ruxsati
+    # yo'q — faqat mahsulot qidiruvi + LLM javob generatsiyasi
+    # (`telegram/shop_bot.py`dagi izohga qarang).
+    shop_bot_token: SecretStr | None = None
+    """Alohida BotFather tokeni — `telegram_bot_token`dan BOSHQA bot bo'lishi shart."""
+
     # ── GitHub (Bo'lim 7) ────────────────────────────────────────────
     github_token: SecretStr | None = None
     """GitHub Personal Access Token. Bo'lsa — `github.read`/`github.write`

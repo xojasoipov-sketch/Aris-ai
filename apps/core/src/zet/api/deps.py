@@ -28,9 +28,9 @@ from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
 from zet.domain.command import ConversationTurn
-from zet.domain.enums import MessageRole
+from zet.domain.enums import MessageRole, TaskClass
 from zet.domain.memory import MemoryQuery, MemorySearchResult
-from zet.llm.base import LLMProvider
+from zet.llm.base import ChatMessage, LLMError, LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
@@ -757,3 +757,86 @@ def get_telegram_bot() -> object:
         notifier=get_notifier(),
         orchestrator_runner=_runner,
     )
+
+
+# ── Mijoz do'kon boti ─────────────────────────────────────────────
+
+SHOP_BOT_MAX_TOKENS = 400
+"""Javob uzunligi chegarasi — mijoz DM'i qisqa savol-javob, insho emas."""
+
+SHOP_BOT_PRODUCT_LIMIT = 5
+"""LLM'ga uzatiladigan mos mahsulotlar soni — katalog kontekstini shishirmaslik uchun."""
+
+
+async def _shop_answer_fn(
+    *, chat_id: int, user_id: int, text: str, username: str, display_name: str
+) -> str:
+    """Mijoz DM'iga javob — `CommerceRepository` qidiruvi + tool'siz LLM (Z51, #42).
+
+    `shop_bot.py` docstringidagi qarorning amalga oshirilishi: model
+    hech qanday tool ko'rmaydi (`tools=()` — bo'sh, umuman uzatilmaydi),
+    faqat bazadan HAQIQATAN topilgan mahsulotlar matnini ko'radi va shu
+    asosda tabiiy javob yozadi. Narx/mavjudlikni LLM o'zi o'ylab topa
+    olmaydi — ro'yxatda yo'q narsa haqida so'ralsa buni ochiq aytadi.
+    """
+    settings = get_settings()
+    async with session_scope(get_session_factory()) as session:
+        owner = await get_or_create_owner(session, external_id=settings.owner_id)
+        commerce = CommerceRepository(session, owner_id=owner.id)
+
+        # Yozgan har kim CRM kontaktga aylanadi — #43 (kargo xabari)
+        # keyinchalik shu kontakt orqali mijozni topadi.
+        await commerce.get_or_create_contact_by_chat_id(
+            chat_id=chat_id,
+            display_name=display_name or f"Mijoz {user_id}",
+            username=username,
+        )
+
+        products = await commerce.search_products(text, limit=SHOP_BOT_PRODUCT_LIMIT)
+        if products:
+            catalog_lines = [
+                f"- {p.name}: {p.price_uzs:,.0f} so'm"
+                f"{' — TUGAGAN' if p.stock_qty <= 0 else ''}"
+                f"{f' ({p.description})' if p.description else ''}"
+                for p in products
+            ]
+            catalog_text = "\n".join(catalog_lines)
+        else:
+            catalog_text = "(mos mahsulot topilmadi)"
+
+        system = (
+            "Sen — do'kon egasining Telegram savdo yordamchisisan. "
+            "Mijozga QISQA, samimiy, o'zbek tilida javob ber.\n\n"
+            "QOIDA: narx va mavjudlik haqida FAQAT quyidagi ro'yxatdan "
+            "foydalan — hech qachon o'zingdan o'ylab topma. Agar "
+            "ro'yxatda mijoz so'ragan narsa bo'lmasa, buni ochiq ayt va "
+            "do'kon egasi bilan bog'lanishni taklif qil.\n\n"
+            f"Topilgan mahsulotlar:\n{catalog_text}"
+        )
+
+        router = ModelRouter(get_llm_providers(), session, settings)
+        try:
+            result = await router.complete(
+                task_class=TaskClass.SIMPLE,
+                messages=[ChatMessage(role="user", content=text)],
+                system=system,
+                max_tokens=SHOP_BOT_MAX_TOKENS,
+            )
+        except LLMError:
+            log.warning("shop_bot.llm_unavailable", chat_id=chat_id)
+            return "Kechirasiz, hozir javob bera olmayapman — birozdan so'ng qayta urinib ko'ring."
+        return result.response.text
+
+
+@lru_cache(maxsize=1)
+def get_shop_bot() -> object:
+    """Global mijoz do'kon boti (singleton) — `ZetBot`dan MUSTAQIL (Z51, #42).
+
+    Turini `object` qilish `get_telegram_bot` bilan bir xil sabab —
+    tsiklik importdan saqlanish. Tokensiz sozlanganda stub rejimda
+    ishlaydi (hech qanday tarmoq chaqiruvi yo'q)."""
+    from zet.telegram.shop_bot import ShopBot
+
+    settings = get_settings()
+    token = settings.shop_bot_token.get_secret_value() if settings.shop_bot_token else ""
+    return ShopBot(token=token, answer_fn=_shop_answer_fn)

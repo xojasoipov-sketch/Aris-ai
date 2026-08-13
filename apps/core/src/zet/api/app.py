@@ -37,6 +37,7 @@ from zet.api.deps import (
     get_llm_providers,
     get_notifier,
     get_permission_policy,
+    get_shop_bot,
     get_stt,
     get_telegram_bot,
     get_tool_registry,
@@ -154,6 +155,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     telegram_bot = get_telegram_bot()
     await telegram_bot.start()  # type: ignore[attr-defined]
 
+    # Mijoz do'kon boti — ZetBot'dan MUSTAQIL polling (Z51, #42).
+    # `shop_bot_token` sozlanmagan bo'lsa stub rejimda qoladi, hech
+    # qanday tarmoq chaqiruvi bo'lmaydi.
+    shop_bot = get_shop_bot()
+    await shop_bot.start()  # type: ignore[attr-defined]
+
     yield
 
     log.info("zet.shutdown")
@@ -167,6 +174,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await automation_daemon_task
     with contextlib.suppress(Exception):
         await telegram_bot.stop()  # type: ignore[attr-defined]
+    with contextlib.suppress(Exception):
+        await shop_bot.stop()  # type: ignore[attr-defined]
     providers = get_llm_providers()
     for provider in providers.values():
         await provider.aclose()
