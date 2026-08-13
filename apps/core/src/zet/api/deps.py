@@ -967,8 +967,15 @@ def get_telegram_bot() -> object:
     from zet.domain.command import Command
     from zet.domain.enums import MessageRole
     from zet.security.approvals import ApprovalError, ApprovalExpiredError
+    from zet.security.audit_writer import write_audit
+    from zet.security.killswitch_actions import revoke_owner_tokens
+    from zet.security.killswitch_store import persist_killswitch
     from zet.telegram.bot import ZetBot
-    from zet.telegram.handlers import ApprovalRunResult, OrchestratorRunResult
+    from zet.telegram.handlers import (
+        ApprovalRunResult,
+        KillSwitchRunResult,
+        OrchestratorRunResult,
+    )
 
     settings = get_settings()
     token = settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else ""
@@ -1082,6 +1089,88 @@ def get_telegram_bot() -> object:
                 run_status=record.status.value,
             )
 
+    async def _killswitch_runner(action: str, reason: str | None) -> KillSwitchRunResult:
+        """Telegram `/killswitch` — HAQIQIY `KillSwitchState` (SR-04).
+
+        REST route (`/api/v1/killswitch/engage`) bilan bir xil zanjir:
+            1) `ks.engage`/`ks.disengage` — flag'ni o'zgartirish
+            2) `persist_killswitch` — DB'ga yozib qo'yish (V-33, restart-durable)
+            3) capability tokenlarni bekor qilish (SR-06)
+            4) `write_audit` — kim/qachon amal qilgani jadvalga
+        """
+        ks = get_killswitch()
+
+        missing_reason = "(ko'rsatilmagan)"
+
+        if action == "status":
+            state = ks.to_dict()
+            engaged = bool(state["engaged"])
+            if engaged:
+                reason_text = state["reason"] or missing_reason
+                body = (
+                    "🚨 KillSwitch YOQILGAN\n"
+                    f"Sabab: {reason_text}\n"
+                    f"Vaqt: {state['engaged_at']}\n"
+                    f"Kim: {state['engaged_by']}"
+                )
+            else:
+                body = "✅ KillSwitch o'chirilgan (tizim faol)"
+            return KillSwitchRunResult(text=body, ok=True, engaged=engaged)
+
+        if action == "engage":
+            if ks.is_engaged:
+                reason_text = ks.reason or missing_reason
+                return KillSwitchRunResult(
+                    text=(f"KillSwitch allaqachon yoqilgan.\nSabab: {reason_text}"),
+                    ok=True,
+                    engaged=True,
+                )
+            engage_reason = reason or "Telegram orqali qo'lda yoqilgan"
+            ks.engage(reason=engage_reason, by="telegram")
+            await persist_killswitch(ks, get_session_factory())
+            revoked = await revoke_owner_tokens(
+                get_session_factory(), owner_external_id=settings.owner_id
+            )
+            await write_audit(
+                get_session_factory(),
+                actor="owner",
+                action="killswitch.engaged",
+                detail={
+                    "reason": engage_reason,
+                    "channel": "telegram",
+                    "revoked_token_count": revoked,
+                },
+            )
+            body = (
+                f"KillSwitch yoqildi.\nSabab: {engage_reason}\nBekor qilingan tokenlar: {revoked}"
+            )
+            return KillSwitchRunResult(text=body, ok=True, engaged=True)
+
+        # action == "disengage"
+        if not ks.is_engaged:
+            return KillSwitchRunResult(
+                text="KillSwitch allaqachon o'chirilgan.",
+                ok=False,
+                engaged=False,
+            )
+        ks.disengage(by="telegram")
+        await persist_killswitch(ks, get_session_factory())
+        await write_audit(
+            get_session_factory(),
+            actor="owner",
+            action="killswitch.disengaged",
+            detail={"channel": "telegram"},
+        )
+        return KillSwitchRunResult(
+            text=(
+                "KillSwitch o'chirildi. Tizim yangi run'larni qabul qiladi.\n"
+                "Diqqat: capability tokenlar tiklanmagan — har qurilmani qayta "
+                "ro'yxatga olishingiz kerak."
+            ),
+            ok=True,
+            engaged=False,
+        )
+
     return ZetBot(
         token=token,
         owner_ids=settings.telegram_owner_id_set,
@@ -1090,6 +1179,7 @@ def get_telegram_bot() -> object:
         notifier=get_notifier(),
         orchestrator_runner=_runner,
         approval_runner=_approval_runner,
+        killswitch_runner=_killswitch_runner,
         moderated_chat_ids=frozenset(settings.telegram_moderated_chat_id_set),
     )
 

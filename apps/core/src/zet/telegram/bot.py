@@ -31,6 +31,7 @@ from zet.telegram.handlers import (
     ApprovalRunner,
     HandlerContext,
     InputType,
+    KillSwitchRunner,
     MessageHandler,
     OrchestratorRunner,
     TelegramInput,
@@ -64,6 +65,7 @@ class ZetBot:
         notifier: Notifier | None = None,
         orchestrator_runner: OrchestratorRunner | None = None,
         approval_runner: ApprovalRunner | None = None,
+        killswitch_runner: KillSwitchRunner | None = None,
         moderated_chat_ids: frozenset[int] = frozenset(),
     ) -> None:
         """
@@ -90,6 +92,7 @@ class ZetBot:
                 tts=tts,
                 orchestrator_runner=orchestrator_runner,
                 approval_runner=approval_runner,
+                killswitch_runner=killswitch_runner,
             )
         )
         self._running = False

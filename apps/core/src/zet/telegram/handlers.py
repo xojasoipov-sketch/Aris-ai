@@ -50,6 +50,15 @@ ApprovalRunner = Callable[[str, str], Awaitable["ApprovalRunResult"]]
 qaytaradi.
 """
 
+KillSwitchRunner = Callable[[str, str | None], Awaitable["KillSwitchRunResult"]]
+"""`(action, reason)` → killswitch amalining natijasi (SR-04).
+
+`action` — "engage", "disengage" yoki "status". `reason` faqat "engage"
+uchun ma'noli. Chaqiruvchi (`deps.py`) `KillSwitchState.engage`/
+`disengage`ni chaqiradi, `persist_killswitch` bilan DB'ga yozadi,
+capability tokenlarni bekor qiladi (SR-06) va audit yozuvi qo'yadi.
+"""
+
 
 @dataclass(frozen=True)
 class OrchestratorRunResult:
@@ -67,6 +76,25 @@ class OrchestratorRunResult:
 
     run_id: str | None = None
     """`RunStore`dagi ID — approval kelsa `resume(run_id)` uchun."""
+
+
+@dataclass(frozen=True)
+class KillSwitchRunResult:
+    """Telegram `/killswitch` buyrug'i natijasi (SR-04).
+
+    `MessageHandler` bu qiymatdan foydalanuvchiga qaytariladigan matnni
+    yasaydi. `text` — asosiy javob, `ok=False` bo'lsa "❌" prefiksi
+    qo'shiladi (masalan disengage'da allaqachon o'chirilgan bo'lsa).
+    """
+
+    text: str
+    """Ega ko'radigan qisqa holat/xato xabari."""
+
+    ok: bool = True
+    """Amal muvaffaqiyatlimi. False bo'lsa handler xatolik prefiksi qo'yadi."""
+
+    engaged: bool = False
+    """Amal bajarilgandan keyingi killswitch holati (True — yoqilgan)."""
 
 
 @dataclass(frozen=True)
@@ -167,6 +195,11 @@ class HandlerContext:
     """Inline ✅/❌ tugmalarini haqiqiy `ApprovalService`+`Orchestrator.resume()`ga
     ulaydigan factory. `None` bo'lsa handler avvalgi kosmetik javobga tushadi
     (test/lean rejim uchun orqaga mos)."""
+
+    killswitch_runner: KillSwitchRunner | None = None
+    """`/killswitch` buyrug'ini haqiqiy `KillSwitchState`ga ulaydigan factory
+    (SR-04). `None` bo'lsa handler avvalgi kosmetik "ulanmagan" matnini
+    qaytaradi (test/lean rejim uchun orqaga mos)."""
 
     reply_with_voice: bool = False
     """`True` bo'lsa har matn javobga TTS qo'shiladi (voice kirish uchun avtomatik)."""
@@ -311,7 +344,7 @@ class MessageHandler:
                     "  /status — tizim holati\n"
                     "  /agents — agentlar ro'yxati\n"
                     "  /budget — budjet holati\n"
-                    "  /killswitch — emergency stop\n\n"
+                    "  /killswitch [on|off|status] — emergency stop\n\n"
                     "Matn yoki ovozli xabar yuboring — ZET bajaradi."
                 ),
             )
@@ -336,14 +369,65 @@ class MessageHandler:
                 text="💰 <b>Budjet</b>\n\n⏳ Budjet holati (Bo'lim 7 da ulanadi)",
             )
 
-        if command == "/killswitch":
-            return TelegramOutput(
-                text="🚨 <b>KillSwitch</b>\n\n⏳ KillSwitch boshqaruvi (Bo'lim 7 da ulanadi)",
-            )
+        if command.startswith("/killswitch"):
+            return await self._handle_killswitch_command(input_.text or "")
 
         return TelegramOutput(
             text=f"❓ Noma'lum buyruq: <code>{_escape_html(command)}</code>",
         )
+
+    async def _handle_killswitch_command(self, raw_text: str) -> TelegramOutput:
+        """`/killswitch [engage|on|disengage|off|status] [reason]` (SR-04).
+
+        Sinonim jufliklar:
+            - `engage`, `on`, `yoq`  → yoqish
+            - `disengage`, `off`, `ochir` → o'chirish
+            - `status` yoki argumentsiz → joriy holat
+
+        `killswitch_runner` ulanmagan bo'lsa (lean/test) — eski stub matnini
+        qaytaradi, back-compat uchun.
+        """
+        parts = raw_text.strip().split(maxsplit=2)
+        # parts[0] — "/killswitch". Argumentlar 1-dan boshlanadi.
+        sub = parts[1].lower() if len(parts) > 1 else "status"
+        reason = parts[2] if len(parts) > 2 else None
+
+        engage_words = {"engage", "on", "yoq", "yoqish"}
+        disengage_words = {"disengage", "off", "ochir", "ochirish", "o'chir"}
+        status_words = {"status", "holat"}
+
+        if sub in engage_words:
+            action = "engage"
+        elif sub in disengage_words:
+            action = "disengage"
+        elif sub in status_words:
+            action = "status"
+        else:
+            # Noma'lum subcommand — status kabi qarab beramiz + eslatma.
+            return TelegramOutput(
+                text=(
+                    "❓ Noma'lum killswitch amali: "
+                    f"<code>{_escape_html(sub)}</code>\n\n"
+                    "Ishlatish: <code>/killswitch on [sabab]</code>, "
+                    "<code>/killswitch off</code>, "
+                    "<code>/killswitch status</code>"
+                ),
+            )
+
+        if self._ctx.killswitch_runner is None:
+            # Lean/test rejim — avvalgi kosmetik javobga tushamiz.
+            return TelegramOutput(
+                text="🚨 <b>KillSwitch</b>\n\n⏳ KillSwitch boshqaruvi (Bo'lim 7 da ulanadi)",
+            )
+
+        try:
+            result = await self._ctx.killswitch_runner(action, reason)
+        except Exception as exc:
+            log.warning("handler.killswitch_failed", error=str(exc), action=action)
+            return TelegramOutput(text=f"❌ Xato: {_escape_html(str(exc)[:400])}")
+
+        prefix = "🚨" if result.engaged else ("✅" if result.ok else "⚠️")
+        return TelegramOutput(text=f"{prefix} {_escape_html(result.text[:3500])}")
 
     async def _handle_callback(self, input_: TelegramInput) -> TelegramOutput:
         """Inline ✅/❌ tugma — HAQIQIY approve/resume (GAP_ANALYSIS BROKEN #2).

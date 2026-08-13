@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from zet.api.deps import get_killswitch, get_session_factory
 from zet.security.audit_writer import write_audit
 from zet.security.killswitch import KillSwitchState
+from zet.security.killswitch_actions import revoke_all_capability_tokens_on_killswitch
 from zet.security.killswitch_store import persist_killswitch
 
 router = APIRouter()
@@ -29,24 +30,43 @@ async def engage_killswitch(
     request: EngageRequest,
     ks: KillSwitchState = Depends(get_killswitch),
 ) -> dict[str, object]:
-    """Emergency stop yoqish."""
+    """Emergency stop yoqish.
+
+    SR-06: yoqilish bilan ega barcha capability tokenlari bekor
+    qilinadi — iPhone/Mac/Kamera clientlari validatsiyada 403 oladi.
+    Disengage bu tokenlarni QAYTA TIKLAMAYDI (ega qurilmani qo'lda
+    qayta ro'yxatga olishi kerak) — bu ataylab, "favqulodda stop"
+    ma'nosi shu."""
     ks.engage(reason=request.reason)
     # DB'ga yozib qo'yamiz — restart'da holat yo'qolmasin (V-33, BROKEN #3)
     await persist_killswitch(ks, get_session_factory())
+    # SR-06: barcha faol capability tokenlarni bekor qilamiz. Fail-open:
+    # DB xatosida ham killswitch bayrog'i yoqilgan holicha qoladi (`check()`
+    # yangi run'larni bloklashda davom etadi).
+    revoked_count = await revoke_all_capability_tokens_on_killswitch(get_session_factory())
     await write_audit(
         get_session_factory(),
         actor="owner",
         action="killswitch.engaged",
-        detail={"reason": request.reason},
+        detail={"reason": request.reason, "revoked_token_count": revoked_count},
     )
-    return {"status": "engaged", "killswitch": ks.to_dict()}
+    return {
+        "status": "engaged",
+        "killswitch": ks.to_dict(),
+        "revoked_token_count": revoked_count,
+    }
 
 
 @router.post("/killswitch/disengage")
 async def disengage_killswitch(
     ks: KillSwitchState = Depends(get_killswitch),
 ) -> dict[str, object]:
-    """Emergency stop o'chirish."""
+    """Emergency stop o'chirish.
+
+    DIQQAT: bekor qilingan capability tokenlar QAYTA TIKLANMAYDI
+    (SR-06 qarori) — ega har qurilmani qo'lda `POST /devices` orqali
+    qayta ro'yxatga olishi kerak. Bu ataylab: emergency stop davomida
+    tokenlar kompromatlangan deb hisoblanadi."""
     try:
         ks.disengage()
     except ValueError as exc:

@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -243,6 +243,47 @@ class DeviceDBRepository:
             return False
         log.info("device.token_revoked", token_prefix=raw_token[:8] + "...")
         return True
+
+    async def revoke_all_tokens(self) -> int:
+        """Egasining barcha faol tokenlarini bekor qiladi (SR-06 killswitch).
+
+        Kill-switch yoqilganda mavjud iPhone/Mac/kamera tokenlari ham
+        hech qanday ish qila olmasligi kerak — aks holda "emergency
+        stop" faqat yangi run'larni to'xtatib, allaqachon ochilgan
+        eshiklarni ochiq qoldirardi. Bulk UPDATE — bitta so'rov, ega
+        chegarasida:
+
+        ```sql
+        UPDATE capability_token
+           SET revoked_at = now()
+         WHERE device_id IN (SELECT id FROM device WHERE owner_id=:owner)
+           AND revoked_at IS NULL
+        ```
+
+        Returns:
+            Bekor qilingan tokenlar soni. DB xatosida `0` — chaqiruvchi
+            baribir killswitch yoqilganini foydalanuvchiga bildiradi
+            (fail-open, `validate_token` bilan bir xil naqsh).
+        """
+        now = datetime.now(UTC)
+        owner_devices_subquery = select(DeviceRow.id).where(DeviceRow.owner_id == self._owner_id)
+        try:
+            result = await self._session.execute(
+                update(CapabilityTokenRow)
+                .where(
+                    CapabilityTokenRow.device_id.in_(owner_devices_subquery),
+                    CapabilityTokenRow.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+            )
+            await self._session.flush()
+        except SQLAlchemyError:
+            log.warning("device.revoke_all_db_error")
+            return 0
+        count = int(result.rowcount or 0)
+        if count:
+            log.critical("device.tokens_bulk_revoked", count=count, owner_id=str(self._owner_id))
+        return count
 
     # ── Yordamchi ─────────────────────────────────────────────────
 

@@ -28,6 +28,7 @@ from fastapi import FastAPI
 
 from zet.api.deps import (
     get_agent_registry,
+    get_alert_manager,
     get_automation_engine,
     get_core_state,
     get_daily_schedule_manager,
@@ -82,12 +83,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from zet.automation.handoff import HandoffDispatcher
     from zet.automation.persistence import load_automation
     from zet.db.session import session_scope
+    from zet.deploy.alerts_daemon import AlertsDaemon, default_rules
     from zet.deploy.automation_daemon import AutomationDaemon
     from zet.deploy.bootstrap import bootstrap_agents, load_persisted_agents
     from zet.deploy.daemon import DailyScheduleDaemon
     from zet.deploy.reports_daemon import ReportsDaemon
     from zet.deploy.selfimprove_daemon import SelfImproveDaemon
     from zet.deploy.shipment_daemon import ShipmentNotifyDaemon
+    from zet.monitoring.notify_bridge import AlertNotificationBridge
+    from zet.security.killswitch_actions import register_killswitch_engage_callback
     from zet.security.killswitch_store import load_killswitch
 
     settings = get_settings()
@@ -110,6 +114,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await load_killswitch(get_killswitch(), get_session_factory())
     except Exception:
         log.warning("zet.killswitch_restore_failed")
+
+    # SR-06: `engage()` chaqirilishi bilan barcha faol capability
+    # tokenlarni bekor qiladigan hook. REST route ham, Telegram runner
+    # ham revocation'ni AWAIT bilan alohida chaqiradi — bu callback
+    # esa CLI (`z killswitch on`) yoki `check()`ni ichkaridan trigger
+    # qiluvchi boshqa kod yo'lini yopadi (fon vazifasi sifatida).
+    # `get_killswitch` singleton bo'lgani uchun testlarda hooklar
+    # to'planib qolmasin deb har startup'da tozalab qayta qo'yamiz.
+    _ks_singleton = get_killswitch()
+    _ks_singleton.clear_engage_callbacks()
+    register_killswitch_engage_callback(_ks_singleton, get_session_factory())
 
     # Kuzatuv (3-xususiyat) uchun tayyor metrikalar — tashqi API'siz,
     # shuning uchun watcher birinchi kundan sinab ko'riladi.
@@ -226,6 +241,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     selfimprove_daemon_task = asyncio.create_task(selfimprove_daemon.run_forever())
 
+    # AlertManager avtomatik ishga tushiruvchi (AUDIT #14 davomi). Qoidalar
+    # HTTP orqali yaratilardi, biroq hech kim ularni haqiqiy metrikalar
+    # bilan chaqirmasdi ("dead wiring"). Endi har 60 sekundda cost/tool/
+    # verifier signallari o'lchanadi va bridge orqali Notifier'ga uzatiladi.
+    # Standart 3 ta qoida ega ko'rmasdanoq trafik olsin — HTTP orqali
+    # o'chirilishi mumkin.
+    alert_manager = get_alert_manager()
+    if not alert_manager.list_rules():
+        for rule in default_rules():
+            alert_manager.add_rule(rule)
+    alerts_bridge = AlertNotificationBridge(alerts=alert_manager, notifier=get_notifier())
+    alerts_daemon = AlertsDaemon(
+        bridge=alerts_bridge,
+        session_factory=get_session_factory(),
+        settings=settings,
+    )
+    alerts_daemon_task = asyncio.create_task(alerts_daemon.run_forever())
+
     yield
 
     log.info("zet.shutdown")
@@ -251,6 +284,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     selfimprove_daemon_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await selfimprove_daemon_task
+    alerts_daemon.stop()
+    alerts_daemon_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await alerts_daemon_task
     with contextlib.suppress(Exception):
         await telegram_bot.stop()  # type: ignore[attr-defined]
     with contextlib.suppress(Exception):

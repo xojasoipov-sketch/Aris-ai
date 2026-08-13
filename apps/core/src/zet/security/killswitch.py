@@ -13,11 +13,23 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import structlog
 
 log = structlog.get_logger(__name__)
+
+EngageCallback = Callable[[], Awaitable[None] | None]
+"""Kill-switch `engage()` chaqirilganda ishga tushadigan hook.
+
+Sinxron yoki asinxron bo'lishi mumkin. Asinxron bo'lsa — joriy event
+loop mavjud bo'lsa `create_task` orqali fon vazifasi sifatida ishga
+tushiriladi (aks holda coroutine yopiladi). Har chaqiruv fail-open:
+istisno faqat log yoziladi, `engage()` xato bermaydi.
+"""
 
 
 class KillSwitchEngagedError(Exception):
@@ -35,6 +47,47 @@ class KillSwitchState:
         self._reason: str | None = None
         self._engaged_at: datetime | None = None
         self._engaged_by: str | None = None
+        self._engage_callbacks: list[EngageCallback] = []
+        # `asyncio.create_task` natijasi zaif referens bilan garbage-collect
+        # bo'lmasin uchun ushlab turamiz (ruff RUF006).
+        self._callback_tasks: set[asyncio.Task[None]] = set()
+
+    def register_engage_callback(self, callback: EngageCallback) -> None:
+        """`engage()` chaqirilganda ishga tushadigan hook qo'shadi (SR-06).
+
+        Kill-switch yoqilishi bilan capability tokenlarni bekor qilish,
+        push bildirishnoma yuborish yoki boshqa yon ta'sirlar uchun.
+        Callback sinxron yoki asinxron bo'lishi mumkin — asinxron bo'lsa
+        joriy event loop mavjud bo'lganda fon vazifasi sifatida ishga
+        tushiriladi. Har chaqiruv fail-open: hech qanday istisno
+        `engage()`ni to'xtatmaydi.
+        """
+        self._engage_callbacks.append(callback)
+
+    def clear_engage_callbacks(self) -> None:
+        """Barcha ro'yxatga olingan callback'larni tozalaydi (testlar uchun)."""
+        self._engage_callbacks.clear()
+
+    def _fire_engage_callbacks(self) -> None:
+        """`engage()` ichida chaqiriladi — hookarni yugurtiradi (fail-open)."""
+        for cb in list(self._engage_callbacks):
+            try:
+                result = cb()
+            except Exception:
+                log.warning("killswitch.engage_callback_failed", exc_info=True)
+                continue
+            if inspect.isawaitable(result):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    # Event loop yo'q — coroutine'ni jimgina yopamiz,
+                    # RuntimeWarning bermasin (`z killswitch on` CLI holati).
+                    if hasattr(result, "close"):
+                        result.close()  # type: ignore[union-attr]
+                    continue
+                task = loop.create_task(_swallow_async_callback(result))
+                self._callback_tasks.add(task)
+                task.add_done_callback(self._callback_tasks.discard)
 
     @property
     def is_engaged(self) -> bool:
@@ -82,6 +135,10 @@ class KillSwitchState:
             by=by,
         )
 
+        # SR-06: yoqilish bilan yon ta'sirlarni ishga tushiramiz —
+        # eng muhimi, faol capability tokenlarni bekor qilish.
+        self._fire_engage_callbacks()
+
     def disengage(self, *, by: str = "owner") -> None:
         """Kill switch'ni o'chiradi.
 
@@ -116,6 +173,11 @@ class KillSwitchState:
                 f"Emergency stop yoqilgan: {self._reason or "sabab ko'rsatilmagan"}"
             )
 
+    @property
+    def engage_callback_count(self) -> int:
+        """Ro'yxatdagi callback'lar soni (test/diagnostika uchun)."""
+        return len(self._engage_callbacks)
+
     def to_dict(self) -> dict[str, object]:
         """Holat — API va CLI uchun."""
         return {
@@ -124,3 +186,11 @@ class KillSwitchState:
             "engaged_at": str(self._engaged_at) if self._engaged_at else None,
             "engaged_by": self._engaged_by,
         }
+
+
+async def _swallow_async_callback(coro: Awaitable[None]) -> None:
+    """Fon vazifasi sifatida await qilinadigan callback — istisnolar log'ga."""
+    try:
+        await coro
+    except Exception:
+        log.warning("killswitch.async_callback_failed", exc_info=True)
