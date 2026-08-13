@@ -141,3 +141,51 @@ ikkalasi bir vaqtda ishlashi mumkin (turli domen/Telegram bot bilan,
 yoki bittasi sinov, ikkinchisi ishlab turgan holda). Telegram bot
 tokeni faqat bittasida faol bo'lishi kerak — ikkala tomon bir xil
 tokenni ishlatsa `getUpdates` polling'i to'qnashadi.
+
+## Backup va restore
+
+Kunlik Postgres nusxasi `zet-backup` konteyneri orqali AVTOMATIK
+yaratiladi (GAP_ANALYSIS.md HR-02):
+
+- **Jadval:** har kuni 03:15 UTC (Toshkent bo'yicha 08:15).
+- **Format:** `zet-YYYY-MM-DD_HHMM.sql.gz` (plain SQL, gzip 9).
+- **Joy:** host'da `/var/backups/zet/` — konteyner tushib qolsa ham qoladi.
+- **Retention:** 14 kun (`BACKUP_RETENTION_DAYS` env orqali sozlanadi).
+- **Ilk nusxa:** konteyner birinchi startida darhol yaratiladi
+  (birinchi cron faqat 03:15'da otilar edi).
+
+### Qo'lda backup ishga tushirish
+
+```bash
+docker exec zet-backup /backup.sh
+```
+
+### Restore (ma'lumotni tiklash)
+
+**DIQQAT:** joriy jadval ma'lumotini o'chirib, backup versiyasini
+o'rniga yozadi. Avval joriy holatning nusxasini oling.
+
+```bash
+# 1. Joriy holatdan xavfsizlik nusxasi
+docker exec zet-backup /backup.sh
+
+# 2. Tiklamoqchi bo'lgan nusxani tanlang
+ls -lh /var/backups/zet/
+
+# 3. Tiklash
+gunzip -c /var/backups/zet/zet-2026-08-13_0315.sql.gz | \
+    docker exec -i zet-postgres psql -U zet -d zet
+
+# 4. Backend qayta ishga tushirish (jadval o'zgargani uchun)
+docker compose -f /opt/zet/infra/hetzner/docker-compose.prod.yml restart backend
+```
+
+### Backup'ni tashqi joyga ko'chirish (tavsiya)
+
+Serverning o'zi buzilsa `/var/backups/zet` ham yo'qoladi. Muhim
+o'rnatishlar uchun nusxalarni tashqi joyga muntazam ko'chirib turing
+(masalan `restic → S3/B2` yoki oddiy `rsync`), masalan cron orqali:
+
+```
+30 3 * * * rsync -a /var/backups/zet/ user@backup-host:/backups/zet/
+```

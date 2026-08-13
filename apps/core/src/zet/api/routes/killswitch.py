@@ -10,8 +10,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from zet.api.deps import get_killswitch
+from zet.api.deps import get_killswitch, get_session_factory
 from zet.security.killswitch import KillSwitchState
+from zet.security.killswitch_store import persist_killswitch
 
 router = APIRouter()
 
@@ -29,6 +30,8 @@ async def engage_killswitch(
 ) -> dict[str, object]:
     """Emergency stop yoqish."""
     ks.engage(reason=request.reason)
+    # DB'ga yozib qo'yamiz — restart'da holat yo'qolmasin (V-33, BROKEN #3)
+    await persist_killswitch(ks, get_session_factory())
     return {"status": "engaged", "killswitch": ks.to_dict()}
 
 
@@ -44,6 +47,7 @@ async def disengage_killswitch(
             status_code=400,
             detail=str(exc),
         ) from exc
+    await persist_killswitch(ks, get_session_factory())
     return {"status": "disengaged", "killswitch": ks.to_dict()}
 
 

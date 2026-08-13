@@ -890,3 +890,74 @@ class TestOrchestratorRunnerWiring:
         # Matn keldi, audio yo'q — lekin butun so'rov halok bo'lmadi
         assert "OK" in result.text
         assert result.voice_data is None
+
+
+class TestApprovalCallbackWiring:
+    """Inline ✅/❌ → `approval_runner` orqali haqiqiy approve/resume (GAP_ANALYSIS BROKEN #2)."""
+
+    @pytest.mark.asyncio()
+    async def test_approve_callback_invokes_runner(self) -> None:
+        from zet.telegram.handlers import ApprovalRunResult
+
+        calls: list[tuple[str, str]] = []
+
+        async def _runner(action: str, run_id: str) -> ApprovalRunResult:
+            calls.append((action, run_id))
+            return ApprovalRunResult(text="Bajarildi", ok=True, run_status="done")
+
+        handler = MessageHandler(HandlerContext(approval_runner=_runner))
+
+        result = await handler.handle(
+            TelegramInput(
+                input_type=InputType.CALLBACK,
+                user_id=123,
+                chat_id=123,
+                callback_data="approve:abc-123",
+            )
+        )
+
+        assert calls == [("approve", "abc-123")]
+        assert "Bajarildi" in result.text
+        assert "done" in result.text
+
+    @pytest.mark.asyncio()
+    async def test_reject_callback_invokes_runner(self) -> None:
+        from zet.telegram.handlers import ApprovalRunResult
+
+        calls: list[tuple[str, str]] = []
+
+        async def _runner(action: str, run_id: str) -> ApprovalRunResult:
+            calls.append((action, run_id))
+            return ApprovalRunResult(text="Rad etildi", ok=True, run_status="cancelled")
+
+        handler = MessageHandler(HandlerContext(approval_runner=_runner))
+
+        result = await handler.handle(
+            TelegramInput(
+                input_type=InputType.CALLBACK,
+                user_id=123,
+                chat_id=123,
+                callback_data="reject:xyz-456",
+            )
+        )
+
+        assert calls == [("reject", "xyz-456")]
+        assert "Rad etildi" in result.text
+
+    @pytest.mark.asyncio()
+    async def test_runner_exception_returns_friendly_error(self) -> None:
+        async def _runner(action: str, run_id: str) -> None:
+            raise RuntimeError("DB o'chirilgan")
+
+        handler = MessageHandler(HandlerContext(approval_runner=_runner))
+
+        result = await handler.handle(
+            TelegramInput(
+                input_type=InputType.CALLBACK,
+                user_id=123,
+                chat_id=123,
+                callback_data="approve:x-1",
+            )
+        )
+        assert "Xato" in result.text
+        assert "DB" in result.text  # xato sababi ko'rsatiladi

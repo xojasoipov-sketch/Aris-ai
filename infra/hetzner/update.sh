@@ -51,6 +51,13 @@ if [[ ! -f .env ]]; then
     exit 1
 fi
 
+# Backup katalogi — host'da, konteyner tushib qolsa ham nusxalar qoladi
+# (GAP_ANALYSIS.md HR-02). Volume mount uchun oldindan yaratish kerak.
+if [[ ! -d /var/backups/zet ]]; then
+    sudo mkdir -p /var/backups/zet
+    sudo chmod 750 /var/backups/zet
+fi
+
 # Caddyfile.active — kuzatilmaydigan nusxa, `git reset` uni tiklamaydi.
 if [[ ! -f Caddyfile.active ]]; then
     set +u
@@ -118,6 +125,18 @@ else
     warn "SHOP BOT TOKENI YO'Q — mijoz DM'lariga javob va kargo xabari ishlamaydi (#42/#43)."
     warn "  Tuzatish: @BotFather'da YANGI (alohida) bot yarating, tokenini"
     warn "  ZET_SHOP_BOT_TOKEN=... qatoriga yozing (ega botining tokenidan BOSHQA bo'lishi shart)."
+fi
+
+# Backup — birinchi ishga tushishda konteyner startida bir marta ishlaydi,
+# so'ng 03:15 UTC'da cron orqali. /var/backups/zet ni tekshiramiz.
+sleep 3  # backup konteynerning first-run pg_dump'iga vaqt beramiz
+LATEST_BACKUP=$(ls -t /var/backups/zet/zet-*.sql.gz 2>/dev/null | head -n1 || true)
+if [[ -n "$LATEST_BACKUP" ]] && [[ -s "$LATEST_BACKUP" ]]; then
+    BACKUP_SIZE=$(du -h "$LATEST_BACKUP" | cut -f1)
+    log "Backup: BOR (oxirgi: $(basename "$LATEST_BACKUP"), $BACKUP_SIZE)"
+else
+    warn "BACKUP HALI YO'Q — birinchi backup 03:15 UTC'da avtomatik yaratiladi,"
+    warn "  yoki qo'lda: docker exec zet-backup /backup.sh"
 fi
 
 printf '\n\033[1;32mTayyor.\033[0m Web: http://%s   Backend: http://%s:8000\n\n' \

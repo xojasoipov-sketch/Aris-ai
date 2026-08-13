@@ -1,0 +1,6 @@
+# ZET — kunlik backup cron jadval (backup konteyneri ichida ishlaydi).
+#
+# Har kuni 03:15 UTC — server jimjit paytida (Toshkent bo'yicha 08:15).
+# Ega kunlik briefingdan oldin yangi nusxa tayyor bo'ladi.
+
+15 3 * * * /backup.sh >> /var/log/backup.log 2>&1

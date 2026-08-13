@@ -28,6 +28,7 @@ from __future__ import annotations
 import structlog
 
 from zet.telegram.handlers import (
+    ApprovalRunner,
     HandlerContext,
     InputType,
     MessageHandler,
@@ -62,6 +63,7 @@ class ZetBot:
         tts: TTSProvider | None = None,
         notifier: Notifier | None = None,
         orchestrator_runner: OrchestratorRunner | None = None,
+        approval_runner: ApprovalRunner | None = None,
         moderated_chat_ids: frozenset[int] = frozenset(),
     ) -> None:
         """
@@ -87,6 +89,7 @@ class ZetBot:
                 stt=self._stt,
                 tts=tts,
                 orchestrator_runner=orchestrator_runner,
+                approval_runner=approval_runner,
             )
         )
         self._running = False

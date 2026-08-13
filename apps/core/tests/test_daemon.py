@@ -20,6 +20,7 @@ from zet.deploy.schedule import DailyScheduleManager, DailyTask, ScheduleSlot
 from zet.domain.enums import AgentStatus
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
+from zet.telegram.notifier import StubNotifier
 from zet.tools.builtin import build_default_registry
 
 
@@ -230,3 +231,82 @@ class TestRealProviderWiring:
         fired = await daemon.tick(now=_at(8, 0))
         assert fired == ["08:00"]
         assert agent_registry.get("ceo").total_runs == 1
+
+
+class TestDelivery:
+    """V-35 kunlik natijalar egaga yetkazilishi (GAP_ANALYSIS BROKEN #4)."""
+
+    async def test_successful_fire_sends_notifier(
+        self, agent_registry: AgentRegistry, tmp_path: Path
+    ) -> None:
+        notifier = StubNotifier()
+        d = DailyScheduleDaemon(
+            schedule=DailyScheduleManager(
+                tasks=[
+                    DailyTask(
+                        slot=ScheduleSlot.MORNING_BRIEF,
+                        agent_name="ceo",
+                        command="Brifing",
+                        description="Ertalabki brifing",
+                    )
+                ]
+            ),
+            agent_registry=agent_registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            core_state=CoreState(),
+            killswitch=KillSwitchState(),
+            timezone="UTC",
+            notifier=notifier,
+        )
+
+        await d.tick(now=_at(8, 0))
+
+        assert len(notifier.sent) == 1
+        assert "Ertalabki brifing" in notifier.sent[0].text
+
+    async def test_no_notifier_is_silent_not_broken(
+        self, agent_registry: AgentRegistry, tmp_path: Path
+    ) -> None:
+        """Notifier berilmasa daemon ishlashda davom etadi (fail-open)."""
+        d = DailyScheduleDaemon(
+            schedule=DailyScheduleManager(
+                tasks=[DailyTask(slot=ScheduleSlot.MORNING_BRIEF, agent_name="ceo", command="x")]
+            ),
+            agent_registry=agent_registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            core_state=CoreState(),
+            killswitch=KillSwitchState(),
+            timezone="UTC",
+        )
+
+        fired = await d.tick(now=_at(8, 0))
+        assert fired == ["08:00"]
+
+    async def test_notify_failure_is_swallowed(
+        self, agent_registry: AgentRegistry, tmp_path: Path
+    ) -> None:
+        """Xabar yubora olmasak — ish HAQIQATAN bajarilgan, daemon crash bermaydi."""
+
+        from zet.telegram.notifier import Notification
+
+        class ExplodingNotifier(StubNotifier):
+            async def send(self, notification: Notification) -> bool:
+                raise RuntimeError("network down")
+
+        d = DailyScheduleDaemon(
+            schedule=DailyScheduleManager(
+                tasks=[DailyTask(slot=ScheduleSlot.MORNING_BRIEF, agent_name="ceo", command="x")]
+            ),
+            agent_registry=agent_registry,
+            tool_registry=build_default_registry(notes_dir=tmp_path),
+            permission_policy=PermissionPolicy(),
+            core_state=CoreState(),
+            killswitch=KillSwitchState(),
+            timezone="UTC",
+            notifier=ExplodingNotifier(),
+        )
+
+        fired = await d.tick(now=_at(8, 0))
+        assert fired == ["08:00"]  # crash yo'q

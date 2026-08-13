@@ -46,6 +46,7 @@ from zet.llm.routed_provider import RoutedLLMProvider, task_class_for_tier
 from zet.llm.router import ModelRouter
 from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
+from zet.telegram.notifier import Notifier
 from zet.tools.registry import ToolRegistry
 
 log = structlog.get_logger(__name__)
@@ -76,6 +77,7 @@ class DailyScheduleDaemon:
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         llm_providers: dict[str, LLMProvider] | None = None,
         settings: Settings | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         self._schedule = schedule
         self._agent_registry = agent_registry
@@ -88,6 +90,7 @@ class DailyScheduleDaemon:
         self._session_factory = session_factory
         self._llm_providers = llm_providers
         self._settings = settings
+        self._notifier = notifier
         self._last_fired: dict[str, date] = {}
         self._stop_event = asyncio.Event()
 
@@ -181,6 +184,27 @@ class DailyScheduleDaemon:
             agent=task.agent_name,
             success=result.success,
         )
+        if result.success:
+            await self._deliver(task, result.output)
+
+    async def _deliver(self, task: DailyTask, output: str) -> None:
+        """Natijani EGAGA yetkazadi (V-35, Bo'lim 12 tuzatishi).
+
+        NEGA KERAK BO'LDI. Daemon 08:00/09:00/12:00/18:00/21:00 da
+        agentni ishga tushirar, natijani esa faqat LOG'ga yozardi —
+        egaga hech qachon yetmasdi. `AutomationDaemon._deliver()` bu
+        muammoni allaqachon yopgan, lekin bu yerga qo'llanmagan edi
+        (gap-analysis GAP_ANALYSIS.md#7, BROKEN #4).
+
+        Ega ko'rmaydigan joyga tushgan avtomatlashtirish natijasi —
+        avtomatlashtirish emas, shunchaki sarflangan token."""
+        if self._notifier is None or not output.strip():
+            return
+        header = task.description or task.slot.value
+        try:
+            await self._notifier.send_text(f"⏰ {header}\n\n{output.strip()}")
+        except Exception:
+            log.warning("daemon.notify_failed", slot=task.slot.value)
 
 
 __all__ = ["DEFAULT_TICK_SECONDS", "DailyScheduleDaemon"]

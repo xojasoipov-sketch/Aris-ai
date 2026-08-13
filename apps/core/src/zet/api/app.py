@@ -81,7 +81,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from zet.deploy.automation_daemon import AutomationDaemon
     from zet.deploy.bootstrap import bootstrap_agents, load_persisted_agents
     from zet.deploy.daemon import DailyScheduleDaemon
+    from zet.deploy.reports_daemon import ReportsDaemon
     from zet.deploy.shipment_daemon import ShipmentNotifyDaemon
+    from zet.security.killswitch_store import load_killswitch
 
     settings = get_settings()
     configure_logging(
@@ -95,6 +97,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         budget_monthly=settings.budget_monthly_usd,
     )
     bootstrap_agents()
+
+    # Killswitch DB'dan tiklash — restart'da yoqilgan holat yo'qolmasin
+    # (V-33, GAP_ANALYSIS BROKEN #3). Fail-open: DB yetib bo'lmasa
+    # startup'ni to'xtatmaydi.
+    try:
+        await load_killswitch(get_killswitch(), get_session_factory())
+    except Exception:
+        log.warning("zet.killswitch_restore_failed")
 
     # Kuzatuv (3-xususiyat) uchun tayyor metrikalar — tashqi API'siz,
     # shuning uchun watcher birinchi kundan sinab ko'riladi.
@@ -120,6 +130,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         session_factory=get_session_factory(),
         llm_providers=get_llm_providers(),
         settings=settings,
+        # V-35 kunlik avtonomiyaning natijasi egaga yetkazilsin
+        # (AutomationDaemon bilan bir xil naqsh; GAP_ANALYSIS BROKEN #4).
+        notifier=get_notifier(),
     )
     daemon_task = asyncio.create_task(daemon.run_forever())
 
@@ -171,6 +184,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     shipment_daemon_task = asyncio.create_task(shipment_daemon.run_forever())
 
+    # Haftalik (dushanba) va oylik (1-sana) sotuv+faollik hisoboti (#45).
+    # Notifier yo'q bo'lsa mantiqiy — hech kimga yubora olmaymiz, daemon
+    # ishga tushmaydi.
+    reports_daemon = ReportsDaemon(
+        session_factory=get_session_factory(),
+        settings=settings,
+        notifier=get_notifier(),
+        llm_providers=get_llm_providers(),
+    )
+    reports_daemon_task = asyncio.create_task(reports_daemon.run_forever())
+
     yield
 
     log.info("zet.shutdown")
@@ -188,6 +212,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await shipment_daemon_task
     with contextlib.suppress(Exception):
         await shipment_daemon.aclose()
+    reports_daemon.stop()
+    reports_daemon_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await reports_daemon_task
     with contextlib.suppress(Exception):
         await telegram_bot.stop()  # type: ignore[attr-defined]
     with contextlib.suppress(Exception):

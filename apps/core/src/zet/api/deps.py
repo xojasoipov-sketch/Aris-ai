@@ -698,12 +698,15 @@ def get_telegram_bot() -> object:
     yangi `Orchestrator` quradi (`Orchestrator` request-scoped, ega bir
     vaqtda faqat bitta chatga xabar yozadi, konkurrentlik muammosi yo'q).
     """
-    from zet.core.orchestrator import Orchestrator
+    import uuid as _uuid
+
+    from zet.core.orchestrator import Orchestrator, RunNotFoundError
     from zet.db.session import session_scope
     from zet.domain.command import Command
     from zet.domain.enums import MessageRole
+    from zet.security.approvals import ApprovalError, ApprovalExpiredError
     from zet.telegram.bot import ZetBot
-    from zet.telegram.handlers import OrchestratorRunResult
+    from zet.telegram.handlers import ApprovalRunResult, OrchestratorRunResult
 
     settings = get_settings()
     token = settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else ""
@@ -749,6 +752,69 @@ def get_telegram_bot() -> object:
                 run_id=str(record.run_id),
             )
 
+    async def _approval_runner(action: str, run_id_str: str) -> ApprovalRunResult:
+        """Inline ✅/❌ → haqiqiy `ApprovalService`+`Orchestrator.resume()` (GAP_ANALYSIS BROKEN #2).
+
+        Ilgari Telegram callback faqat kosmetik "tasdiqlandi" matnini
+        qaytarardi — run pauza holatida qolib ketardi. Endi tugma bosish
+        API'dagi `/approvals/{id}/approve` bilan bir xil zanjirni chaqiradi:
+            1) `pending_for_run(run_id)` — kutilayotgan tasdiqni topish
+            2) `orchestrator.approve(approval_id)` — tasdiq qayd etish
+            3) `orchestrator.resume(run_id)` — bajarilishni davom ettirish
+        `reject` — 3-qadam o'rniga `orchestrator.reject()`.
+        """
+        try:
+            run_id = _uuid.UUID(run_id_str)
+        except ValueError:
+            return ApprovalRunResult(ok=False, text=f"Noto'g'ri run ID: {run_id_str}")
+
+        approvals = get_approval_service()
+        pending = approvals.pending_for_run(run_id)
+        if not pending:
+            return ApprovalRunResult(
+                ok=False,
+                text="Kutilayotgan tasdiq topilmadi — run allaqachon bajarilgan yoki eskirgan.",
+            )
+        approval_id = pending[0].id
+
+        async with session_scope(get_session_factory()) as session:
+            owner = await get_or_create_owner(session, external_id=settings.owner_id)
+            memory = PgMemoryStore(session, owner_id=owner.id, embedder=get_embedding_provider())
+            router = ModelRouter(get_llm_providers(), session, settings)
+            orchestrator = Orchestrator(
+                router=router,
+                tool_registry=get_tool_registry(),
+                permission_policy=get_permission_policy(),
+                approval_service=approvals,
+                killswitch=get_killswitch(),
+                run_store=get_run_store(),
+                budget_usd=settings.run_max_usd,
+                max_steps=settings.run_max_steps,
+                recall=_build_recall(memory),
+            )
+
+            try:
+                if action == "approve":
+                    record = orchestrator.approve(approval_id)
+                    record = await orchestrator.resume(record.run_id)
+                else:  # "reject"
+                    record = orchestrator.reject(approval_id)
+            except ApprovalExpiredError as exc:
+                return ApprovalRunResult(ok=False, text=f"Tasdiq eskirgan: {exc}")
+            except (ApprovalError, RunNotFoundError, KeyError) as exc:
+                return ApprovalRunResult(ok=False, text=f"Xato: {exc}")
+
+            answer = (
+                record.result_summary
+                or record.error
+                or ("Rad etildi." if action == "reject" else "Bajarildi.")
+            )
+            return ApprovalRunResult(
+                ok=record.error is None,
+                text=answer,
+                run_status=record.status.value,
+            )
+
     return ZetBot(
         token=token,
         owner_ids=settings.telegram_owner_id_set,
@@ -756,6 +822,7 @@ def get_telegram_bot() -> object:
         tts=get_tts(),
         notifier=get_notifier(),
         orchestrator_runner=_runner,
+        approval_runner=_approval_runner,
         moderated_chat_ids=frozenset(settings.telegram_moderated_chat_id_set),
     )
 

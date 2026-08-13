@@ -92,6 +92,24 @@ services:
     restart: unless-stopped
     networks: [zet]
 
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    container_name: zet-backup
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env'da kerak}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      # Host'dagi /var/backups/zet — konteyner tushib qolsa ham
+      # nusxalar host FS'ida qoladi. `update.sh` katalogni yaratadi.
+      - /var/backups/zet:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [zet]
+
   caddy:
     image: caddy:2-alpine
     container_name: zet-caddy

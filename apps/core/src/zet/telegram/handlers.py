@@ -41,6 +41,15 @@ log = structlog.get_logger(__name__)
 OrchestratorRunner = Callable[[str], Awaitable["OrchestratorRunResult"]]
 """`text` → run natijasi. Muvaffaqiyat/xato — ikkalasi ham `OrchestratorRunResult`da."""
 
+ApprovalRunner = Callable[[str, str], Awaitable["ApprovalRunResult"]]
+"""`(action, run_id)` → tasdiq/rad etish natijasi.
+
+`action` — "approve" yoki "reject". Chaqiruvchi (`deps.py`)
+`ApprovalService` orqali kutilayotgan tasdiqni topib, `Orchestrator`ni
+`approve`+`resume` yoki `reject` chaqiradi va bajarilish natijasini
+qaytaradi.
+"""
+
 
 @dataclass(frozen=True)
 class OrchestratorRunResult:
@@ -58,6 +67,27 @@ class OrchestratorRunResult:
 
     run_id: str | None = None
     """`RunStore`dagi ID — approval kelsa `resume(run_id)` uchun."""
+
+
+@dataclass(frozen=True)
+class ApprovalRunResult:
+    """Telegram inline approve/reject natijasi.
+
+    NEGA ALOHIDA TIP. `OrchestratorRunResult`dan ajratildi — approval
+    natijasi (masalan "tasdiqlandi, run 6-qadamda davom etmoqda")
+    matn-run natijasidan boshqacha kontekstga ega. Bo'lmasa handler
+    ikkalasini chalkashtirib yuborar edi."""
+
+    text: str
+    """Egaga qaytariladigan matn (agent chiqishi yoki holat xabari)."""
+
+    ok: bool = True
+    """`True` — Orchestrator xato bermadi. `False` — tasdiq eskirgan,
+    run topilmadi, yoki bajarilish davom etsa xato oldi."""
+
+    run_status: str | None = None
+    """`RunStatus` qiymati (DONE/FAILED/CANCELLED/AWAITING_APPROVAL) —
+    ega ko'radigan qisqa yorliq uchun."""
 
 
 class InputType(StrEnum):
@@ -132,6 +162,11 @@ class HandlerContext:
 
     orchestrator_runner: OrchestratorRunner | None = None
     """Matn/ovozdan olingan buyruqni real Orchestrator orqali bajaruvchi factory."""
+
+    approval_runner: ApprovalRunner | None = None
+    """Inline ✅/❌ tugmalarini haqiqiy `ApprovalService`+`Orchestrator.resume()`ga
+    ulaydigan factory. `None` bo'lsa handler avvalgi kosmetik javobga tushadi
+    (test/lean rejim uchun orqaga mos)."""
 
     reply_with_voice: bool = False
     """`True` bo'lsa har matn javobga TTS qo'shiladi (voice kirish uchun avtomatik)."""
@@ -311,18 +346,19 @@ class MessageHandler:
         )
 
     async def _handle_callback(self, input_: TelegramInput) -> TelegramOutput:
-        """Callback (inline tugma) qayta ishlash — approval."""
+        """Inline ✅/❌ tugma — HAQIQIY approve/resume (GAP_ANALYSIS BROKEN #2).
+
+        Ilgari bu yer faqat "✅ tasdiqlandi" degan chiroyli matn qaytarardi,
+        `ApprovalService.approve()` va `Orchestrator.resume()`ni HECH QACHON
+        chaqirmasdi. Endi `approval_runner` orqali ular haqiqatan chaqiriladi
+        va bajarilish natijasi (yoki xato) ega ko'radigan matn sifatida
+        qaytariladi."""
         data = input_.callback_data or ""
         if not data:
             return TelegramOutput(text="❌ Callback ma'lumoti bo'sh.")
 
-        log.info(
-            "handler.callback",
-            user_id=input_.user_id,
-            callback_data=data,
-        )
+        log.info("handler.callback", user_id=input_.user_id, callback_data=data)
 
-        # Callback tahlil qilish
         from zet.telegram.keyboards import ApprovalKeyboard
 
         try:
@@ -333,28 +369,42 @@ class MessageHandler:
         action = parsed["action"]
         run_id = parsed["run_id"]
 
-        if action == "approve":
+        # `approve_step`/`approve_all` — hozircha soddaligicha `approve`
+        # kabi ishlaydi: keyingi kutilayotgan tasdiq bekor qilinadi.
+        # (Kelajakda step-position bo'yicha selektiv approval kerak bo'lsa,
+        # `parsed["step_position"]`ni `approval_runner`ga uzatib bo'ladi.)
+        canonical_action = "reject" if action == "reject" else "approve"
+
+        if self._ctx.approval_runner is None:
+            # Lean/test rejim — kosmetik javob (avvalgi xatti-harakat)
+            if action == "approve_step":
+                step = parsed.get("step_position", "?")
+                return TelegramOutput(
+                    text=f"✅ Qadam {step} (run: <code>{run_id}</code>) tasdiqlandi.",
+                )
+            if action == "approve_all":
+                return TelegramOutput(
+                    text=f"✅✅ Barcha qadamlar (run: <code>{run_id}</code>) tasdiqlandi.",
+                )
             return TelegramOutput(
-                text=f"✅ Run <code>{run_id}</code> tasdiqlandi.\n⏳ Bajarilmoqda...",
+                text=(
+                    f"✅ Run <code>{run_id}</code> tasdiqlandi.\n⏳ Bajarilmoqda..."
+                    if canonical_action == "approve"
+                    else f"❌ Run <code>{run_id}</code> rad etildi."
+                ),
             )
 
-        if action == "reject":
-            return TelegramOutput(
-                text=f"❌ Run <code>{run_id}</code> rad etildi.",
-            )
+        try:
+            result = await self._ctx.approval_runner(canonical_action, run_id)
+        except Exception as exc:
+            log.warning("handler.approval_failed", error=str(exc), run_id=run_id)
+            return TelegramOutput(text=f"❌ Xato: {_escape_html(str(exc)[:400])}")
 
-        if action == "approve_step":
-            step = parsed.get("step_position", "?")
-            return TelegramOutput(
-                text=f"✅ Qadam {step} (run: <code>{run_id}</code>) tasdiqlandi.",
-            )
-
-        if action == "approve_all":
-            return TelegramOutput(
-                text=f"✅✅ Barcha qadamlar (run: <code>{run_id}</code>) tasdiqlandi.",
-            )
-
-        return TelegramOutput(text=f"❓ Noma'lum amal: {action}")
+        emoji = "✅" if result.ok else "⚠️"
+        status_line = f" · <code>{result.run_status}</code>" if result.run_status else ""
+        return TelegramOutput(
+            text=f"{emoji} <code>{run_id[:8]}</code>{status_line}\n\n{_escape_html(result.text[:3500])}",
+        )
 
     async def _handle_photo(self, input_: TelegramInput) -> TelegramOutput:
         """Rasm qayta ishlash — Bo'lim 8 (Camera/Vision) da to'liq."""

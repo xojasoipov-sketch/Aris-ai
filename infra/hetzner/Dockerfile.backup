@@ -1,0 +1,21 @@
+# ZET Postgres backup konteyner — Alpine + postgres-client + dcron.
+#
+# Nega alohida konteyner (postgres image emas): postgres imagesida
+# init entrypointlar cron ishga tushishidan oldin PGDATA'ni qayta
+# tekshiradi va kutilmagan bo'lishi mumkin. Kichik yordamchi image
+# aniqroq va yengil.
+
+FROM alpine:3.20
+
+RUN apk add --no-cache postgresql16-client dcron tini bash coreutils \
+    && mkdir -p /backups /var/log
+
+COPY backup.sh /backup.sh
+COPY backup-cron /etc/crontabs/root
+RUN chmod +x /backup.sh \
+    && chmod 0600 /etc/crontabs/root
+
+# Konteyner startida bir marta backup — birinchi ishga tushishda kutmasin
+# (crontab keyingi 03:15'ni kutadi). Keyin cron foreground rejimda ishlaydi.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["sh", "-c", "/backup.sh >> /var/log/backup.log 2>&1 || true; crond -f -l 2"]
