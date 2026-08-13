@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import structlog
 
+from zet.telegram.moderation import classify
+
 if TYPE_CHECKING:
     from zet.telegram.bot import ZetBot
     from zet.telegram.handlers import TelegramOutput
@@ -59,6 +61,7 @@ class TelegramPoller:
         token: str,
         bot: ZetBot,
         client: httpx.AsyncClient | None = None,
+        moderated_chat_ids: frozenset[int] = frozenset(),
     ) -> None:
         self._token = token
         self._bot = bot
@@ -66,6 +69,8 @@ class TelegramPoller:
         self._owns_client = client is None
         self._offset: int | None = None
         self._stop_event = asyncio.Event()
+        self._moderated_chat_ids = moderated_chat_ids
+        self._own_user_id: int | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -148,6 +153,11 @@ class TelegramPoller:
         if chat_id is None or user_id is None:
             return
 
+        # Moderatsiya — owner tekshiruvidan OLDIN, negaki begona bot/spam
+        # xabari hech qachon owner tasdig'ini kutmaydi (Z51, #44).
+        if chat_id in self._moderated_chat_ids and await self._maybe_moderate(chat_id, message):
+            return
+
         text: str | None = message.get("text") or message.get("caption")
         voice_bytes: bytes | None = None
         photo_bytes: bytes | None = None
@@ -199,6 +209,61 @@ class TelegramPoller:
             )
         if output is not None:
             await self._send_reply(chat_id, output)
+
+    async def _maybe_moderate(self, chat_id: int, message: dict[str, Any]) -> bool:
+        """`moderation.classify()` mos kelsa xabarni o'chiradi (Z51, #44).
+
+        Returns:
+            `True` — xabar o'chirildi (chaqiruvchi qayta ishlashni
+            to'xtatishi kerak). `False` — tegilmadi, oddiy oqim davom etadi.
+        """
+        own_id = await self._get_own_user_id()
+        own_ids = frozenset({own_id}) if own_id is not None else frozenset()
+        verdict = classify(message, own_bot_ids=own_ids)
+        if not verdict.should_delete:
+            return False
+
+        message_id = message.get("message_id")
+        if message_id is None:
+            return False
+
+        try:
+            response = await self._get_client().post(
+                f"/bot{self._token}/deleteMessage",
+                json={"chat_id": chat_id, "message_id": message_id},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            log.warning("polling.moderation_delete_failed", error=str(exc))
+            return False
+
+        log.info(
+            "polling.moderation_deleted",
+            chat_id=chat_id,
+            message_id=message_id,
+            reason=verdict.reason,
+        )
+        return True
+
+    async def _get_own_user_id(self) -> int | None:
+        """Botning O'Z user_id'si — `getMe` orqali, bir marta olinib keshlanadi.
+
+        Nega kerak: bot o'z xabarini (`telegram.channel_post` orqali
+        yozgan) "begona bot" deb noto'g'ri o'chirib yubormasligi uchun.
+        """
+        if self._own_user_id is not None:
+            return self._own_user_id
+        try:
+            response = await self._get_client().post(f"/bot{self._token}/getMe", json={})
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPError as exc:
+            log.warning("polling.get_me_failed", error=str(exc))
+            return None
+        if not data.get("ok"):
+            return None
+        self._own_user_id = data["result"]["id"]
+        return self._own_user_id
 
     async def _download_file(self, file_id: str) -> bytes | None:
         """`getFile` + fayl yuklab olish — voice/photo baytlariga."""

@@ -256,6 +256,86 @@ class TelegramChannelPostTool(_TelegramHttpMixin, Tool):
         }
 
 
+class TelegramDeleteMessageTool(_TelegramHttpMixin, Tool):
+    """Guruh/kanaldan xabarni o'chirish (Z51, #44) — QAYTARIB BO'LMAYDI.
+
+    Bot shu chat'da administrator + "Delete Messages" ruxsatiga ega
+    bo'lishi shart. `EXECUTE` — Orchestrator ega tasdig'ini so'raydi
+    (V-32), avtomatik moderatsiya oqimi esa (`polling.py`) buni
+    tasdiqsiz, faqat `moderation.classify()` ANIQ mos kelganda chaqiradi.
+    """
+
+    def __init__(
+        self,
+        *,
+        token: str | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._init_http(token, client)
+
+    @property
+    def name(self) -> str:
+        return "telegram.delete_message"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Guruh/kanaldan bitta xabarni o'chirish. QAYTARIB BO'LMAYDI. "
+            "Bot administrator bo'lishi shart."
+        )
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "string",
+                    "description": "Guruh/kanal -100...ID yoki @username",
+                    "minLength": 1,
+                },
+                "message_id": {
+                    "type": "integer",
+                    "description": "O'chiriladigan xabar ID",
+                },
+            },
+            "required": ["chat_id", "message_id"],
+            "additionalProperties": False,
+        }
+
+    @property
+    def permission_level(self) -> PermissionLevel:
+        return PermissionLevel.EXECUTE
+
+    @property
+    def output_trust_level(self) -> TrustLevel:
+        return TrustLevel.SYSTEM
+
+    @property
+    def idempotent(self) -> bool:
+        return False  # ikkinchi chaqiruv "xabar topilmadi" xato beradi
+
+    async def _execute(self, params: dict[str, Any]) -> dict[str, Any]:
+        chat_id = params["chat_id"]
+        message_id = params["message_id"]
+
+        if not self.is_real:
+            return {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "deleted": False,
+                "source": "telegram.delete_message (stub)",
+            }
+
+        await self._api("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+        return {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "deleted": True,
+            "source": "telegram.delete_message",
+        }
+
+
 def _stub_channel(chat_id: str) -> dict[str, Any]:
     return {
         "chat_id": chat_id,
@@ -269,4 +349,4 @@ def _stub_channel(chat_id: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["TelegramChannelPostTool", "TelegramChannelStatsTool"]
+__all__ = ["TelegramChannelPostTool", "TelegramChannelStatsTool", "TelegramDeleteMessageTool"]

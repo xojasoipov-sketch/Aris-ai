@@ -44,6 +44,7 @@ from zet.tools.builtin.shell_exec import ShellExecTool
 from zet.tools.builtin.telegram_tools import (
     TelegramChannelPostTool,
     TelegramChannelStatsTool,
+    TelegramDeleteMessageTool,
 )
 from zet.tools.builtin.time_now import TimeNowTool
 from zet.tools.builtin.video_learn import DEFAULT_MODEL as DEFAULT_VIDEO_MODEL
@@ -165,6 +166,7 @@ def build_default_registry(
     )
     registry.register(TelegramChannelStatsTool(token=telegram_bot_token))
     registry.register(TelegramChannelPostTool(token=telegram_bot_token))
+    registry.register(TelegramDeleteMessageTool(token=telegram_bot_token))
     registry.register(
         InstagramAccountStatsTool(
             access_token=instagram_access_token,

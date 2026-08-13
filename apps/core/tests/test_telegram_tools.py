@@ -17,6 +17,7 @@ from zet.domain.enums import PermissionLevel, TrustLevel
 from zet.tools.builtin.telegram_tools import (
     TelegramChannelPostTool,
     TelegramChannelStatsTool,
+    TelegramDeleteMessageTool,
 )
 
 _TOKEN = "123456:FAKE_TOKEN_FOR_TESTS"
@@ -194,6 +195,54 @@ class TestTelegramChannelPostTool:
         assert "tarmoq" in (result.error or "").lower() or "dns" in (result.error or "").lower()
 
 
+# ── Delete message (EXECUTE) ────────────────────────────────────────
+
+
+class TestTelegramDeleteMessageTool:
+    async def test_stub_when_no_token(self) -> None:
+        tool = TelegramDeleteMessageTool()
+        assert tool.is_real is False
+
+        result = await tool.execute({"chat_id": "-100123", "message_id": 5})
+        assert result.success is True
+        assert result.output["deleted"] is False
+        assert "stub" in result.output["source"]
+
+    def test_permission_execute(self) -> None:
+        assert TelegramDeleteMessageTool().permission_level == PermissionLevel.EXECUTE
+
+    def test_not_idempotent(self) -> None:
+        assert TelegramDeleteMessageTool().idempotent is False
+
+    @respx.mock
+    async def test_real_delete_success(self) -> None:
+        route = respx.post(f"{_BASE}/deleteMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": True})
+        )
+        tool = TelegramDeleteMessageTool(token=_TOKEN)
+
+        result = await tool.execute({"chat_id": "-100123", "message_id": 42})
+
+        assert result.success is True
+        assert result.output["deleted"] is True
+        assert route.called
+
+    @respx.mock
+    async def test_delete_forbidden(self) -> None:
+        """Bot administrator emas / o'chirish huquqisiz — xato."""
+        respx.post(f"{_BASE}/deleteMessage").mock(
+            return_value=httpx.Response(
+                400,
+                json={"ok": False, "description": "Bad Request: message can't be deleted"},
+            )
+        )
+        tool = TelegramDeleteMessageTool(token=_TOKEN)
+
+        result = await tool.execute({"chat_id": "-100123", "message_id": 42})
+
+        assert result.success is False
+
+
 # ── build_default_registry integratsiyasi ──────────────────────────
 
 
@@ -207,6 +256,7 @@ class TestDefaultRegistryWiring:
         names = set(registry.tool_names())
         assert "telegram.channel_stats" in names
         assert "telegram.channel_post" in names
+        assert "telegram.delete_message" in names
 
     def test_telegram_tools_stub_without_token(self, tmp_path: pytest.TempPathFactory) -> None:
         from zet.tools.builtin import build_default_registry

@@ -172,6 +172,122 @@ class TestProcessUpdate:
         assert send_route.called
 
 
+class TestModeration:
+    """Kanal moderatsiyasi (Z51, #44) — faqat `moderated_chat_ids`da ishlaydi."""
+
+    _MODERATED_CHAT_ID = -1001111111111
+
+    @respx.mock
+    async def test_other_bot_message_in_moderated_chat_is_deleted(self, bot: ZetBot) -> None:
+        respx.post(f"{_BASE}/bot{_TOKEN}/getMe").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {"id": 555}})
+        )
+        delete_route = respx.post(f"{_BASE}/bot{_TOKEN}/deleteMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": True})
+        )
+        spam_update = {
+            "update_id": 40,
+            "message": {
+                "message_id": 7,
+                "from": {"id": 12345, "is_bot": True, "username": "some_ad_bot"},
+                "chat": {"id": self._MODERATED_CHAT_ID, "type": "supergroup"},
+                "text": "reklama",
+            },
+        }
+        poller = TelegramPoller(
+            token=_TOKEN, bot=bot, moderated_chat_ids=frozenset({self._MODERATED_CHAT_ID})
+        )
+        try:
+            await poller._process_update(spam_update)
+        finally:
+            await poller.aclose()
+
+        assert delete_route.called
+        import json
+
+        payload = json.loads(delete_route.calls[0].request.content)
+        assert payload == {"chat_id": self._MODERATED_CHAT_ID, "message_id": 7}
+
+    @respx.mock
+    async def test_own_bot_message_in_moderated_chat_is_not_deleted(self, bot: ZetBot) -> None:
+        respx.post(f"{_BASE}/bot{_TOKEN}/getMe").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {"id": 555}})
+        )
+        delete_route = respx.post(f"{_BASE}/bot{_TOKEN}/deleteMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        own_update = {
+            "update_id": 41,
+            "message": {
+                "message_id": 8,
+                "from": {"id": 555, "is_bot": True, "username": "our_own_bot"},
+                "chat": {"id": self._MODERATED_CHAT_ID, "type": "supergroup"},
+                "text": "e'lon",
+            },
+        }
+        poller = TelegramPoller(
+            token=_TOKEN, bot=bot, moderated_chat_ids=frozenset({self._MODERATED_CHAT_ID})
+        )
+        try:
+            await poller._process_update(own_update)
+        finally:
+            await poller.aclose()
+
+        assert not delete_route.called
+
+    @respx.mock
+    async def test_unmoderated_chat_is_never_touched(self, bot: ZetBot) -> None:
+        """`moderated_chat_ids`da yo'q chat — begona bot bo'lsa ham tegilmaydi."""
+        delete_route = respx.post(f"{_BASE}/bot{_TOKEN}/deleteMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        other_chat_update = {
+            "update_id": 42,
+            "message": {
+                "message_id": 9,
+                "from": {"id": 12345, "is_bot": True, "username": "some_ad_bot"},
+                "chat": {"id": -1009999999999, "type": "supergroup"},
+                "text": "reklama",
+            },
+        }
+        poller = TelegramPoller(
+            token=_TOKEN, bot=bot, moderated_chat_ids=frozenset({self._MODERATED_CHAT_ID})
+        )
+        try:
+            await poller._process_update(other_chat_update)
+        finally:
+            await poller.aclose()
+
+        assert not delete_route.called
+
+    @respx.mock
+    async def test_normal_message_in_moderated_chat_is_untouched(self, bot: ZetBot) -> None:
+        respx.post(f"{_BASE}/bot{_TOKEN}/getMe").mock(
+            return_value=httpx.Response(200, json={"ok": True, "result": {"id": 555}})
+        )
+        delete_route = respx.post(f"{_BASE}/bot{_TOKEN}/deleteMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        human_update = {
+            "update_id": 43,
+            "message": {
+                "message_id": 10,
+                "from": {"id": 777, "is_bot": False, "username": "haqiqiy_mijoz"},
+                "chat": {"id": self._MODERATED_CHAT_ID, "type": "supergroup"},
+                "text": "Mahsulot narxi qancha?",
+            },
+        }
+        poller = TelegramPoller(
+            token=_TOKEN, bot=bot, moderated_chat_ids=frozenset({self._MODERATED_CHAT_ID})
+        )
+        try:
+            await poller._process_update(human_update)
+        finally:
+            await poller.aclose()
+
+        assert not delete_route.called
+
+
 class TestSendReplyVoiceFallback:
     """`voice_data` bo'lsa avval sendVoice, u rad etsa sendAudio'ga tushish.
 

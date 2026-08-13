@@ -62,6 +62,7 @@ class ZetBot:
         tts: TTSProvider | None = None,
         notifier: Notifier | None = None,
         orchestrator_runner: OrchestratorRunner | None = None,
+        moderated_chat_ids: frozenset[int] = frozenset(),
     ) -> None:
         """
         Args:
@@ -72,9 +73,12 @@ class ZetBot:
             notifier: bildirishnoma yuboruvchi (None = StubNotifier)
             orchestrator_runner: matn/ovoz → real agent bajarilishi. None
                 bo'lsa handler avvalgi Bo'lim 5 lean echo qaytaradi.
+            moderated_chat_ids: shu chat'lardagi xabarlar moderatsiya
+                qilinadi (Z51, #44) — bo'sh bo'lsa hech narsa o'chirilmaydi.
         """
         self._token = token
         self._owner_middleware = OwnerMiddleware(owner_ids or set())
+        self._moderated_chat_ids = moderated_chat_ids
         self._stt = stt or StubSTT()
         self._tts = tts
         self._notifier = notifier or StubNotifier()
@@ -97,6 +101,11 @@ class ZetBot:
     def owner_middleware(self) -> OwnerMiddleware:
         """Owner middleware."""
         return self._owner_middleware
+
+    @property
+    def moderated_chat_ids(self) -> frozenset[int]:
+        """Moderatsiya qilinadigan chat ID'lar (Z51, #44)."""
+        return self._moderated_chat_ids
 
     @property
     def handler(self) -> MessageHandler:
@@ -215,7 +224,9 @@ class ZetBot:
         # Kech (deferred) import — polling.py ZetBot'ga bog'liq (TYPE_CHECKING)
         from zet.telegram.polling import TelegramPoller
 
-        self._poller = TelegramPoller(token=self._token, bot=self)
+        self._poller = TelegramPoller(
+            token=self._token, bot=self, moderated_chat_ids=self._moderated_chat_ids
+        )
         self._poller_task = __import__("asyncio").create_task(self._poller.run_forever())
         self._running = True
         log.info("bot.started", mode="polling")

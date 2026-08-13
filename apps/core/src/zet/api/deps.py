@@ -756,6 +756,7 @@ def get_telegram_bot() -> object:
         tts=get_tts(),
         notifier=get_notifier(),
         orchestrator_runner=_runner,
+        moderated_chat_ids=frozenset(settings.telegram_moderated_chat_id_set),
     )
 
 

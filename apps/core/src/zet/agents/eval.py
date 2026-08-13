@@ -82,6 +82,7 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "youtube.publish": PermissionLevel.WRITE,
     "telegram.channel_stats": PermissionLevel.READ,
     "telegram.channel_post": PermissionLevel.WRITE,
+    "telegram.delete_message": PermissionLevel.EXECUTE,
     "instagram.account_stats": PermissionLevel.READ,
     "instagram.recent_media": PermissionLevel.READ,
     "instagram.publish_photo": PermissionLevel.WRITE,

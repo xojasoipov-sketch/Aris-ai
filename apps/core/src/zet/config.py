@@ -173,6 +173,16 @@ class Settings(BaseSettings):
     shop_bot_token: SecretStr | None = None
     """Alohida BotFather tokeni — `telegram_bot_token`dan BOSHQA bot bo'lishi shart."""
 
+    # ── Kanal moderatsiyasi (Z51, #44) ────────────────────────────────
+    telegram_moderated_chat_ids: str = ""
+    """Vergul bilan ajratilgan guruh/kanal ID lar (moderatsiya allowlist).
+
+    Misol: "-1001234567890,-1009876543210"
+    Bo'sh bo'lsa — hech qanday xabar o'chirilmaydi (fail-closed, owner
+    allowlist bilan bir xil qoida). `telegram_bot_token`dagi bot shu
+    chat'larda ADMINISTRATOR + "Delete Messages" ruxsatiga ega bo'lishi
+    shart, aks holda Telegram API `deleteMessage`ni rad etadi."""
+
     # ── GitHub (Bo'lim 7) ────────────────────────────────────────────
     github_token: SecretStr | None = None
     """GitHub Personal Access Token. Bo'lsa — `github.read`/`github.write`
@@ -394,6 +404,22 @@ class Settings(BaseSettings):
         for part in self.telegram_owner_ids.split(","):
             part = part.strip()
             if part.isdigit():
+                result.add(int(part))
+        return result
+
+    @property
+    def telegram_moderated_chat_id_set(self) -> set[int]:
+        """Moderatsiya qilinadigan chat ID larni set ga o'girish.
+
+        `telegram_owner_id_set`dan farqi: guruh/kanal ID lari odatda
+        MANFIY (`-100...`), shuning uchun `isdigit()` yetarli emas —
+        ixtiyoriy `-` prefiksga ruxsat beriladi."""
+        if not self.telegram_moderated_chat_ids.strip():
+            return set()
+        result: set[int] = set()
+        for part in self.telegram_moderated_chat_ids.split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit():
                 result.add(int(part))
         return result
 
