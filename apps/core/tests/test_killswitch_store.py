@@ -86,3 +86,65 @@ async def test_persist_updates_single_row_not_creates_duplicates(
 
     assert len(rows) == 1
     assert rows[0].reason == "b"
+
+
+async def test_load_reasserts_token_revocation_after_restart(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """SR-06 invariant: yoqilgan holat tiklanganda TOKENLAR HAM revoke bo'ladi.
+
+    Adversarial verify topgan gap: agar oldingi protsess engage+persist
+    tugagach, revoke_all_capability_tokens_on_killswitch tugashidan
+    OLDIN crash bo'lsa — restart'da flag qaytardi-yu, tokenlar faol
+    qolardi. Endi load_killswitch buni qayta yoqadi.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select as sa_select
+
+    from zet.db.bootstrap import get_or_create_owner
+    from zet.db.models.device import CapabilityToken as CapabilityTokenRow
+    from zet.db.models.device import Device as DeviceRow
+    from zet.devices.registry import DeviceType
+
+    # 1. Yoqilgan killswitch DB'da bor, LEKIN tokenlar hali faol
+    #    (crash-simulation: engage+persist bajarilgan, revoke bajarilmagan).
+    async with session_factory() as session:
+        owner = await get_or_create_owner(session, external_id="restart-revoke-test")
+        device = DeviceRow(
+            owner_id=owner.id,
+            name="Test iPhone",
+            device_type=DeviceType.PHONE,
+        )
+        session.add(device)
+        await session.flush()
+        token = CapabilityTokenRow(
+            device_id=device.id,
+            token_hash="a" * 64,
+            capabilities=["camera.snapshot"],
+            label="crashed-token",
+        )
+        session.add(token)
+        await session.commit()
+
+    ks = KillSwitchState()
+    ks.engage(reason="restart simulation", by="test", now=datetime.now(UTC))
+    await persist_killswitch(ks, session_factory)
+
+    # 2. Yangi protsess — load_killswitch qayta revoke qilishi kerak
+    ks2 = KillSwitchState()
+    await load_killswitch(ks2, session_factory)
+
+    assert ks2.is_engaged is True
+
+    # 3. Token endi revoked bo'lishi kerak
+    async with session_factory() as session:
+        rows = (
+            await session.execute(sa_select(CapabilityTokenRow).where(
+                CapabilityTokenRow.token_hash == "a" * 64
+            ))
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].revoked_at is not None, (
+            "Restart'da tokenlar qayta revoke bo'lmadi — SR-06 invariant buzilgan"
+        )

@@ -32,7 +32,19 @@ async def load_killswitch(
     state: KillSwitchState,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Startup'da bazadan holatni tiklaydi (fail-open)."""
+    """Startup'da bazadan holatni tiklaydi va SR-06 invariant'ini QAYTA yoqadi.
+
+    NEGA QAYTA REVOKE. Adversarial verify (Phase 1 workflow) topgan gap:
+    agar oldingi protsess `engage()` chaqirib `persist_killswitch()`
+    tugagach, LEKIN `revoke_all_capability_tokens_on_killswitch()` tugashidan
+    OLDIN SIGKILL bilan yiqilsa — restart'da flag qaytadi, lekin ba'zi
+    tokenlar hali faol qoladi. Bu SR-06 invariantini buzardi.
+
+    Yechim: startup'da yoqilgan holatni ko'rsak, revoke helperini QAYTA
+    chaqiramiz. Idempotent — allaqachon revoked tokenlar o'zgarmaydi
+    (WHERE revoked_at IS NULL). Fail-open: tokenlar revoke bo'lmasa
+    startup davom etadi.
+    """
     try:
         async with session_scope(session_factory) as session:
             row = (
@@ -54,6 +66,23 @@ async def load_killswitch(
                 reason=row.reason,
                 engaged_at=str(row.engaged_at),
             )
+
+        # SR-06 invariantini qayta yoqamiz — mid-engage crash'dan keyin
+        # qolgan faol tokenlarni tozalaymiz. Alohida sessiya (yuqori
+        # sessiya yopildi).
+        try:
+            from zet.security.killswitch_actions import (
+                revoke_all_capability_tokens_on_killswitch,
+            )
+
+            revoked = await revoke_all_capability_tokens_on_killswitch(session_factory)
+            if revoked > 0:
+                log.warning(
+                    "killswitch.tokens_revoked_on_restart",
+                    revoked_count=revoked,
+                )
+        except Exception:
+            log.warning("killswitch.restart_revoke_failed")
     except Exception:
         log.warning("killswitch.load_failed")
 
