@@ -9,7 +9,8 @@ bilan bir xil arxitektura, faqat kiruvchi tomonini yopadi.
 
 Kirish oqimi:
     getUpdates → Update → ZetBot.process_message() → TelegramOutput
-    → sendMessage / sendAudio (voice_data mavjud bo'lsa)
+    → sendMessage / sendVoice (voice_data OGG/OPUS bo'lsa; aks holda
+      sendAudio — `_send_reply()` izohiga qarang)
 
 Xavfsizlik:
     - Faqat `ZetBot.owner_middleware` tomonidan ruxsat berilgan
@@ -288,10 +289,21 @@ class TelegramPoller:
     async def _send_reply(self, chat_id: int, output: TelegramOutput) -> None:
         """`TelegramOutput`ni foydalanuvchiga yuboradi (matn + ixtiyoriy ovoz).
 
-        `voice_data` mavjud bo'lsa `sendVoice` bilan urinadi; foydalanuvchi
-        voice messages'ni bloklagan bo'lsa (VOICE_MESSAGES_FORBIDDEN) —
-        `sendAudio` orqali audio fayl sifatida yuboradi. Ikkalasi ham
-        rad etilsa — faqat matn qoladi.
+        OVOZ FORMATI (tuzatilgan bug). Telegram `sendVoice` faqat **OPUS
+        bilan kodlangan OGG** ni voice note (to'lqin shaklidagi bubble)
+        sifatida ko'rsatadi. Ilgari bu yerda TTS'dan kelgan MP3 baytlari
+        `zet.ogg` nomi va `audio/mpeg` MIME bilan `sendVoice`ga
+        berilardi — Telegram uni musiqa fayli deb qabul qilib,
+        sarlavha/ijrochi maydonli **audio pleyer** bubble'ida
+        ko'rsatardi. Endi:
+
+            ogg/opus → sendVoice (haqiqiy voice note)
+            boshqa   → sendAudio (halol: musiqa bubble, lekin
+                       yolg'on "voice" da'vosisiz)
+
+        `sendVoice` rad etilsa (masalan foydalanuvchi voice message
+        qabul qilishni bloklagan — VOICE_MESSAGES_FORBIDDEN) —
+        `sendAudio`ga tushamiz. Ikkalasi ham rad etilsa faqat matn qoladi.
         """
         # Matnni har doim yuboramiz (audio bo'lsa unga qo'shimcha)
         text_payload: dict[str, Any] = {"chat_id": chat_id, "text": output.text}
@@ -303,32 +315,65 @@ class TelegramPoller:
         if output.voice_data is None:
             return
 
-        # Voice: avval sendVoice, kerak bo'lsa sendAudio'ga tushish
-        sent = await self._try_send_voice(chat_id, output.voice_data)
-        if not sent:
-            await self._try_send_audio(chat_id, output.voice_data)
+        fmt = (output.voice_format or "ogg").lower()
+        if fmt in {"ogg", "opus", "oga"}:
+            sent = await self._try_send_voice(chat_id, output.voice_data)
+            if sent:
+                return
+            log.info("polling.voice_fallback_to_audio", reason="send_voice_rejected")
+        else:
+            # MP3/boshqa format — `sendVoice`ga bermaymiz, chunki Telegram
+            # uni baribir voice note qilib ko'rsatmaydi.
+            log.warning("polling.voice_format_not_opus", fmt=fmt)
+        await self._try_send_audio(chat_id, output.voice_data, fmt=fmt)
 
     async def _try_send_voice(self, chat_id: int, audio: bytes) -> bool:
         try:
             r = await self._get_client().post(
                 f"/bot{self._token}/sendVoice",
                 data={"chat_id": chat_id},
-                files={"voice": ("zet.ogg", audio, "audio/mpeg")},
+                # Fayl nomi VA MIME ikkalasi ham OGG bo'lishi shart —
+                # ilgari MIME `audio/mpeg` edi va Telegram formatni
+                # MIME bo'yicha aniqlab, voice note'ni rad etardi.
+                files={"voice": ("zet.ogg", audio, "audio/ogg")},
             )
         except httpx.HTTPError as exc:
             log.warning("polling.send_voice_failed", error=str(exc))
             return False
         if r.status_code == 200:
             return True
-        log.info("polling.send_voice_rejected", status=r.status_code, body=r.text[:200])
+        # VOICE_MESSAGES_FORBIDDEN — bu FORMAT xatosi EMAS, balki
+        # QABUL QILUVCHINING Telegram maxfiylik sozlamasi: "Voice
+        # Messages" faqat kontaktlarga/hech kimga ruxsat etilgan.
+        # Jonli tekshiruvda (2026-08-14) aynan shu holat topildi va u
+        # eganing "ovoz musiqa bo'lib chiqadi" muammosining ASOSIY
+        # sababi edi: sendVoice rad etilib, sendAudio'ga tushardi.
+        # Format to'g'ri bo'lsa ham bu sozlama o'zgartirilmaguncha
+        # voice note KELMAYDI — shuning uchun WARNING (INFO emas) va
+        # sabab log'da ochiq nomlanadi.
+        forbidden = "VOICE_MESSAGES_FORBIDDEN" in r.text
+        log.warning(
+            "polling.send_voice_rejected",
+            status=r.status_code,
+            body=r.text[:200],
+            recipient_privacy_block=forbidden,
+            hint=(
+                "Telegram → Settings → Privacy and Security → Voice Messages "
+                "→ 'Everybody' qilinsin"
+                if forbidden
+                else "format yoki fayl muammosi"
+            ),
+        )
         return False
 
-    async def _try_send_audio(self, chat_id: int, audio: bytes) -> None:
+    async def _try_send_audio(self, chat_id: int, audio: bytes, *, fmt: str = "mp3") -> None:
+        suffix = "ogg" if fmt in {"ogg", "opus", "oga"} else "mp3"
+        mime = "audio/ogg" if suffix == "ogg" else "audio/mpeg"
         try:
             r = await self._get_client().post(
                 f"/bot{self._token}/sendAudio",
                 data={"chat_id": chat_id, "title": "ZET", "performer": "ZET"},
-                files={"audio": ("zet.mp3", audio, "audio/mpeg")},
+                files={"audio": (f"zet.{suffix}", audio, mime)},
             )
         except httpx.HTTPError as exc:
             log.warning("polling.send_audio_failed", error=str(exc))

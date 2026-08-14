@@ -141,18 +141,33 @@ class TestElevenLabsTTS:
 
     @respx.mock
     async def test_synthesize_success(self) -> None:
-        fake_mp3 = b"ID3\x04\x00" + b"\x00" * 100
+        """Telegram voice note bug fix: ElevenLabs ham OGG/OPUS qaytaradi.
+
+        Ilgari `audio_format == "mp3"` qulflangan edi — Azure yo'lidagi
+        bilan bir xil bug (`azure_tts.py::_OUTPUT_FORMAT` izohiga qarang)."""
+        fake_ogg = b"OggS\x00\x02" + b"\x00" * 100
         respx.post(_TTS_URL).mock(
             return_value=httpx.Response(
-                200, content=fake_mp3, headers={"content-type": "audio/mpeg"}
+                200, content=fake_ogg, headers={"content-type": "audio/ogg"}
             )
         )
         tts = ElevenLabsTTS(api_key=_API_KEY, voice_id=_VOICE_ID)
         result = await tts.synthesize("Salom, dunyo!")
 
-        assert result.audio_data == fake_mp3
-        assert result.audio_format == "mp3"
+        assert result.audio_data == fake_ogg
+        assert result.audio_format == "ogg"
         assert result.text == "Salom, dunyo!"
+
+    @respx.mock
+    async def test_requests_opus_output_format(self) -> None:
+        """ElevenLabs'ga AYNAN OPUS so'rovi ketishini qulflaydi."""
+        route = respx.post(_TTS_URL).mock(return_value=httpx.Response(200, content=b"OggS"))
+        tts = ElevenLabsTTS(api_key=_API_KEY, voice_id=_VOICE_ID)
+        await tts.synthesize("Salom")
+
+        request = route.calls[0].request
+        assert "opus" in request.url.params.get("output_format", "")
+        assert request.headers["Accept"] == "audio/ogg"
 
     @respx.mock
     async def test_sends_correct_body_and_no_language_code(self) -> None:

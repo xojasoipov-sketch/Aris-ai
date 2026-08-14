@@ -174,6 +174,15 @@ class TelegramOutput:
     voice_data: bytes | None = None
     """Ovozli javob (TTS natijasi)."""
 
+    voice_format: str = "ogg"
+    """`voice_data` formati — `TTSResult.audio_format` dan olinadi.
+
+    NEGA KERAK: ilgari bu maydon yo'q edi va `polling.py` formatni
+    QAT'IY `.ogg`/`audio/mpeg` deb faraz qilardi — TTS esa MP3 qaytarardi.
+    Telegram `sendVoice` faqat OGG/OPUS qabul qiladi, MP3ni esa musiqa
+    pleyeri bubble'ida ko'rsatardi. Endi haqiqiy format uzatiladi va
+    `polling.py` unga qarab to'g'ri metodni tanlaydi."""
+
     parse_mode: str | None = "HTML"
     """Matn formati (HTML, Markdown)."""
 
@@ -324,11 +333,15 @@ class MessageHandler:
         try:
             tts_result = await self._ctx.tts.synthesize(clean_for_speech)
             voice_bytes: bytes | None = tts_result.audio_data
+            # Format metadata'si YO'QOTILMAYDI — `polling.py` unga qarab
+            # `sendVoice` (ogg/opus) yoki `sendAudio` (mp3) tanlaydi.
+            voice_format = tts_result.audio_format
         except Exception as exc:
             log.warning("handler.tts_failed", error=str(exc))
             voice_bytes = None
+            voice_format = "ogg"
 
-        return TelegramOutput(text=text, voice_data=voice_bytes)
+        return TelegramOutput(text=text, voice_data=voice_bytes, voice_format=voice_format)
 
     async def _handle_command(self, input_: TelegramInput) -> TelegramOutput:
         """Bot buyrug'ini qayta ishlash (/start, /help, /status)."""

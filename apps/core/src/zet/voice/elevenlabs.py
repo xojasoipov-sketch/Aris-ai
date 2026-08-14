@@ -41,6 +41,16 @@ _STT_MODEL = "scribe_v1"
 _TTS_MODEL = "eleven_multilingual_v2"
 """O'zbek matnini yaxshi o'qiydigan ko'p tilli TTS modeli (sinab tasdiqlangan)."""
 
+_TTS_OUTPUT_FORMAT = "opus_48000_64"
+"""OGG/OPUS 48 kHz 64 kbit — Telegram `sendVoice` talab qiladigan format.
+
+Ilgari `Accept: audio/mpeg` (MP3) so'ralardi va natija `sendVoice`ga
+berilardi — Telegram esa MP3ni voice note deb qabul qilmay, musiqa
+pleyeri bubble'ida ko'rsatardi. Azure yo'lidagi bilan bir xil bug edi
+(`azure_tts.py::_OUTPUT_FORMAT` izohiga qarang), shuning uchun ikkala
+provayder ham NATIVE OPUS beradigan qilindi — ffmpeg orqali qayta
+kodlash kerak emas."""
+
 UZBEK_LANG_CODE = "uzb"
 """Scribe qabul qiladigan o'zbek tili kodi.
 
@@ -217,7 +227,7 @@ class ElevenLabsTTS(TTSProvider):
         *,
         language: str = "uz",  # noqa: ARG002 — model avtomatik tushunadi (docstring)
     ) -> TTSResult:
-        """Matndan audio (MP3) generatsiya qilish — ElevenLabs Multilingual v2 orqali."""
+        """Matndan OGG/OPUS audio — ElevenLabs Multilingual v2 orqali (Telegram voice note)."""
         if not self._api_key:
             raise RuntimeError("ElevenLabsTTS: kalit yo'q — ZET_ELEVENLABS_API_KEY sozlanmagan")
 
@@ -226,9 +236,10 @@ class ElevenLabsTTS(TTSProvider):
                 f"{_API_BASE_URL}/v1/text-to-speech/{self._voice_id}",
                 headers={
                     "xi-api-key": self._api_key,
-                    "Accept": "audio/mpeg",
+                    "Accept": "audio/ogg",
                     "Content-Type": "application/json",
                 },
+                params={"output_format": _TTS_OUTPUT_FORMAT},
                 json={
                     "text": text,
                     "model_id": _TTS_MODEL,
@@ -256,7 +267,7 @@ class ElevenLabsTTS(TTSProvider):
         )
         return TTSResult(
             audio_data=audio_bytes,
-            audio_format="mp3",
+            audio_format="ogg",
             duration_s=0.0,  # ElevenLabs javobda uzunlik qaytarmaydi
             text=text,
         )

@@ -52,8 +52,20 @@ UZBEK_FEMALE_VOICE = "uz-UZ-MadinaNeural"
 UZBEK_LOCALE = "uz-UZ"
 """SSML `xml:lang` qiymati."""
 
-_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3"
-"""MP3 — Telegram `sendVoice`/`sendAudio` uchun to'g'ridan-to'g'ri mos."""
+_OUTPUT_FORMAT = "ogg-48khz-16bit-mono-opus"
+"""OGG/OPUS — Telegram `sendVoice` TALAB QILADIGAN yagona format.
+
+NEGA MP3 EMAS (ilgari `audio-24khz-48kbitrate-mono-mp3` edi — bu bug edi).
+
+Telegram Bot API `sendVoice` hujjatida aniq yozilgan: fayl **OPUS bilan
+kodlangan .OGG** bo'lishi shart. MP3 yuborilsa Telegram uni voice note
+sifatida ko'rsatMAYDI — sarlavha/ijrochi maydonli **musiqa pleyeri**
+bubble'i chiqadi (aynan shu ega ko'rgan xatti-harakat edi). To'lqin
+shaklidagi oddiy ovozli xabar faqat haqiqiy OGG/OPUS bilan chiqadi.
+
+Azure Speech buni NATIVE beradi — ffmpeg orqali qayta kodlash KERAK
+EMAS (deploy image'da ffmpeg yo'q, shuning uchun bu muhim).
+48 kHz — OPUS'ning tabiiy chastotasi, Telegram voice note standarti."""
 
 
 def build_ssml(text: str, *, voice: str, locale: str = UZBEK_LOCALE) -> str:
@@ -114,7 +126,7 @@ class AzureTTS(TTSProvider):
         return self._client
 
     async def synthesize(self, text: str, *, language: str = "uz") -> TTSResult:
-        """Matndan MP3 audio. Xato bo'lsa `RuntimeError`."""
+        """Matndan OGG/OPUS audio (Telegram voice note). Xato bo'lsa `RuntimeError`."""
         if not self.is_configured:
             raise RuntimeError(
                 "AzureTTS: ZET_AZURE_SPEECH_KEY va ZET_AZURE_SPEECH_REGION sozlanmagan"
@@ -151,7 +163,7 @@ class AzureTTS(TTSProvider):
         )
         return TTSResult(
             audio_data=audio_bytes,
-            audio_format="mp3",
+            audio_format="ogg",
             duration_s=0.0,
             text=text,
         )

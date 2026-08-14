@@ -385,3 +385,105 @@ class TestStopEndsLoop:
         poller.stop()  # stop() run_forever'dan avval — loop kirmaydi
         await asyncio.wait_for(poller.run_forever(), timeout=3)
         await poller.aclose()
+
+
+class TestVoiceNoteFormat:
+    """Ovozli javob Telegram'da MUSIQA emas, VOICE NOTE bo'lib chiqsin.
+
+    BUG (ega ko'rgan): ovozli javoblar sarlavha/ijrochi maydonli audio
+    pleyer bubble'ida chiqardi. Sabab — `_try_send_voice` TTS'dan kelgan
+    **MP3** baytlarini `zet.ogg` nomi va `audio/mpeg` MIME bilan
+    `sendVoice`ga berardi. Telegram `sendVoice` faqat OPUS bilan
+    kodlangan OGG'ni voice note deb qabul qiladi.
+
+    Bu klass ikkala tomonni ham qulflaydi: to'g'ri format `sendVoice`ga
+    ketishi VA noto'g'ri format `sendVoice`ga UMUMAN berilmasligi.
+    """
+
+    @respx.mock
+    async def test_ogg_goes_to_send_voice_with_correct_mime(self, bot: ZetBot) -> None:
+        voice_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendVoice").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        audio_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendAudio").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        respx.post(f"{_BASE}/bot{_TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+
+        poller = TelegramPoller(token=_TOKEN, bot=bot)
+        try:
+            await poller._send_reply(
+                _OWNER_ID,
+                TelegramOutput(text="javob", voice_data=b"OggS\x00opus", voice_format="ogg"),
+            )
+        finally:
+            await poller.aclose()
+
+        assert voice_route.called, "OGG/OPUS sendVoice'ga ketishi kerak edi"
+        assert not audio_route.called, "sendVoice muvaffaqiyatli — sendAudio chaqirilmasin"
+
+        body = voice_route.calls[0].request.content
+        # ENG MUHIM DALIL: MIME `audio/ogg` (ilgari `audio/mpeg` edi —
+        # aynan shu Telegram'ni musiqa deb o'ylashga majburlardi).
+        assert b"audio/ogg" in body
+        assert b"audio/mpeg" not in body
+        assert b'name="voice"' in body
+
+    @respx.mock
+    async def test_mp3_never_sent_as_voice_note(self, bot: ZetBot) -> None:
+        """MP3 `sendVoice`ga UMUMAN berilmaydi — halol `sendAudio`ga ketadi.
+
+        Yolg'on "voice" da'vosi qilib, Telegram'ni musiqa ko'rsatishga
+        majburlashdan ko'ra, ochiq audio fayl sifatida yuborish afzal."""
+        voice_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendVoice").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        audio_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendAudio").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        respx.post(f"{_BASE}/bot{_TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+
+        poller = TelegramPoller(token=_TOKEN, bot=bot)
+        try:
+            await poller._send_reply(
+                _OWNER_ID,
+                TelegramOutput(text="javob", voice_data=b"ID3mp3", voice_format="mp3"),
+            )
+        finally:
+            await poller.aclose()
+
+        assert not voice_route.called, "MP3 HECH QACHON sendVoice'ga berilmasligi kerak"
+        assert audio_route.called
+
+    @respx.mock
+    async def test_send_voice_rejected_falls_back_to_audio(self, bot: ZetBot) -> None:
+        """Foydalanuvchi voice message'ni bloklagan bo'lsa (400) — audio."""
+        voice_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendVoice").mock(
+            return_value=httpx.Response(
+                400, json={"ok": False, "description": "VOICE_MESSAGES_FORBIDDEN"}
+            )
+        )
+        audio_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendAudio").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        respx.post(f"{_BASE}/bot{_TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+
+        poller = TelegramPoller(token=_TOKEN, bot=bot)
+        try:
+            await poller._send_reply(
+                _OWNER_ID,
+                TelegramOutput(text="javob", voice_data=b"OggS\x00opus", voice_format="ogg"),
+            )
+        finally:
+            await poller.aclose()
+
+        assert voice_route.called
+        assert audio_route.called
+        # Fallback ham OGG sifatida ketadi (MP3 deb yolg'on nom bermaymiz)
+        assert b"audio/ogg" in audio_route.calls[0].request.content

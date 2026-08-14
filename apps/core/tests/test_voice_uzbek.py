@@ -178,13 +178,34 @@ class TestAzureUzbekVoice:
         assert UZBEK_MALE_VOICE in ssml
 
     @respx.mock
-    async def test_synthesize_returns_mp3(self) -> None:
-        respx.post(AZURE_URL).mock(return_value=httpx.Response(200, content=b"ID3fake"))
+    async def test_synthesize_returns_ogg_opus(self) -> None:
+        """Telegram voice note bug fix: Azure endi OGG/OPUS qaytaradi.
+
+        Ilgari bu test `audio_format == "mp3"` ni qulflardi — ya'ni
+        bug'ning O'ZINI. Telegram `sendVoice` faqat OPUS bilan kodlangan
+        OGG'ni voice note deb qabul qiladi; MP3 musiqa pleyeri bubble'ida
+        chiqardi (ega ko'rgan xatti-harakat)."""
+        respx.post(AZURE_URL).mock(return_value=httpx.Response(200, content=b"OggSfake"))
 
         result = await AzureTTS(api_key="k", region="westeurope").synthesize("Salom")
 
-        assert result.audio_format == "mp3"
-        assert result.audio_data == b"ID3fake"
+        assert result.audio_format == "ogg"
+        assert result.audio_data == b"OggSfake"
+
+    @respx.mock
+    async def test_requests_opus_output_format_from_azure(self) -> None:
+        """Azure'ga AYNAN OPUS so'rovi ketishini qulflaydi.
+
+        Bu `audio_format` yorlig'idan alohida tekshiruv: yorliq "ogg"
+        bo'lib, so'rov esa MP3 so'rasa — baytlar baribir MP3 bo'lardi va
+        Telegram yana musiqa ko'rsatardi."""
+        route = respx.post(AZURE_URL).mock(return_value=httpx.Response(200, content=b"OggS"))
+
+        await AzureTTS(api_key="k", region="westeurope").synthesize("Salom")
+
+        fmt = route.calls[0].request.headers["X-Microsoft-OutputFormat"]
+        assert "opus" in fmt, f"OPUS so'ralmadi: {fmt}"
+        assert "mp3" not in fmt
 
     @respx.mock
     async def test_http_error_is_reported_not_swallowed(self) -> None:
