@@ -6,9 +6,12 @@
  * (AnimatePresence, scale+opacity, spring). Menyu: Gaplashish, Eslatma
  * yaratish, Topshiriq berish, Fayl izlash, Agent chaqirish, Kamera ochish.
  *
- * Bildirishnoma namoyishi: sessiyada bir marta, 12s dan keyin CEO Agent
- * xabari keladi (notification tovushi bilan) — real RunEvent push keyin
- * shu kanalga ulanadi.
+ * Bildirishnomalar: bu yerda DEMO/soxta bildirishnoma YO'Q — o'ylab topilgan
+ * ma'lumot ko'rsatilmaydi (CLAUDE.md "Halol holatlar"). Quyidagi
+ * `notifications` state va NotificationCard render qismi — tayyor
+ * infratuzilma: backend bildirishnoma endpoint'i (real RunEvent push kanali)
+ * qo'shilganda, yagona manba sifatida shu state'ga ulanadi. Manba ulanmaguncha
+ * ro'yxat bo'sh qoladi va hech narsa chizilmaydi.
  */
 
 import {
@@ -21,7 +24,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { NeuroOrb } from "@/components/core/NeuroOrb";
 import {
@@ -42,26 +45,9 @@ const MENU = [
 export function FloatingAssistant() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  /* Haqiqiy bildirishnomalar uchun state — hozircha bo'sh.
+     Soxta manba ataylab yo'q; real push kanali ulanganda shu yerga yoziladi. */
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
-
-  /* Demo bildirishnoma — sessiyada bir marta */
-  useEffect(() => {
-    if (sessionStorage.getItem("zet.demo.notif")) return;
-    const t = setTimeout(() => {
-      sessionStorage.setItem("zet.demo.notif", "1");
-      sound.play("notification");
-      setNotifications([
-        {
-          id: "demo-1",
-          agent: "CEO Agent",
-          message: "Yangi hisobot tayyor — haftalik strategik tahlil.",
-          time: "hozir",
-          seed: 1,
-        },
-      ]);
-    }, 12000);
-    return () => clearTimeout(t);
-  }, []);
 
   return (
     <div className="fixed bottom-14 right-5 z-50 flex flex-col items-end gap-3 lg:bottom-12">

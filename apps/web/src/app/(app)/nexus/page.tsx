@@ -9,7 +9,7 @@
  *     markaz       — nuqta-bulut yadro, orbitalar bilan
  *     o'rta        — gorizontal karta karuseli, markazdagisi katta
  *     past chap    — tizim jurnali
- *     past markaz  — imo-ishora ro'yxati
+ *     past markaz  — buyruq maydoni, boshqaruv tugmalari, imo ro'yxati
  *     past o'ng    — aniqlangan imo va ishonch darajasi
  *
  * BITTA NARSA RASMDAN ATAYIN FARQ QILADI — SONLAR.
@@ -41,6 +41,7 @@ import { NeuroOrb, type OrbState } from "@/components/core/NeuroOrb";
 import { CardRail, type RailCard } from "@/components/nexus/CardRail";
 import { Sparkline } from "@/components/nexus/Sparkline";
 import { SystemLog, useSystemLog } from "@/components/nexus/SystemLog";
+import { CommandInput } from "@/components/ui/CommandInput";
 import { Button } from "@/components/ui/primitives";
 import { api } from "@/lib/api";
 import { GREETING, speak, stopSpeaking } from "@/lib/speak";
@@ -104,6 +105,10 @@ export default function NexusPage() {
   const [orbState, setOrbState] = useState<OrbState>("idle");
   const [caption, setCaption] = useState("");
   const [active, setActive] = useState(4);
+  /** Matn buyrug'i — foydalanuvchi shu sahifadan chiqmasdan yozadi. */
+  const [command, setCommand] = useState("");
+  /** Orkestratordan javob kutilmoqda — buyruq ikki marta yuborilmasin. */
+  const [busy, setBusy] = useState(false);
 
   const log = useSystemLog();
   const push = log.push;
@@ -117,48 +122,100 @@ export default function NexusPage() {
 
   const hand = useHandTracking();
 
-  // ── Ovozli buyruq — qarsak → salomlashuv → HAQIQIY /run chaqiruvi ──
-  // Web Speech API brauzer ichida matnga aylantiradi, natija esa
-  // qotgan javob emas — real Orchestrator'ga (`api.run`) boradi.
-  const voice = useVoiceInput((text) => {
-    push(`Ovoz: "${text}"`);
-    setOrbState("thinking");
-    void api.run(text, "web").then((res) => {
-      if (res.ok) {
-        // Backend'ning HAQIQIY javobi ovozda o'qiladi — qotgan
-        // GREETING emas, bu chinakam Jarvis-uslubidagi suhbat.
-        setCaption(res.data.message);
-        setOrbState("speaking");
-        void speak(res.data.message).then(() =>
-          window.setTimeout(() => setOrbState("idle"), 2600),
-        );
-      } else {
-        // LLM provayder ishlamasa ham xato JIMGINA yutilmaydi —
-        // jurnalda va sahnada ochiq ko'rsatiladi.
-        push(`Xato: ${res.error}`);
-        setCaption(res.error);
-        setOrbState("idle");
-      }
+  // ── Ovozli javob ───────────────────────────────────────────────
+  // Har bir ijro o'z navbat raqamini oladi: eski javob tugaganda (yoki
+  // `stopSpeaking()` bilan uzilganda) YANGI javobning holatini bekor
+  // qilib yubormasin.
+  const speechSeq = useRef(0);
+
+  /** Matnni ovozda o'qiydi va ovoz TUGAGACH orbni bo'sh holatga qaytaradi.
+   *
+   * `speak()` endi ijro tugaganda hal bo'ladi (lib/speak.ts), shuning
+   * uchun bu yerda hech qanday taxminiy kutish yo'q. */
+  const say = useCallback((text: string) => {
+    const seq = ++speechSeq.current;
+    setOrbState("speaking");
+    void speak(text).then(() => {
+      if (speechSeq.current !== seq) return;
+      // Faqat O'ZIMIZ qo'ygan "speaking" olib tashlanadi — orada
+      // tinglash yoki o'ylash boshlangan bo'lsa, ularga tegilmaydi.
+      setOrbState((prev) => (prev === "speaking" ? "idle" : prev));
     });
-  });
+  }, []);
+
+  // ── Buyruq oqimi — ovoz ham, matn ham SHU yerdan o'tadi ────────
+  // Ikki yo'l uchun alohida kod yozilmaydi: farq faqat jurnal
+  // yozuvining boshida (`Ovoz:` / `Matn:`). Natija qotgan javob emas —
+  // real Orchestrator'ga (`api.run`) boradi va sahifa YOPILMAYDI.
+  const runCommand = useCallback(
+    (raw: string, origin: "Ovoz" | "Matn") => {
+      const text = raw.trim();
+      if (!text) return;
+      push(`${origin}: "${text}"`);
+      setBusy(true);
+      setOrbState("thinking");
+      void api.run(text, "web").then((res) => {
+        setBusy(false);
+        if (res.ok) {
+          // Backend'ning HAQIQIY javobi ovozda o'qiladi — qotgan
+          // GREETING emas, bu chinakam Jarvis-uslubidagi suhbat.
+          setCaption(res.data.message);
+          say(res.data.message);
+        } else {
+          // LLM provayder ishlamasa ham xato JIMGINA yutilmaydi —
+          // jurnalda va sahnada ochiq ko'rsatiladi.
+          push(`Xato: ${res.error}`);
+          setCaption(res.error);
+          setOrbState("idle");
+        }
+      });
+    },
+    [push, say],
+  );
+
+  // Web Speech API brauzer ichida matnga aylantiradi, tanilgan gap esa
+  // matn buyrug'i bilan bir xil yo'ldan ketadi.
+  const voice = useVoiceInput((text) => runCommand(text, "Ovoz"));
+
+  /** Matn maydonidagi buyruqni yuboradi (Enter yoki tugma). */
+  const submitCommand = useCallback(() => {
+    if (busy) return;
+    const text = command.trim();
+    if (!text) return;
+    setCommand("");
+    runCommand(text, "Matn");
+  }, [busy, command, runCommand]);
+
+  /** Mikrofon tugmasi — qarsakdan MUSTAQIL yo'l.
+   *
+   * Qarsak aniqlanmasa (jim mikrofon, karnay, chegara mos kelmasa)
+   * ovozli suhbat butunlay yopilib qolmasin: bu tugma `clap.enable()`
+   * dan qat'i nazar tinglashni ochadi/yopadi. */
+  const toggleVoice = useCallback(() => {
+    if (voice.permission === "listening") voice.stop();
+    else voice.start();
+  }, [voice.permission, voice.start, voice.stop]);
 
   const greet = useCallback(() => {
     sound.play("tick");
     setOrbState("speaking");
     setCaption(GREETING);
     push("Ikki qarsak aniqlandi");
-    void speak(GREETING).then(() =>
-      window.setTimeout(() => {
-        setOrbState("idle");
-        // Salomlashuv tugadi — endi ~6 soniya buyruqni tinglaydi
-        // (Jarvis-uslub: "qarsak → salom → tingla"). Qo'llab-
-        // quvvatlanmasa/ruxsat bo'lmasa buni hook o'zi "unsupported"/
-        // "denied" holatiga o'tkazadi — quyidagi effekt buni jurnalga
-        // ochiq yozadi.
-        voice.start();
-        window.setTimeout(() => voice.stop(), 6000);
-      }, 2600),
-    );
+    const seq = ++speechSeq.current;
+    void speak(GREETING).then(() => {
+      // Orada boshqa javob boshlangan bo'lsa — aralashmaymiz.
+      if (speechSeq.current !== seq) return;
+      setOrbState((prev) => (prev === "speaking" ? "idle" : prev));
+      // Salomlashuv HAQIQATAN tugadi (speak endi shu paytda hal
+      // bo'ladi) — taxminiy kutishsiz darhol tinglaymiz, shunda ZET
+      // o'z ovozini eshitib qolmaydi. Qo'llab-quvvatlanmasa/ruxsat
+      // bo'lmasa buni hook o'zi "unsupported"/"denied"/"error"
+      // holatiga o'tkazadi — quyidagi effekt buni ochiq ko'rsatadi.
+      voice.start();
+      // 6 soniya — tinglash oynasi; u mikrofon OCHILGAN paytdan
+      // boshlanadi.
+      window.setTimeout(() => voice.stop(), 6000);
+    });
   }, [push, voice.start, voice.stop]);
 
   const clap = useClapDetector(greet);
@@ -177,7 +234,29 @@ export default function NexusPage() {
   useEffect(() => {
     if (voice.permission === "unsupported") push("Ovoz tanish qo'llab-quvvatlanmaydi");
     if (voice.permission === "denied") push("Mikrofonga ruxsat yo'q");
-  }, [voice.permission, push]);
+    // Qolgan xatolar (`no-speech`, `network`, `language-not-supported`…)
+    // ilgari HECH QAYERDA ko'rinmasdi — ovoz "jimgina" ishlamay
+    // qo'yardi. Endi sabab jurnalda ham, ekranda ham (`voiceProblem`)
+    // ochiq turadi.
+    if (voice.permission === "error" && voice.error) push(`Ovoz xatosi: ${voice.error}`);
+  }, [voice.permission, voice.error, push]);
+
+  // ── Tinglash paytida orb "listening" ko'rinishiga o'tadi ────────
+  // NeuroOrb'da bu holat bor edi (mikrofon amplitudasiga to'lqin),
+  // lekin hech qachon ulanmagan edi. Tinglash tugagach avvalgi
+  // holatga qaytamiz; agar shu orada javob kelib "thinking" boshlangan
+  // bo'lsa — unga tegmaymiz.
+  const beforeListenRef = useRef<OrbState>("idle");
+  useEffect(() => {
+    if (voice.permission === "listening") {
+      setOrbState((prev) => {
+        if (prev !== "listening") beforeListenRef.current = prev;
+        return "listening";
+      });
+    } else {
+      setOrbState((prev) => (prev === "listening" ? beforeListenRef.current : prev));
+    }
+  }, [voice.permission]);
 
   // ── Kartalar (hammasi haqiqiy manbadan) ────────────────────────
   const cards = useMemo<RailCard[]>(() => {
@@ -450,14 +529,16 @@ export default function NexusPage() {
       if (card) {
         sound.play("tick");
         push(`Tanlandi: ${card.title}`);
-        setOrbState("speaking");
-        void speak(`${card.title}. ${card.subtitle}`).then(() =>
-          window.setTimeout(() => setOrbState("idle"), 1800),
-        );
+        // `say()` orqali — u `speak()` ning "ovoz tugaganda hal bo'ladi"
+        // semantikasini va `speechSeq` qorovulini biladi. Ilgari bu yerda
+        // `speak(...).then(setTimeout(idle, 1800))` turardi: o'sha 1800 ms
+        // ovoz UZUNLIGINI taxmin qilardi, endi esa ovoz allaqachon tugagan
+        // bo'lardi va orb yana 1.8 soniya bekorga "speaking"da qolardi.
+        say(`${card.title}. ${card.subtitle}`);
       }
     }
     lastPinch.current = hand.pinching;
-  }, [hand.pinching, active, cards, push]);
+  }, [hand.pinching, active, cards, push, say]);
 
   useEffect(() => {
     if (hand.openPalm) {
@@ -475,6 +556,19 @@ export default function NexusPage() {
       : hand.cursor
         ? "Qo'l aniqlandi"
         : "—";
+
+  /** Ovoz yo'lidagi nosozlik — foydalanuvchi jurnalga qaramasdan bilsin.
+   *
+   * Soxta matn YO'Q: sabab hook qaytargan HAQIQIY xatodan olinadi.
+   * `idle`/`requesting`/`listening` — ko'rsatadigan muammo yo'q. */
+  const voiceProblem =
+    voice.permission === "error"
+      ? voice.error || "Ovozni tanishda xato"
+      : voice.permission === "denied"
+        ? "Mikrofonga ruxsat berilmadi"
+        : voice.permission === "unsupported"
+          ? "Brauzer ovozni tanimaydi"
+          : "";
 
   return (
     <div className="relative min-h-[calc(100vh-8.5rem)] overflow-hidden">
@@ -534,6 +628,23 @@ export default function NexusPage() {
           <CardRail cards={cards} active={active} onActiveChange={setActive} />
         </div>
 
+        {/* ── Buyruq maydoni ──
+            Nexus'ning O'ZIDA yoziladi: `/messages?q=` ga otilmaydi,
+            sahna yopilmaydi. Ovozli yo'l bilan bir xil `runCommand`ga
+            tushadi. Sahna markazini (orb) to'smasligi uchun pastda,
+            imo-ishora panelidan yuqorida turadi. */}
+        <div className="mb-4 flex justify-center">
+          <div className="w-full max-w-[34rem]">
+            <CommandInput
+              value={command}
+              onChange={setCommand}
+              onSubmit={submitCommand}
+              disabled={busy}
+              placeholder={busy ? "Javob kutilmoqda…" : "Buyruq yozing…"}
+            />
+          </div>
+        </div>
+
         {/* ── Pastki qator ── */}
         <div className="flex flex-wrap items-end justify-between gap-4">
           <SystemLog lines={log.lines} />
@@ -558,7 +669,28 @@ export default function NexusPage() {
                 <Hand size={14} strokeWidth={1.5} aria-hidden />
                 {hand.status === "tracking" ? "Qo'l yoqilgan" : "Qo'lni yoqish"}
               </Button>
+              {/* Qarsakdan MUSTAQIL ovoz yo'li — qarsak aniqlanmasa ham
+                  mikrofon shu tugma bilan ochiladi. */}
+              <Button
+                onClick={toggleVoice}
+                variant={voice.permission === "listening" ? "primary" : "ghost"}
+                className="flex items-center gap-2 text-xs"
+                aria-pressed={voice.permission === "listening"}
+                disabled={voice.permission === "unsupported"}
+              >
+                <Mic size={14} strokeWidth={1.5} aria-hidden />
+                {voice.permission === "listening" ? "To'xtatish" : "Ovozli buyruq"}
+              </Button>
             </div>
+
+            {voiceProblem ? (
+              <p
+                role="status"
+                className="max-w-[22rem] text-center text-[10px] leading-snug text-[var(--status-alert)]"
+              >
+                {voiceProblem}
+              </p>
+            ) : null}
 
             <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-[14px] border border-[var(--border-hairline)] bg-[rgba(11,14,20,0.6)] px-4 py-2.5">
               {GESTURES.map((g) => (
@@ -596,11 +728,13 @@ export default function NexusPage() {
         </div>
       </div>
 
+      {/* Izoh (caption). Buyruq maydoni qo'shilgach pastki blok
+          balandlashdi — izoh uni to'smasligi uchun yuqoriroq turadi. */}
       {caption ? (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="pointer-events-none absolute inset-x-0 bottom-[7.5rem] z-20 flex justify-center"
+          className="pointer-events-none absolute inset-x-0 bottom-[11.5rem] z-20 flex justify-center"
         >
           <span className="rounded-full border border-[var(--border-hairline)] bg-[rgba(11,14,20,0.85)] px-4 py-1.5 text-xs text-[var(--text-primary)]">
             {caption}

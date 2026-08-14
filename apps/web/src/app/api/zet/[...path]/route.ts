@@ -51,7 +51,14 @@ async function proxy(request: Request, context: RouteContext): Promise<Response>
       cache: "no-store",
     });
 
-    return new Response(await upstream.text(), {
+    // Javob tanasi ham AYNAN so'rov tanasi kabi ikkilik bo'lishi shart.
+    // `upstream.text()` kelgan baytlarni UTF-8 matnga aylantiradi: audio
+    // (Azure TTS'ning MP3/OGG'i), rasm yoki har qanday ikkilik javob shunda
+    // qaytmas darajada buziladi — noto'g'ri baytlar U+FFFD bilan almashadi
+    // va `res.blob()` orqali olingan fayl ijro etilmaydi. `arrayBuffer()`
+    // baytlarni o'zgarishsiz uzatadi; JSON javoblar ham UTF-8 baytlar,
+    // shuning uchun ular uchun alohida branch shart emas.
+    return new Response(await upstream.arrayBuffer(), {
       status: upstream.status,
       headers: {
         "content-type": upstream.headers.get("content-type") ?? "application/json",

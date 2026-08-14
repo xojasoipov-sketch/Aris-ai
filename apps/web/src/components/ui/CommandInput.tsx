@@ -15,6 +15,7 @@ export function CommandInput({
   onChange,
   onSubmit,
   onMic,
+  micActive = false,
   disabled = false,
   placeholder = "Buyruq yozing yoki ovoz bilan gapiring…",
   onFocus,
@@ -23,6 +24,10 @@ export function CommandInput({
   onChange: (v: string) => void;
   onSubmit: () => void;
   onMic?: () => void;
+  /** Mikrofon AYNI PAYTDA tinglayotgan bo'lsa — tugma faol ko'rinadi
+   *  va bosilganda tinglash to'xtaydi (toggle). Ixtiyoriy: bermagan
+   *  chaqiruvchilar uchun xatti-harakat o'zgarmaydi. */
+  micActive?: boolean;
   disabled?: boolean;
   placeholder?: string;
   onFocus?: () => void;
@@ -42,10 +47,16 @@ export function CommandInput({
       />
       {onMic ? (
         <button
-          aria-label="Ovozli buyruq"
-          className="rounded-full p-2.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--accent-blue)]"
+          aria-label={micActive ? "Tinglashni to'xtatish" : "Ovozli buyruq"}
+          aria-pressed={micActive}
+          className={`rounded-full p-2.5 transition-colors ${
+            micActive
+              ? "bg-[rgba(76,141,255,0.12)] text-[var(--accent-blue)]"
+              : "text-[var(--text-secondary)] hover:text-[var(--accent-blue)]"
+          }`}
           onClick={() => {
-            sound.play("listenStart");
+            // Ping faqat tinglash BOSHLANGANDA — to'xtatishda emas.
+            if (!micActive) sound.play("listenStart");
             onMic();
           }}
         >

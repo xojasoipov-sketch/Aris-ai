@@ -22,6 +22,7 @@ import {
   useAssistant,
   type AssistantState,
 } from "@/lib/assistant-machine";
+import { useVoiceInput, type VoiceInput } from "@/lib/useVoiceInput";
 
 const TO_ORB: Record<AssistantState, OrbState> = {
   sleep: "idle",
@@ -36,6 +37,32 @@ interface Msg {
   id: number;
   role: "user" | "assistant";
   text: string;
+}
+
+/** Ovoz holati → foydalanuvchiga ochiq ko'rsatiladigan qator.
+ *
+ * Soxta matn YO'Q: ruxsat berilmasa, brauzer qo'llab-quvvatlamasa yoki
+ * xato bo'lsa — hook qaytargan HAQIQIY sabab ko'rsatiladi, yashirilmaydi.
+ * `idle` — ko'rsatadigan hech nima yo'q. */
+function voiceNotice(voice: VoiceInput): { text: string; alert: boolean } | null {
+  switch (voice.permission) {
+    case "requesting":
+      return { text: "Mikrofon so'ralmoqda…", alert: false };
+    case "listening":
+      return {
+        // Oraliq natija bo'lsa — jonli ko'rsatamiz.
+        text: voice.transcript ? `Tinglanmoqda… ${voice.transcript}` : "Tinglanmoqda…",
+        alert: false,
+      };
+    case "denied":
+      return { text: "Mikrofonga ruxsat berilmadi", alert: true };
+    case "unsupported":
+      return { text: "Brauzer ovozni tanimaydi", alert: true };
+    case "error":
+      return { text: voice.error || "Ovozni tanishda xato", alert: true };
+    case "idle":
+      return null;
+  }
 }
 
 /* Selektor pill — model/kontekst/tool ko'rsatkichi (hozircha statik) */
@@ -62,8 +89,10 @@ export default function AiChatPage() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, state]);
 
-  const submit = useCallback(() => {
-    const text = input.trim();
+  /** Yagona yuborish oqimi — matn ham, ovozdan tanilgan gap ham SHU yerdan
+   *  o'tadi (ovoz uchun alohida yo'l yozilmaydi). */
+  const sendText = useCallback((raw: string) => {
+    const text = raw.trim();
     if (!text || state === "thinking") return;
     if (state === "sleep") send("WAKE");
 
@@ -87,8 +116,28 @@ export default function AiChatPage() {
       ]);
       timers.current.push(setTimeout(() => send("DONE"), 400));
     })();
-  }, [input, state, send]);
+  }, [state, send]);
 
+  const submit = useCallback(() => sendText(input), [sendText, input]);
+
+  /** HAQIQIY mikrofon (Web Speech API). Tanilgan matn input maydoniga
+   *  tushadi va oddiy matn kabi yuboriladi. Agar shu payt javob kutilayotgan
+   *  bo'lsa — `sendText` yubormaydi, matn esa inputda qolib, foydalanuvchi
+   *  o'zi yubora oladi (ya'ni tanilgan gap yo'qolmaydi). */
+  const voice = useVoiceInput((text) => {
+    setInput(text);
+    sendText(text);
+  });
+
+  const micListening = voice.permission === "listening" || voice.permission === "requesting";
+
+  const toggleMic = useCallback(() => {
+    if (state === "sleep") send("WAKE");
+    if (micListening) voice.stop();
+    else voice.start();
+  }, [state, send, micListening, voice.start, voice.stop]);
+
+  const notice = voiceNotice(voice);
   const voiceActive = state === "listening" || state === "speaking";
 
   return (
@@ -145,15 +194,34 @@ export default function AiChatPage() {
         </AnimatePresence>
       </div>
 
+      {/* Ovoz holati — soxta emas, hookdan kelgan haqiqiy holat */}
+      <AnimatePresence initial={false}>
+        {notice ? (
+          <motion.p
+            key="voice-notice"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            role="status"
+            aria-live="polite"
+            className={`mb-2 px-5 text-xs leading-snug ${
+              notice.alert ? "text-[var(--status-alert)]" : "text-[var(--accent-blue)]"
+            }`}
+          >
+            {notice.text}
+          </motion.p>
+        ) : null}
+      </AnimatePresence>
+
       {/* Input */}
       <CommandInput
         value={input}
         onChange={setInput}
         onSubmit={submit}
         disabled={state === "thinking"}
-        onMic={() => {
-          if (state === "sleep") send("WAKE");
-        }}
+        onMic={toggleMic}
+        micActive={micListening}
       />
     </div>
   );
