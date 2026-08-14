@@ -961,3 +961,136 @@ class TestApprovalCallbackWiring:
         )
         assert "Xato" in result.text
         assert "DB" in result.text  # xato sababi ko'rsatiladi
+
+
+# ── Yozish uslubi: robotcha ✅ prefiksi olib tashlandi, ko'p-xabar ────
+
+
+class TestNaturalReplyStyle:
+    """Bot muloqot uslubi (tungi tuzatish): javoblar robotcha "✅ <matn>"
+    prefiksi bilan emas, tabiiy ravishda kelishi kerak. Xatoga yaqin
+    holat (`ok=False`) hamon "⚠️" signal sifatida qoladi."""
+
+    @pytest.mark.asyncio()
+    async def test_successful_reply_has_no_robotic_prefix(self) -> None:
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            return OrchestratorRunResult(text="Bugun ishlar joyida.", ok=True)
+
+        handler = MessageHandler(HandlerContext(orchestrator_runner=_runner))
+        result = await handler.handle(
+            TelegramInput(input_type=InputType.TEXT, user_id=1, chat_id=1, text="salom")
+        )
+        assert result.text == "Bugun ishlar joyida."
+        assert not result.text.startswith(("✅", "⚠️"))
+
+    @pytest.mark.asyncio()
+    async def test_failed_run_keeps_warning_signal(self) -> None:
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            return OrchestratorRunResult(text="Eslatma topilmadi.", ok=False)
+
+        handler = MessageHandler(HandlerContext(orchestrator_runner=_runner))
+        result = await handler.handle(
+            TelegramInput(input_type=InputType.TEXT, user_id=1, chat_id=1, text="salom")
+        )
+        assert result.text.startswith("⚠️")
+        assert "Eslatma topilmadi" in result.text
+        # Xato-yaqin holat bo'linmaydi — bitta xabar bo'lib qoladi.
+        assert result.text_parts is None
+
+    @pytest.mark.asyncio()
+    async def test_multi_paragraph_answer_splits_into_text_parts(self) -> None:
+        """LLM javobi bo'sh qator bilan ajratilgan bo'lsa — `text_parts`
+        to'ldiriladi, bitta xabarga majburlanmaydi."""
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        answer = "Qo'ydim — ertaga 15:00, Aziz bilan.\n\nJoyini yoki mavzusini qo'shaymi?"
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            return OrchestratorRunResult(text=answer, ok=True)
+
+        handler = MessageHandler(HandlerContext(orchestrator_runner=_runner))
+        result = await handler.handle(
+            TelegramInput(input_type=InputType.TEXT, user_id=1, chat_id=1, text="uchrashuv qo'y")
+        )
+        assert result.text_parts == (
+            "Qo'ydim — ertaga 15:00, Aziz bilan.",
+            "Joyini yoki mavzusini qo'shaymi?",
+        )
+        # `text` — TTS/orqaga moslik uchun BIRLASHTIRILGAN to'liq matn.
+        assert result.text == answer
+
+    @pytest.mark.asyncio()
+    async def test_single_paragraph_answer_has_no_text_parts(self) -> None:
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            return OrchestratorRunResult(text="Bitta qisqa javob.", ok=True)
+
+        handler = MessageHandler(HandlerContext(orchestrator_runner=_runner))
+        result = await handler.handle(
+            TelegramInput(input_type=InputType.TEXT, user_id=1, chat_id=1, text="salom")
+        )
+        assert result.text_parts is None
+
+    @pytest.mark.asyncio()
+    async def test_voice_reply_synthesizes_full_joined_text_not_per_part(self) -> None:
+        """Ovoz bo'laklarga bo'linib chiqmasin — bitta uzluksiz audio,
+        javobdagi BARCHA qismlardan yasaladi."""
+        from zet.telegram.handlers import OrchestratorRunResult
+
+        answer = "Birinchi fikr shu — ish joyida.\n\nIkkinchi fikr esa savol beraman."
+
+        async def _runner(text: str) -> OrchestratorRunResult:
+            return OrchestratorRunResult(text=answer, ok=True)
+
+        tts = _FakeTTS()
+        handler = MessageHandler(
+            HandlerContext(
+                stt=StubSTT("ovoz"), tts=tts, orchestrator_runner=_runner, reply_with_voice=True
+            )
+        )
+        result = await handler.handle(
+            TelegramInput(input_type=InputType.TEXT, user_id=1, chat_id=1, text="salom")
+        )
+        assert len(tts.calls) == 1
+        assert "Birinchi fikr shu" in tts.calls[0]
+        assert "Ikkinchi fikr esa" in tts.calls[0]
+        assert result.voice_data == b"MP3-FAKE"
+        assert result.text_parts is not None and len(result.text_parts) == 2
+
+
+class TestSplitIntoMessages:
+    """`_split_into_messages()` — bo'sh-qator chegarasida ajratish, qisqa
+    parchalarni birlashtirish, xabar sonini cheklash."""
+
+    def test_no_blank_line_returns_single_part(self) -> None:
+        from zet.telegram.handlers import _split_into_messages
+
+        assert _split_into_messages("Bitta oddiy javob.") == ["Bitta oddiy javob."]
+
+    def test_two_paragraphs_split(self) -> None:
+        from zet.telegram.handlers import _split_into_messages
+
+        result = _split_into_messages("Birinchi qism uzunroq gap.\n\nIkkinchi qism ham uzun.")
+        assert result == ["Birinchi qism uzunroq gap.", "Ikkinchi qism ham uzun."]
+
+    def test_short_fragment_merges_into_previous(self) -> None:
+        from zet.telegram.handlers import _split_into_messages
+
+        # 2-parcha juda qisqa ("Ha.") — 1-parchaga qo'shilib ketadi.
+        text = "Bu birinchi va yetarlicha uzun bo'lgan gap, xabar." + "\n\n" + "Ha."
+        result = _split_into_messages(text, min_len=80)
+        assert len(result) == 1
+        assert "Ha." in result[0]
+
+    def test_caps_at_max_parts(self) -> None:
+        from zet.telegram.handlers import _split_into_messages
+
+        long_paragraph = "Bu yetarlicha uzun parcha bo'lib xabar sifatida turadi." * 2
+        text = "\n\n".join([long_paragraph] * 5)
+        result = _split_into_messages(text, max_parts=3, min_len=10)
+        assert len(result) == 3

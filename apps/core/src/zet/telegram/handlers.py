@@ -171,6 +171,21 @@ class TelegramOutput:
     text: str
     """Javob matni."""
 
+    text_parts: tuple[str, ...] | None = None
+    """`text`ni bir nechta ketma-ket Telegram xabariga bo'lib yuborish.
+
+    NEGA KERAK: odam Telegram'da bitta uzun, hammasi qamrab olingan
+    blok emas, ketma-ket qisqa xabarlar bilan yozadi. `ANSWER_SYSTEM`
+    javobni tabiiy fikr chegaralarida bo'sh qator bilan ajratadi
+    (`_split_into_messages()`), shu qismlar shu yerda saqlanadi.
+
+    FAQAT oddiy suhbat javoblarida ishlatiladi — approval tugmalari,
+    `/status`, xato xabarlari bitta xabar bo'lib qoladi (tugma qaysi
+    xabarga tegishli ekani chalkashmasin). `None` — `text` bitta
+    xabar sifatida yuboriladi (eski xatti-harakat, o'zgarishsiz).
+    TTS uchun `text` (bo'laklar BIRLASHTIRILGAN, to'liq matn)
+    ishlatiladi — ovoz javobga mos, bitta uzluksiz oqim bo'lib qoladi."""
+
     voice_data: bytes | None = None
     """Ovozli javob (TTS natijasi)."""
 
@@ -310,25 +325,40 @@ class MessageHandler:
             result = await self._ctx.orchestrator_runner(text)
         except Exception as exc:
             log.warning("handler.orchestrator_failed", error=str(exc))
-            return TelegramOutput(text=f"❌ Xato: {_escape_html(str(exc)[:400])}")
+            return TelegramOutput(text=f"⚠️ Xato: {_escape_html(str(exc)[:400])}")
 
-        # Muvaffaqiyatli natija — matn (agent chiqishi) + ixtiyoriy TTS
-        emoji = "✅" if result.ok else "⚠️"
-        reply_text = f"{emoji} {_escape_html(result.text[:3500])}"
-        return await self._maybe_add_voice(reply_text, voice_reply=voice_reply)
+        if not result.ok:
+            # Xatoga yaqin holat (masalan verifikatsiya o'tmadi) — signal
+            # sifatida ⚠️ qoladi, bitta xabar (bo'lish shart emas).
+            reply_text = f"⚠️ {_escape_html(result.text[:3500])}"
+            return await self._maybe_add_voice(reply_text, voice_reply=voice_reply)
 
-    async def _maybe_add_voice(self, text: str, *, voice_reply: bool) -> TelegramOutput:
+        # Muvaffaqiyatli javob — robotcha "✅" prefiksi YO'Q. Agent javobi
+        # tabiiy ravishda bir nechta qisqa xabarga bo'linishi mumkin
+        # (ANSWER_SYSTEM'ning bo'sh-qator ajratish qoidasiga mos).
+        raw_text = result.text[:3500]
+        parts = _split_into_messages(raw_text)
+        full_text = "\n\n".join(parts)
+        text_parts = tuple(_escape_html(p) for p in parts) if len(parts) > 1 else None
+        return await self._maybe_add_voice(
+            _escape_html(full_text), voice_reply=voice_reply, text_parts=text_parts
+        )
+
+    async def _maybe_add_voice(
+        self, text: str, *, voice_reply: bool, text_parts: tuple[str, ...] | None = None
+    ) -> TelegramOutput:
         """TTS sozlangan va `voice_reply=True` bo'lsa — audio ham qo'shadi.
 
         Matnni TTSga uzatishdan oldin HTML teglarini olib tashlaymiz —
-        ovoz "<b>" ni o'qib berishi ma'nisiz.
-        """
+        ovoz "<b>" ni o'qib berishi ma'nisiz. Ovoz `text` (barcha
+        qismlar BIRLASHTIRILGAN, to'liq matn)dan yasaladi — bo'laklarga
+        bo'linmagan, bitta uzluksiz audio (javobga mos)."""
         if not voice_reply or self._ctx.tts is None:
-            return TelegramOutput(text=text)
+            return TelegramOutput(text=text, text_parts=text_parts)
 
         clean_for_speech = _strip_html(text)
         if not clean_for_speech.strip():
-            return TelegramOutput(text=text)
+            return TelegramOutput(text=text, text_parts=text_parts)
 
         try:
             tts_result = await self._ctx.tts.synthesize(clean_for_speech)
@@ -341,7 +371,12 @@ class MessageHandler:
             voice_bytes = None
             voice_format = "ogg"
 
-        return TelegramOutput(text=text, voice_data=voice_bytes, voice_format=voice_format)
+        return TelegramOutput(
+            text=text,
+            text_parts=text_parts,
+            voice_data=voice_bytes,
+            voice_format=voice_format,
+        )
 
     async def _handle_command(self, input_: TelegramInput) -> TelegramOutput:
         """Bot buyrug'ini qayta ishlash (/start, /help, /status)."""
@@ -528,6 +563,50 @@ class MessageHandler:
                 f"⏳ Hujjat qayta ishlash (Bo'lim 7 da ulanadi)"
             ),
         )
+
+
+_MAX_MESSAGE_PARTS: Final = 3
+"""Ketma-ket yuboriladigan xabarlar cheklovi — Telegram'ni to'ldirmaslik uchun."""
+
+_MIN_PART_LEN: Final = 20
+"""Bundan qisqa parcha qo'shni xabarga birlashtiriladi.
+
+MUHIM: bu chegara PAST bo'lishi kerak. Maqsad — ketma-ket QISQA
+xabarlar (odam yozganidek), ya'ni 30-50 belgilik jumlalar ODATIY
+holat, birlashtirish emas. `_MIN_PART_LEN` faqat haqiqatan tirband
+parchalarni (masalan "Ha.", "Ok.") qo'shni xabarga qo'shish uchun —
+30+ belgilik to'liq jumla mustaqil xabar bo'lib qolishi kerak."""
+
+_BLANK_LINE_RE: Final = _re.compile(r"\n\s*\n+")
+
+
+def _split_into_messages(
+    text: str, *, max_parts: int = _MAX_MESSAGE_PARTS, min_len: int = _MIN_PART_LEN
+) -> list[str]:
+    """Javobni tabiiy bo'sh-qator chegaralarida bir nechta xabarga ajratadi.
+
+    `ANSWER_SYSTEM` javobni FAQAT haqiqatan alohida fikrlar bo'lganda
+    bo'sh qator bilan ajratishni so'raydi — bu funksiya shu chegaralarni
+    ketma-ket Telegram xabarlariga aylantiradi (odam yozganidek, bitta
+    uzun blok emas). Bitta fikr bo'lsa (bo'sh qator yo'q) — o'zgarishsiz
+    bitta elementli ro'yxat qaytadi.
+    """
+    raw_parts = [p.strip() for p in _BLANK_LINE_RE.split(text.strip()) if p.strip()]
+    if len(raw_parts) <= 1:
+        return raw_parts or [text.strip()]
+
+    merged: list[str] = []
+    for part in raw_parts:
+        if merged and len(part) < min_len:
+            merged[-1] = f"{merged[-1]}\n\n{part}"
+        else:
+            merged.append(part)
+
+    if len(merged) > max_parts:
+        head, tail = merged[: max_parts - 1], merged[max_parts - 1 :]
+        merged = [*head, "\n\n".join(tail)]
+
+    return merged
 
 
 def _escape_html(text: str) -> str:

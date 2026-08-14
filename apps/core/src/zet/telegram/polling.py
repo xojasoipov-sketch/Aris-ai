@@ -44,6 +44,14 @@ _API_BASE = "https://api.telegram.org"
 _LONG_POLL_TIMEOUT_S = 30
 """Telegram tomonidan yangi update kutilayotgan vaqt (server-side hold)."""
 
+_TYPING_PAUSE_S = 0.6
+"""Ketma-ket xabarlar (`text_parts`) orasidagi "yozmoqda..." pauzasi.
+
+Odam Telegram'da bir nechta qisqa xabar yozganda ularning orasida
+tabiiy tanaffus bo'ladi — bu qiymat shuni taqlid qiladi. Juda uzun
+bo'lmasin (foydalanuvchini kuttirib qo'ymasin), lekin bir zumda ketma-
+ket kelib tushmasin ham."""
+
 _HTTP_TIMEOUT_S = 60.0
 """Klient tomonidagi umumiy timeout (long-poll + tarmoq marja)."""
 
@@ -304,13 +312,18 @@ class TelegramPoller:
         `sendVoice` rad etilsa (masalan foydalanuvchi voice message
         qabul qilishni bloklagan — VOICE_MESSAGES_FORBIDDEN) —
         `sendAudio`ga tushamiz. Ikkalasi ham rad etilsa faqat matn qoladi.
+
+        `text_parts` bo'lsa — bitta uzun xabar o'rniga ketma-ket bir
+        nechta qisqa xabar yuboriladi (har biridan oldin "typing..."
+        va qisqa pauza — odam yozayotgandek). Bu FAQAT oddiy suhbat
+        javoblarida ishlatiladi (`handlers.py`ga qarang) — approval/
+        status/xato xabarlari bitta xabar bo'lib qoladi.
         """
-        # Matnni har doim yuboramiz (audio bo'lsa unga qo'shimcha)
-        text_payload: dict[str, Any] = {"chat_id": chat_id, "text": output.text}
-        if output.parse_mode:
-            text_payload["parse_mode"] = output.parse_mode
-        with contextlib.suppress(httpx.HTTPError):
-            await self._get_client().post(f"/bot{self._token}/sendMessage", json=text_payload)
+        if output.text_parts:
+            for part in output.text_parts:
+                await self._send_text(chat_id, part, parse_mode=output.parse_mode, typing=True)
+        else:
+            await self._send_text(chat_id, output.text, parse_mode=output.parse_mode)
 
         if output.voice_data is None:
             return
@@ -326,6 +339,35 @@ class TelegramPoller:
             # uni baribir voice note qilib ko'rsatmaydi.
             log.warning("polling.voice_format_not_opus", fmt=fmt)
         await self._try_send_audio(chat_id, output.voice_data, fmt=fmt)
+
+    async def _send_text(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        parse_mode: str | None,
+        typing: bool = False,
+    ) -> None:
+        """Bitta matnli xabar yuboradi — ixtiyoriy "typing..." belgisi bilan.
+
+        `typing=True` — ketma-ket xabarlar (`text_parts`) uchun: odam
+        yozayotgandek, xabardan oldin qisqa "yozmoqda..." holati va
+        pauza ko'rsatiladi. `sendChatAction` xatosi jimgina o'tkazib
+        yuboriladi (kosmetik — asosiy xabarni to'xtatmasligi kerak).
+        """
+        if typing:
+            with contextlib.suppress(httpx.HTTPError):
+                await self._get_client().post(
+                    f"/bot{self._token}/sendChatAction",
+                    json={"chat_id": chat_id, "action": "typing"},
+                )
+            await asyncio.sleep(_TYPING_PAUSE_S)
+
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        with contextlib.suppress(httpx.HTTPError):
+            await self._get_client().post(f"/bot{self._token}/sendMessage", json=payload)
 
     async def _try_send_voice(self, chat_id: int, audio: bytes) -> bool:
         try:

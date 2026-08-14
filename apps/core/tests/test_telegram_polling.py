@@ -487,3 +487,54 @@ class TestVoiceNoteFormat:
         assert audio_route.called
         # Fallback ham OGG sifatida ketadi (MP3 deb yolg'on nom bermaymiz)
         assert b"audio/ogg" in audio_route.calls[0].request.content
+
+
+class TestMultiMessageReply:
+    """`text_parts` bo'lsa — ketma-ket bir nechta `sendMessage`, har
+    birida typing action bilan. Boshqa yo'llar (approval/status/xato) —
+    `text_parts=None`, bitta xabar, o'zgarishsiz."""
+
+    @respx.mock
+    async def test_text_parts_sent_as_separate_messages_with_typing(self, bot: ZetBot) -> None:
+        typing_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendChatAction").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        send_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+
+        poller = TelegramPoller(token=_TOKEN, bot=bot)
+        try:
+            await poller._send_reply(
+                _OWNER_ID,
+                TelegramOutput(
+                    text="Birinchi.\n\nIkkinchi.",
+                    text_parts=("Birinchi.", "Ikkinchi."),
+                ),
+            )
+        finally:
+            await poller.aclose()
+
+        assert send_route.call_count == 2
+        assert typing_route.call_count == 2
+        bodies = [c.request.content for c in send_route.calls]
+        assert b"Birinchi." in bodies[0]
+        assert b"Ikkinchi." in bodies[1]
+
+    @respx.mock
+    async def test_no_text_parts_sends_single_message_no_typing(self, bot: ZetBot) -> None:
+        typing_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendChatAction").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        send_route = respx.post(f"{_BASE}/bot{_TOKEN}/sendMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+
+        poller = TelegramPoller(token=_TOKEN, bot=bot)
+        try:
+            await poller._send_reply(_OWNER_ID, TelegramOutput(text="Yagona xabar."))
+        finally:
+            await poller.aclose()
+
+        assert send_route.call_count == 1
+        assert typing_route.call_count == 0  # eski xatti-harakat — o'zgarishsiz
