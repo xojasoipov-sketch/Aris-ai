@@ -16,27 +16,53 @@
  * — bosish hech narsani o'zgartirmasdi.
  */
 
+import { Upload } from "lucide-react";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { SettingsRow as Row, Toggle } from "@/components/ui/forms";
-import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
-import { api } from "@/lib/api";
+import { Button, Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
+import { api, type ProfileIngestResultDto } from "@/lib/api";
 import { sound } from "@/lib/sound";
 import { useResource } from "@/lib/useResource";
 
 /* Accent variantlari — master tizim default: #4C8DFF */
 const ACCENTS = ["#4C8DFF", "#22C55E", "#F59E0B", "#EC4899", "#A78BFA", "#EF4444"] as const;
 
+/** Profil fayl yuklash holati — idle -> yuklanmoqda -> natija/xato.
+ *
+ * MUHIM: bu QO'LDA, BIR MARTALIK fayl yuklash — ega o'zi fayl tanlaydi va
+ * o'zi "Yuklash"ni bosadi. Bu YANGI DOIMIY/AVTOMATIK eslovchi tizim EMAS
+ * (loyihada ambient/wearable doimiy tinglash qo'shilmagan va qo'shilmaydi).
+ */
+type ProfileIngestState =
+  | { kind: "idle" }
+  | { kind: "yuklanmoqda" }
+  | { kind: "success"; data: ProfileIngestResultDto }
+  | { kind: "error"; message: string };
+
 export default function SettingsPage() {
   const [accent, setAccent] = useState<string>(ACCENTS[0]);
   const [soundOn, setSoundOn] = useState(true);
   const integrations = useResource(() => api.integrations(), 30_000);
 
+  const [profileFile, setProfileFile] = useState<File | null>(null);
+  const [ingestState, setIngestState] = useState<ProfileIngestState>({ kind: "idle" });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const applyAccent = (c: string) => {
     setAccent(c);
     document.documentElement.style.setProperty("--accent-blue", c);
     sound.play("tick");
+  };
+
+  const uploadProfile = async () => {
+    if (!profileFile) return;
+    setIngestState({ kind: "yuklanmoqda" });
+    const res = await api.memory.ingestProfile(profileFile);
+    setIngestState(
+      res.ok ? { kind: "success", data: res.data } : { kind: "error", message: res.error },
+    );
   };
 
   return (
@@ -147,6 +173,74 @@ export default function SettingsPage() {
               <span className="text-xs text-[var(--status-online)]">Faol</span>
             </Row>
           </div>
+        </Panel>
+
+        {/* Xotira / Profil — QO'LDA, bir martalik fayl yuklash.
+            Doimiy/avtomatik eslovchi tizim EMAS. */}
+        <Panel className="px-5 py-4">
+          <Eyebrow>Xotira / Profil</Eyebrow>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
+            Markdown profil faylini (masalan <code>BOSS_PROFILE.md</code>) yuklang — ZET uni
+            bo&apos;limlarga bo&apos;lib xotirasiga saqlaydi. Bu qo&apos;lda, bir martalik fayl
+            yuklash — doimiy yoki avtomatik eslovchi tizim emas.
+          </p>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".md,text/markdown"
+              onChange={(e) => {
+                setProfileFile(e.target.files?.[0] ?? null);
+                setIngestState({ kind: "idle" });
+              }}
+              className="hidden"
+            />
+            <Button
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Profil faylini tanlash"
+            >
+              <span className="flex items-center gap-1.5">
+                <Upload size={15} strokeWidth={1.5} aria-hidden />
+                Fayl tanlash
+              </span>
+            </Button>
+            <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]">
+              {profileFile ? profileFile.name : "Fayl tanlanmagan"}
+            </span>
+            <Button
+              variant="primary"
+              disabled={!profileFile || ingestState.kind === "yuklanmoqda"}
+              onClick={() => void uploadProfile()}
+            >
+              {ingestState.kind === "yuklanmoqda" ? "Yuklanmoqda…" : "Yuklash"}
+            </Button>
+          </div>
+
+          {ingestState.kind === "success" ? (
+            <div className="mt-3 rounded-[10px] border border-[var(--border-hairline)] bg-[var(--bg-base)] p-3">
+              <p className="text-xs text-[var(--status-online)]">
+                {ingestState.data.added} bo&apos;lim qo&apos;shildi ({ingestState.data.failed}{" "}
+                xato)
+              </p>
+              {ingestState.data.errors.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {ingestState.data.errors.map((err, i) => (
+                    <li key={i} className="text-xs text-[var(--status-alert)]">
+                      · {err}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
+          {ingestState.kind === "error" ? (
+            <p className="mt-3 text-xs text-[var(--status-alert)]">
+              Yuklab bo&apos;lmadi: {ingestState.message}
+            </p>
+          ) : null}
         </Panel>
       </motion.div>
     </div>

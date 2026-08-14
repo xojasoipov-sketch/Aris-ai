@@ -2,6 +2,7 @@
 
 POST /api/v1/run — yangi run boshlash: intent → reja → bajarish → tekshirish.
 GET  /api/v1/run/{run_id} — run holatini olish.
+GET  /api/v1/runs — run TARIXI, bazadan (sahifalangan, faqat egaga tegishli).
 
 To'liq pipeline: `Orchestrator` orqali `IntentRecognizer` → `Planner` →
 `Executor` (approval gate bilan) → `Verifier`.
@@ -10,17 +11,25 @@ To'liq pipeline: `Orchestrator` orqali `IntentRecognizer` → `Planner` →
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from zet.api.deps import (
+    get_config,
+    get_db_session,
     get_killswitch,
     get_orchestrator,
     load_conversation_history,
     save_conversation_turn,
 )
+from zet.config import Settings
 from zet.core.orchestrator import Orchestrator, RunNotFoundError, RunRecord
+from zet.db.bootstrap import get_or_create_owner
+from zet.db.models.run import Run as RunRow
 from zet.domain.command import Command
 from zet.security.killswitch import KillSwitchEngagedError, KillSwitchState
 
@@ -47,6 +56,85 @@ class RunResponse(BaseModel):
     steps_total: int = 0
     cost_usd: float = 0.0
     pending_approval_id: str | None = None
+
+
+class RunHistoryResponse(BaseModel):
+    """Run tarixi ro'yxatidagi bitta yozuv — `GET /api/v1/runs`.
+
+    `RunResponse`dan farqi: bu bevosita `run` jadval qatoridan (bazadan)
+    quriladi, faol `Orchestrator.run_store` (xotira) orqali emas —
+    shuning uchun protsess qayta ishga tushgan/eski run'lar uchun ham
+    ishlaydi.
+    """
+
+    run_id: str
+    status: str
+    command_text: str
+    result_summary: str | None
+    error: str | None
+    created_at: str
+    finished_at: str | None
+    steps_done: int
+    steps_total: int
+    cost_usd: float
+    tools_used: list[str]
+
+
+def _run_history_response(row: RunRow) -> RunHistoryResponse:
+    """`Run` DB qatorini `RunHistoryResponse`ga aylantiradi.
+
+    `completed_steps`/`plan_snapshot` — ikkalasi ham `None` bo'lishi
+    mumkin (run hali rejalashtirilmagan yoki checkpoint yozilmagan) —
+    bunday holatda 0/steps_done bilan mos qiymat qaytadi, hech qanday
+    o'ylab topilgan raqam yo'q.
+    """
+    completed: dict[str, Any] = row.completed_steps or {}
+    steps_done = len(completed)
+
+    steps_total = steps_done
+    if row.plan_snapshot:
+        plan_steps = row.plan_snapshot.get("steps")
+        if isinstance(plan_steps, list):
+            steps_total = len(plan_steps)
+
+    # Position bo'yicha tartib — JSON kalitlari string, shuning uchun
+    # int'ga o'girib saralanadi. Buzuq/raqam bo'lmagan kalitlar
+    # o'tkazib yuboriladi (fail-open, `run_checkpoint.py` naqshi).
+    ordered_positions: list[tuple[int, str]] = []
+    for pos_str in completed:
+        try:
+            ordered_positions.append((int(pos_str), pos_str))
+        except (TypeError, ValueError):
+            continue
+    ordered_positions.sort()
+
+    tools_used: list[str] = []
+    seen: set[str] = set()
+    for _, pos_str in ordered_positions:
+        step_data = completed.get(pos_str)
+        if not isinstance(step_data, dict):
+            continue
+        tool_result = step_data.get("tool_result")
+        if not isinstance(tool_result, dict):
+            continue
+        tool_name = tool_result.get("tool_name")
+        if tool_name and tool_name not in seen:
+            seen.add(tool_name)
+            tools_used.append(tool_name)
+
+    return RunHistoryResponse(
+        run_id=str(row.id),
+        status=row.status.value,
+        command_text=row.command_text,
+        result_summary=row.result_summary,
+        error=row.error,
+        created_at=row.created_at.isoformat(),
+        finished_at=row.finished_at.isoformat() if row.finished_at else None,
+        steps_done=steps_done,
+        steps_total=steps_total,
+        cost_usd=round(row.spent_usd, 6),
+        tools_used=tools_used,
+    )
 
 
 def _to_response(record: RunRecord, trace_id: str) -> RunResponse:
@@ -128,3 +216,33 @@ async def get_run(
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _to_response(record, run_id)
+
+
+@router.get("/runs", response_model=list[RunHistoryResponse])
+async def list_run_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_config),
+) -> list[RunHistoryResponse]:
+    """Run tarixi — bazadan, faqat egaga tegishli, eng yangi birinchi.
+
+    `GET /run/{run_id}` dan farqi: bu doim DB'dan o'qiydi (xotiradagi
+    `Orchestrator.run_store`ga bog'liq emas) — shuning uchun protsess
+    qayta ishga tushgandan keyingi run'lar ham ko'rinadi.
+    """
+    owner = await get_or_create_owner(session, external_id=settings.owner_id)
+    rows = (
+        (
+            await session.execute(
+                select(RunRow)
+                .where(RunRow.owner_id == owner.id)
+                .order_by(RunRow.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_run_history_response(row) for row in rows]

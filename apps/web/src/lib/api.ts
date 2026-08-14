@@ -5,7 +5,8 @@
  *   - Soxta ma'lumot YO'Q: sahifa faqat backend bergan narsani ko'rsatadi
  *
  * Tiplar REAL kontraktga mos (jonli backend'da tekshirilgan):
- *   GET  /approvals?run_id=…            → ApprovalDto[]  (run_id MAJBURIY)
+ *   GET  /approvals[?run_id=…]          → ApprovalDto[]  (run_id IXTIYORIY —
+ *        berilsa shu run'ga tegishlilari, berilmasa BARCHA kutilayotganlar)
  *   POST /approvals/{id}/approve|reject → body {note?} MAJBURIY (bo'sh {} ham bo'ladi)
  *   GET  /killswitch                    → {killswitch: {...}} (ichma-ich — unwrap qilamiz)
  *   POST /killswitch/engage             → body {reason} MAJBURIY
@@ -13,15 +14,29 @@
  *   GET  /system                        → o'lchangan CPU/RAM/disk (Z46.1)
  *   GET  /integrations                  → tekshirilgan xizmat holati (Z46.1)
  *   CRUD /projects /tasks /events       → ish maydoni (Z46)
+ *   GET  /runs?limit=&offset=           → RunHistoryDto[] (run tarixi, DB'dan)
+ *   POST /memory/search                 → MemorySearchResultDto[]
+ *   GET  /memory/layer/{layer}?limit=   → MemoryEntryDto[]
+ *   POST /memory/ingest-profile         → multipart "file" → {sections_found,
+ *        added, failed, errors} (Content-Type qo'lda QO'YILMAYDI — brauzer
+ *        o'zi boundary bilan qo'yadi, quyidagi `call()` buni FormData orqali biladi)
  */
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
 async function call<T>(path: string, init?: RequestInit): Promise<Result<T>> {
   try {
+    // FormData (masalan fayl-yuklash) uchun "Content-Type" QO'LDA QO'YILMAYDI —
+    // brauzer o'zi to'g'ri "multipart/form-data; boundary=…" ni qo'shadi.
+    // Qo'lda "application/json" majburlansa, boundary yo'qoladi va backend
+    // multipart tanani parslay olmaydi.
+    const isFormData = init?.body instanceof FormData;
+    const headers = isFormData
+      ? { ...init?.headers }
+      : { "Content-Type": "application/json", ...init?.headers };
     const res = await fetch(`/api/zet${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      headers,
     });
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status}` };
@@ -193,6 +208,21 @@ export interface RunDto {
   pending_approval_id: string | null;
 }
 
+/** GET /runs javobi — run tarixi (DB'dagi `Run` modeliga mos). */
+export interface RunHistoryDto {
+  run_id: string;
+  status: string;
+  command_text: string;
+  result_summary: string | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+  steps_done: number;
+  steps_total: number;
+  cost_usd: number;
+  tools_used: string[];
+}
+
 /* ── TIZIM retseptlari (Z48) ───────────────────────────────────── */
 
 export type RecipeStatus = "ready" | "missing_capability";
@@ -326,6 +356,37 @@ export interface FeedsDto {
   rates: FeedBlock<RateDto[]>;
 }
 
+/* ── Xotira (Memory) ───────────────────────────────────────────── */
+
+/** Backend `MemoryEntryResponse`ga AYNAN mos. */
+export interface MemoryEntryDto {
+  id: string | null;
+  layer: string;
+  content: string;
+  summary: string | null;
+  tags: string[];
+  source: string | null;
+  version: number;
+  trust_level: string;
+  created_at: string | null;
+  expires_at: string | null;
+}
+
+/** Backend `MemorySearchResultResponse`ga AYNAN mos. */
+export interface MemorySearchResultDto {
+  entry: MemoryEntryDto;
+  similarity: number;
+  rank: number;
+}
+
+/** POST /memory/ingest-profile javobi (backend `ProfileIngestResponse`ga mos). */
+export interface ProfileIngestResultDto {
+  sections_found: number;
+  added: number;
+  failed: number;
+  errors: string[];
+}
+
 /* ── Chaqiruvlar ───────────────────────────────────────────────── */
 
 export const api = {
@@ -378,6 +439,12 @@ export const api = {
   /** Buyruqni HAQIQATAN backend'ga yuboradi (ilgari canned javob edi). */
   run: (message: string, channel = "web") =>
     call<RunDto>("/run", { method: "POST", body: JSON.stringify({ message, channel }) }),
+
+  /** Run tarixi — DB'dan, o'ylab topilgan ro'yxat o'rniga. */
+  runs: {
+    list: (limit = 20, offset = 0) =>
+      call<RunHistoryDto[]>(`/runs?limit=${limit}&offset=${offset}`),
+  },
 
   /** Obsidian vault eslatmalari — ilgari `/files` bo'sh placeholder edi. */
   notes: (query = "") =>
@@ -433,9 +500,11 @@ export const api = {
   },
 
   approvals: {
-    /** run_id MAJBURIY — global "hammasi" endpoint'i backend'da yo'q. */
+    /** Bitta run uchun kutilayotgan tasdiqlar. */
     list: (runId: string) =>
       call<ApprovalDto[]>(`/approvals?run_id=${encodeURIComponent(runId)}`),
+    /** Global — BARCHA kutilayotgan tasdiqlar (backend `run_id=None` bo'lsa shuni qaytaradi). */
+    listAll: () => call<ApprovalDto[]>("/approvals"),
     approve: (id: string, note?: string) =>
       call<ApprovalDecisionDto>(`/approvals/${id}/approve`, {
         method: "POST",
@@ -446,6 +515,34 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ note: note ?? null }),
       }),
+  },
+
+  memory: {
+    /** Semantik qidiruv — `min_similarity` past bo'lsa ko'proq (kamroq aniq) natija. */
+    search: (text: string, opts?: { limit?: number; minSimilarity?: number }) =>
+      call<MemorySearchResultDto[]>("/memory/search", {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          limit: opts?.limit ?? 10,
+          min_similarity: opts?.minSimilarity ?? 0.3,
+        }),
+      }),
+    /** Bitta qatlamdagi yozuvlar (short_term/conversation/task/project/business/personal/knowledge). */
+    byLayer: (layer: string, limit = 50) =>
+      call<MemoryEntryDto[]>(`/memory/layer/${encodeURIComponent(layer)}?limit=${limit}`),
+    /** Profil faylini (markdown) yuklab, bo'limlarga bo'lib PERSONAL qatlamga yozadi.
+     *
+     * `call()` FormData bilan chaqiriladi — Content-Type qo'lda qo'yilmaydi,
+     * brauzer o'zi "multipart/form-data; boundary=…" qo'shadi. */
+    ingestProfile: (file: File): Promise<Result<ProfileIngestResultDto>> => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return call<ProfileIngestResultDto>("/memory/ingest-profile", {
+        method: "POST",
+        body: formData,
+      });
+    },
   },
 
   killswitch: {

@@ -39,6 +39,7 @@ dependencies = [
     "typer>=0.15",
     "rich>=13.9",
     "defusedxml>=0.7.1",
+    "python-multipart>=0.0.32",
 ]
 
 [project.optional-dependencies]

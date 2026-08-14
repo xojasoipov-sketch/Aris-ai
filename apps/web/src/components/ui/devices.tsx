@@ -196,24 +196,68 @@ export function KillSwitchButton({
   onDisengage: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [confirmingDisengage, setConfirmingDisengage] = useState(false);
 
   if (engaged) {
     return (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="flex items-center justify-between gap-4 rounded-[var(--radius-card)] border border-[var(--status-alert)] bg-[rgba(239,68,68,0.06)] px-4 py-3"
-      >
-        <div className="flex items-center gap-2.5">
-          <StatusDot color="var(--status-alert)" pulse />
-          <span className="data text-sm font-medium text-[var(--status-alert)]">
-            KILLSWITCH FAOL — barcha amallar to'xtatilgan
-          </span>
-        </div>
-        <Button variant="ghost" onClick={onDisengage}>
-          Qayta yoqish
-        </Button>
-      </motion.div>
+      <>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex items-center justify-between gap-4 rounded-[var(--radius-card)] border border-[var(--status-alert)] bg-[rgba(239,68,68,0.06)] px-4 py-3"
+        >
+          <div className="flex items-center gap-2.5">
+            <StatusDot color="var(--status-alert)" pulse />
+            <span className="data text-sm font-medium text-[var(--status-alert)]">
+              KILLSWITCH FAOL — barcha amallar to'xtatilgan
+            </span>
+          </div>
+          <Button variant="ghost" onClick={() => setConfirmingDisengage(true)}>
+            Qayta yoqish
+          </Button>
+        </motion.div>
+        <AnimatePresence>
+          {confirmingDisengage ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(5,6,8,0.7)]"
+              onClick={() => setConfirmingDisengage(false)}
+            >
+              <motion.div
+                initial={{ scale: 0.96, y: 6 }}
+                animate={{ scale: 1, y: 0 }}
+                exit={{ scale: 0.96, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                onClick={(e) => e.stopPropagation()}
+                className="floating w-[380px] p-6"
+              >
+                <Eyebrow>Qayta yoqish</Eyebrow>
+                <p className="mt-3 text-sm text-[var(--text-primary)]">
+                  Killswitch o&apos;chirilsa, barcha avtomatik amallar QAYTA ishga tushishi mumkin.
+                  Haqiqatan qayta yoqasizmi?
+                </p>
+                <div className="mt-5 flex justify-end gap-2">
+                  <Button variant="ghost" onClick={() => setConfirmingDisengage(false)}>
+                    Bekor qilish
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      sound.play("tick");
+                      setConfirmingDisengage(false);
+                      onDisengage();
+                    }}
+                  >
+                    Ha, qayta yoq
+                  </Button>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+      </>
     );
   }
 

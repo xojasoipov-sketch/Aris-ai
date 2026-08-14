@@ -48,6 +48,7 @@ import { sound } from "@/lib/sound";
 import { useClapDetector } from "@/lib/useClapDetector";
 import { useHandTracking } from "@/lib/useHandTracking";
 import { useResource } from "@/lib/useResource";
+import { useVoiceInput } from "@/lib/useVoiceInput";
 
 /** Qo'l kursori shuncha siljisa — karusel bitta kartaga suriladi. */
 const SWIPE_STEP = 0.16;
@@ -116,13 +117,49 @@ export default function NexusPage() {
 
   const hand = useHandTracking();
 
+  // ── Ovozli buyruq — qarsak → salomlashuv → HAQIQIY /run chaqiruvi ──
+  // Web Speech API brauzer ichida matnga aylantiradi, natija esa
+  // qotgan javob emas — real Orchestrator'ga (`api.run`) boradi.
+  const voice = useVoiceInput((text) => {
+    push(`Ovoz: "${text}"`);
+    setOrbState("thinking");
+    void api.run(text, "web").then((res) => {
+      if (res.ok) {
+        // Backend'ning HAQIQIY javobi ovozda o'qiladi — qotgan
+        // GREETING emas, bu chinakam Jarvis-uslubidagi suhbat.
+        setCaption(res.data.message);
+        setOrbState("speaking");
+        void speak(res.data.message).then(() =>
+          window.setTimeout(() => setOrbState("idle"), 2600),
+        );
+      } else {
+        // LLM provayder ishlamasa ham xato JIMGINA yutilmaydi —
+        // jurnalda va sahnada ochiq ko'rsatiladi.
+        push(`Xato: ${res.error}`);
+        setCaption(res.error);
+        setOrbState("idle");
+      }
+    });
+  });
+
   const greet = useCallback(() => {
     sound.play("tick");
     setOrbState("speaking");
     setCaption(GREETING);
     push("Ikki qarsak aniqlandi");
-    void speak(GREETING).then(() => window.setTimeout(() => setOrbState("idle"), 2600));
-  }, [push]);
+    void speak(GREETING).then(() =>
+      window.setTimeout(() => {
+        setOrbState("idle");
+        // Salomlashuv tugadi — endi ~6 soniya buyruqni tinglaydi
+        // (Jarvis-uslub: "qarsak → salom → tingla"). Qo'llab-
+        // quvvatlanmasa/ruxsat bo'lmasa buni hook o'zi "unsupported"/
+        // "denied" holatiga o'tkazadi — quyidagi effekt buni jurnalga
+        // ochiq yozadi.
+        voice.start();
+        window.setTimeout(() => voice.stop(), 6000);
+      }, 2600),
+    );
+  }, [push, voice.start, voice.stop]);
 
   const clap = useClapDetector(greet);
 
@@ -136,6 +173,11 @@ export default function NexusPage() {
   useEffect(() => {
     if (clap.permission === "granted") push("Mikrofon yoqildi");
   }, [clap.permission, push]);
+
+  useEffect(() => {
+    if (voice.permission === "unsupported") push("Ovoz tanish qo'llab-quvvatlanmaydi");
+    if (voice.permission === "denied") push("Mikrofonga ruxsat yo'q");
+  }, [voice.permission, push]);
 
   // ── Kartalar (hammasi haqiqiy manbadan) ────────────────────────
   const cards = useMemo<RailCard[]>(() => {
@@ -545,6 +587,11 @@ export default function NexusPage() {
                 ? `${hand.landmarks.length} nuqta o'qilmoqda`
                 : "Kamera o'chiq"}
             </div>
+            {voice.permission === "listening" ? (
+              <div className="mt-1 text-[10px] text-[var(--accent-blue)]">
+                Tinglanmoqda…
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

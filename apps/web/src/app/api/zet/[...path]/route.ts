@@ -39,10 +39,15 @@ async function proxy(request: Request, context: RouteContext): Promise<Response>
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
 
   try {
+    // `request.text()` ikkilik (binary) ma'lumotni UTF-8 matnga aylantirib
+    // buzardi — bu multipart/form-data fayl yuklashni ishlatmas edi.
+    // `arrayBuffer()` tanani ikkilik holicha, o'zgarishsiz uzatadi — JSON
+    // so'rovlar uchun ham to'g'ri ishlaydi (JSON ham UTF-8 baytlar), shuning
+    // uchun alohida branch shart emas.
     const upstream = await fetch(target, {
       method: request.method,
       headers,
-      body: hasBody ? await request.text() : undefined,
+      body: hasBody ? await request.arrayBuffer() : undefined,
       cache: "no-store",
     });
 

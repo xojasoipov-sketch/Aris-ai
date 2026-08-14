@@ -8,6 +8,8 @@ Xotira CRUD va qidirish:
     POST   /api/v1/memory/search    — qidirish
     GET    /api/v1/memory/layer/{layer} — qatlam bo'yicha ro'yxat
     POST   /api/v1/memory/cleanup   — eskirganlarni tozalash
+    POST   /api/v1/memory/ingest-profile — profil faylini (markdown)
+        fayl-yuklash orqali PERSONAL qatlamga bo'lib yuklash
 
 `store` — `PgMemoryStore` (DB-backed, async) yoki test'larda `MemoryStore`
 (in-memory, sync) bo'lishi mumkin. `_maybe_await()` ikkalasini ham
@@ -31,7 +33,7 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from zet.api.deps import (
@@ -48,8 +50,17 @@ from zet.memory.policy import (
     check_write,
     readable_layers,
 )
+from zet.memory.profile_ingest import SOURCE_TAG, _slug, split_sections
 
 router = APIRouter(prefix="/memory", tags=["memory"])
+
+MAX_UPLOAD_SIZE = 2_000_000
+"""`POST /memory/ingest-profile` uchun eng katta fayl hajmi (2MB).
+
+Profil fayllari (masalan `BOSS_PROFILE.md`) bir necha KB — bu chegara
+oddiy noto'g'ri (yoki zararli katta) yuklamalarni erta rad etish uchun
+yetarli xavfsizlik chegarasi.
+"""
 
 
 async def _maybe_await[T](value: T | Any) -> T:
@@ -155,6 +166,15 @@ class CleanupResponse(BaseModel):
     """Tozalash natijasi."""
 
     removed: int
+
+
+class ProfileIngestResponse(BaseModel):
+    """`POST /memory/ingest-profile` natijasi."""
+
+    sections_found: int
+    added: int
+    failed: int
+    errors: list[str] = Field(default_factory=list)
 
 
 # ── Yordamchi ─────────────────────────────────────────────────────
@@ -355,3 +375,64 @@ async def cleanup_expired(
     """Eskirgan yozuvlarni tozalash."""
     count = await _maybe_await(store.cleanup_expired())
     return CleanupResponse(removed=count)
+
+
+@router.post("/ingest-profile", response_model=ProfileIngestResponse, status_code=201)
+async def ingest_profile(
+    file: UploadFile = File(...),
+    manager: MemoryManager = Depends(get_memory_manager),
+    trust_level: str = Depends(get_caller_trust_level),
+) -> ProfileIngestResponse:
+    """Profil faylini (markdown) fayl-yuklash orqali xotiraga yuklaydi.
+
+    `zet.memory.profile_ingest.split_sections()` bilan bir xil mantiqdan
+    foydalanadi — bu `scripts/ingest_profile.py` CLI skripti ishlatadigan
+    ANIQ SHU funksiya, ya'ni fayl CLI orqali yoki shu endpoint orqali
+    yuklansa bir xil bo'linadi. Har bo'lim PERSONAL qatlamga
+    `MemoryManager.aremember()` orqali yoziladi — `add_memory()` (POST
+    /memory) qanday policy darvozasidan o'tsa, shu ham o'shandan o'tadi.
+
+    Bitta bo'lim yozilishida xato bo'lsa (masalan policy yoki DB xatosi)
+    — qolgan bo'limlar baribir davom etadi (bittasi qulasa hammasi
+    yo'qolmasin); sabab `errors`da qaytadi, `failed` sanaladi.
+    """
+    _enforce_write(trust_level, MemoryLayer.PERSONAL)
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Fayl bo'sh")
+    if len(raw) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Fayl juda katta (max {MAX_UPLOAD_SIZE} bayt)",
+        )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400, detail="Fayl UTF-8 kodlashda emas"
+        ) from exc
+
+    sections = split_sections(text)
+    added = 0
+    errors: list[str] = []
+    for title, content in sections:
+        try:
+            await manager.aremember(
+                layer=MemoryLayer.PERSONAL,
+                content=content,
+                trust_level=trust_level,
+                summary=title[:200],
+                tags=[SOURCE_TAG, _slug(title)],
+                source=SOURCE_TAG,
+            )
+            added += 1
+        except MemoryPolicyError as exc:
+            errors.append(f"{title}: {exc}")
+
+    return ProfileIngestResponse(
+        sections_found=len(sections),
+        added=added,
+        failed=len(errors),
+        errors=errors,
+    )

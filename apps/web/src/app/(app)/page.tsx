@@ -21,12 +21,14 @@
 import {
   Activity,
   Bot,
+  Brain,
   FolderKanban,
   ListChecks,
   MessageSquare,
   Mic,
   ServerOff,
   Terminal as TerminalIcon,
+  Video,
 } from "lucide-react";
 import { motion } from "motion/react";
 import Link from "next/link";
@@ -41,7 +43,7 @@ import {
 } from "@/components/ui/cards";
 import { EmptyState } from "@/components/ui/forms";
 import { Eyebrow, Panel, StatusDot } from "@/components/ui/primitives";
-import { api, type AgentDto } from "@/lib/api";
+import { api, type AgentDto, type RunHistoryDto } from "@/lib/api";
 import { useAgents } from "@/lib/useAgents";
 import { useAutomationStats } from "@/lib/useAutomationStats";
 import { useBackendHealth } from "@/lib/useBackendHealth";
@@ -98,12 +100,86 @@ function formatUptime(seconds: number): string {
   return `${Math.floor(hours / 24)} kun ${hours % 24} soat`;
 }
 
+/** Run holati → rang/matn. Faqat DONE/FAILED alohida — qolgani (pending,
+ * planning, executing, verifying, recovering, cancelled) "ishlayapti"
+ * rangida, chunki backend ular uchun alohida jonli signal bermaydi. */
+const RUN_STATUS: Record<string, { color: string; label: string }> = {
+  done: { color: "var(--status-online)", label: "Bajarildi" },
+  failed: { color: "var(--status-alert)", label: "Xato" },
+  cancelled: { color: "var(--status-working)", label: "Bekor qilindi" },
+  pending: { color: "var(--status-working)", label: "Kutilmoqda" },
+  planning: { color: "var(--status-working)", label: "Rejalashtirilmoqda" },
+  awaiting_approval: { color: "var(--status-working)", label: "Tasdiq kutilmoqda" },
+  executing: { color: "var(--status-working)", label: "Bajarilmoqda" },
+  verifying: { color: "var(--status-working)", label: "Tekshirilmoqda" },
+  recovering: { color: "var(--status-working)", label: "Tuzatilmoqda" },
+};
+
+function runStatusInfo(status: string): { color: string; label: string } {
+  return RUN_STATUS[status.toLowerCase()] ?? { color: "var(--status-working)", label: status };
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** Bitta run qatori — AuditRow (ui/devices.tsx) bilan bir xil vizual til
+ * (border-hairline, data font raqamlar uchun, text-muted/secondary), lekin
+ * `outcome` emas — backend `RunHistoryDto`ga mos alohida komponent. */
+function RunRow({ run }: { run: RunHistoryDto }) {
+  const info = runStatusInfo(run.status);
+  const usedMemory = run.tools_used.includes("memory.search");
+  const usedVideo = run.tools_used.includes("video.learn");
+  return (
+    <li className="px-4 py-2.5">
+      <div className="flex items-start gap-2.5">
+        <StatusDot color={info.color} />
+        <span className="data mt-px shrink-0 text-[10px] text-[var(--text-muted)]">
+          {new Date(run.created_at).toLocaleTimeString("uz-UZ", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+        <p
+          className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]"
+          title={run.command_text}
+        >
+          {truncate(run.command_text, 60)}
+        </p>
+        <span className="shrink-0 text-[10px]" style={{ color: info.color }}>
+          {info.label}
+        </span>
+        <span className="data shrink-0 text-[10px] text-[var(--text-muted)]">
+          ${run.cost_usd.toFixed(4)}
+        </span>
+      </div>
+      {usedMemory || usedVideo ? (
+        <div className="mt-1.5 flex items-center gap-1.5 pl-[26px]">
+          {usedMemory ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border-hairline)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
+              <Brain size={11} strokeWidth={1.5} aria-hidden />
+              xotiradan o'qidi
+            </span>
+          ) : null}
+          {usedVideo ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border-hairline)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">
+              <Video size={11} strokeWidth={1.5} aria-hidden />
+              video o'rgandi
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
 export default function DashboardPage() {
   const health = useBackendHealth();
   const agentsState = useAgents();
   const stats = useAutomationStats();
   const system = useResource(() => api.system(), 5_000);
   const recentMessages = useResource(() => api.messages("web", 4), 20_000);
+  const runHistory = useResource(() => api.runs.list(10, 0), 15_000);
 
   const agents = agentsState.kind === "ready" ? agentsState.agents : [];
   const totals = agentTotals(agents);
@@ -185,21 +261,37 @@ export default function DashboardPage() {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <div className="space-y-6">
-          {/* So'nggi faoliyat */}
+          {/* So'nggi faoliyat — GET /runs orqali DB'dagi haqiqiy run
+              tarixi, 15s'da yangilanadi. Ilgari bu yerda beshta o'ylab
+              topilgan qator turardi — soxta faoliyat haqiqiy faoliyatdan
+              farq qilmasdi va ega tizimni ishlayapti deb o'ylardi. Endi
+              har qator backend'dan: vaqt, buyruq matni, holat, narx —
+              va memory.search/video.learn ishlatilgan bo'lsa alohida
+              belgi bilan. */}
           <motion.div variants={enter} custom={3} initial="hidden" animate="show">
             <Panel className="overflow-hidden">
               <div className="flex items-baseline justify-between border-b border-[var(--border-hairline)] px-4 py-3">
                 <Eyebrow>So'nggi faoliyat</Eyebrow>
               </div>
-              {/* Backend hozircha run oqimini bermaydi. Ilgari bu yerda
-                  beshta o'ylab topilgan qator turardi — soxta faoliyat
-                  haqiqiy faoliyatdan farq qilmasdi va ega tizimni
-                  ishlayapti deb o'ylardi. */}
-              <EmptyState
-                icon={Activity}
-                title="Faoliyat oqimi hali ulanmagan"
-                hint="Backend run tarixi endpoint'i qo'shilgach shu yerda ko'rinadi"
-              />
+              {runHistory.state.kind === "ready" && runHistory.state.data.length > 0 ? (
+                <ul className="divide-y divide-[var(--border-hairline)]">
+                  {runHistory.state.data.map((run) => (
+                    <RunRow key={run.run_id} run={run} />
+                  ))}
+                </ul>
+              ) : runHistory.state.kind === "error" ? (
+                <EmptyState
+                  icon={ServerOff}
+                  title="Run tarixini yuklab bo'lmadi"
+                  hint={runHistory.state.message}
+                />
+              ) : (
+                <EmptyState
+                  icon={Activity}
+                  title={runHistory.state.kind === "loading" ? "Yuklanmoqda…" : "Hali faoliyat yo'q"}
+                  hint="Buyruq paneliga yozing — shu yerda ko'rinadi"
+                />
+              )}
             </Panel>
           </motion.div>
 
