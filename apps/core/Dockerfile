@@ -32,6 +32,13 @@ COPY --from=builder --chown=zet:zet /app/src /app/src
 COPY --chown=zet:zet alembic.ini ./
 COPY --chown=zet:zet alembic ./alembic
 
+# Obsidian vault uchun mount nuqtasi — oldindan yaratib zet'ga
+# beriladi, shunda prod'da (Hetzner) shu yo'lga bog'langan Docker
+# volume birinchi marta ulanganda TO'G'RI egalik bilan boshlanadi
+# (aks holda bo'sh volume root:root bo'lib qolib, non-root
+# konteyner note.write'da "Permission denied" bilan yiqilardi).
+RUN mkdir -p /data/vault && chown -R zet:zet /data/vault
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

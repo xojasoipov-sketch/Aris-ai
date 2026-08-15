@@ -134,6 +134,39 @@ ssh -i ~/.ssh/hetzner_zet root@<SERVER_IP>
 docker exec -i zet-postgres psql -U zet -d zet < /opt/zet/zet_backup.sql
 ```
 
+## Obsidian vault
+
+ZET'ning `note.write`/`note.read`/`note.list` tool'lari `.env`dagi
+`ZET_VAULT_DIR` (default: `/data/vault`) papkasida ishlaydi — bu
+`vault_data` nomlangan Docker volume'ga bog'langan, shuning uchun
+`update.sh` bilan konteyner qayta qurilganda yozuvlar **yo'qolmaydi**
+(Railway'da bu volume yo'q edi — ephemeral konteyner har redeploy'da
+vault'ni tozalab yuborardi).
+
+Bu — ZET'ning O'ZI yozadigan/o'qiydigan papka. Haqiqiy Obsidian dastur
+(desktop/mobil ilova)ni shu papkaga ULASH alohida qadam va uch yo'l bor
+(hajmi/tez-tezligiga qarab tanlang):
+
+- **Sync papka** — server papkasini Syncthing/Google Drive/iCloud kabi
+  vositalar bilan o'z kompyuteringizga sinxronlab, Obsidian'ni o'sha
+  mahalliy nusxaga ochasiz.
+- **Git vault** — `vault_data`ni alohida git repo qilib, Obsidian Git
+  plugin bilan pull/push qilasiz (versiyalangan tarix bilan).
+- **Obsidian Local REST API** — o'z kompyuteringizda Obsidian ochiq
+  turadi, ZET tarmoq orqali (tunnel/ngrok) unga to'g'ridan-to'g'ri
+  ulanadi (real vaqtli, lekin kompyuter doim yoniq bo'lishi shart).
+
+Railway'dan mavjud vault ma'lumotini ko'chirish (agar bo'lsa):
+
+```bash
+# Railway konteyneridan (agar hali ishlab tursa):
+docker cp <railway-konteyner>:/app/vault ./vault-eski
+# Serverga:
+scp -i ~/.ssh/hetzner_zet -r ./vault-eski root@<SERVER_IP>:/tmp/
+ssh -i ~/.ssh/hetzner_zet root@<SERVER_IP>
+docker cp /tmp/vault-eski/. zet-backend:/data/vault/
+```
+
 ## Ikkalasini parallel ishlatish
 
 Hetzner sinovdan o'tguncha Railway'ni **o'chirish shart emas** —

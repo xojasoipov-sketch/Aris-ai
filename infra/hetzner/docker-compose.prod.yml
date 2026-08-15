@@ -67,6 +67,12 @@ services:
       ZET_REDIS_URL: redis://redis:6379/0
       ZET_OLLAMA_BASE_URL: http://ollama:11434
       ZET_ENV: prod
+    volumes:
+      # Obsidian vault — nomlangan volume, konteyner qayta qurilganda
+      # (har `update.sh`) YO'QOLMASIN. `.env`dagi `ZET_VAULT_DIR` shu
+      # yo'lga (`/data/vault`) mos kelishi shart — boshqa yo'lga
+      # o'zgartirsangiz, bu qatordagi mount nuqtasini ham yangilang.
+      - vault_data:/data/vault
     depends_on:
       postgres:
         condition: service_healthy
@@ -143,3 +149,4 @@ volumes:
   ollama_data:
   caddy_data:
   caddy_config:
+  vault_data:
