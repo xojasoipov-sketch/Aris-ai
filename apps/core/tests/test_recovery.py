@@ -823,7 +823,10 @@ class TestD1ApprovalBypassPrevention:
         # 1) Aynan HIGH-risk fix qadami approval so'radi
         assert exc.step.tool_name == "file.delete"
         assert exc.decision.needs_approval is True
-        assert "Yuqori xavfli" in exc.decision.reason
+        # Sabab matni Executor risk-jadvalga o'tgach o'zgardi (audit fix:
+        # eski `check()` → risk-aware `requires_approval()`). Muhimi
+        # o'zgarmadi — `file.delete` HIGH deb tanilib tasdiq talab qiladi.
+        assert "HIGH risk" in exc.decision.reason
         # 2) `RecoveryApprovalRequiredError` — Orchestrator'ning `resume()`
         #    keyin TUZATILGAN rejani bajarishi uchun extended_plan yuradi
         assert any(s.tool_name == "file.delete" for s in exc.extended_plan.steps)

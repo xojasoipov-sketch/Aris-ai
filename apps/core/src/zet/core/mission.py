@@ -469,11 +469,37 @@ class MissionEngine:
         Mission FAILED bo'ladi.
         """
         from zet.core.orchestrator import Orchestrator  # noqa: F401 — TYPE_CHECKING
-        from zet.domain.command import Command
-        from zet.domain.enums import RunStatus, TrustLevel
+        from zet.domain.command import Command, ConversationTurn
+        from zet.domain.enums import MessageRole, RunStatus, TrustLevel
         from zet.security.killswitch import KillSwitchEngagedError
 
-        command = Command(text=mission.objective, trust_level=TrustLevel.OWNER)
+        # AUDIT FIX ("ko'r retry"): ilgari Command faqat `mission.objective`
+        # bilan qurilardi — `mission.constraints` (jumladan
+        # `MissionRecoveryAdapter` yozgan "[recovery] ..." tashxis
+        # hint'lari) keyingi urinishga UZATILMASDI. Natijada LLM tashxisi
+        # hech qachon Intent/Planner bosqichiga yetmay, har retry aynan
+        # bir xil ko'r urinish bo'lardi.
+        #
+        # NEGA `history` orqali: `Command`da `constraints` maydoni YO'Q
+        # (u `Intent`da yashaydi va LLM tomonidan matndan ajratiladi) —
+        # `domain/command.py`ga tegmasdan yagona ishonchli kanal suhbat
+        # tarixi: IntentRecognizer ham (intent.py, B3 fix), Planner ham
+        # (orchestrator.py `history=command.history`), Executor `_think`
+        # ham `command.history`ni LLM'ga ko'rsatadi. NEGA `text`ga
+        # qo'shilmadi: `Command.text` max 4096 belgi — objective + hint'lar
+        # chegaradan oshsa ValidationError bilan mission yiqilardi.
+        history: list[ConversationTurn] = []
+        if mission.constraints:
+            constraints_text = "\n".join(f"- {c}" for c in mission.constraints)
+            history.append(
+                ConversationTurn(
+                    role=MessageRole.USER,
+                    content=f"MISSION CHEKLOVLARI (majburiy hisobga olinadi):\n{constraints_text}",
+                )
+            )
+        command = Command(
+            text=mission.objective, trust_level=TrustLevel.OWNER, history=history
+        )
         attempt = mission.retry_count + 1
 
         try:
@@ -512,6 +538,24 @@ class MissionEngine:
         ok = bool(run_record.verified_ok)
         if ok:
             mission = await self._transition(mission, MissionStatus.COMPLETED)
+            # AUDIT FIX (bo'sh xotira): `memory_updates`ni ilgari HECH
+            # QANDAY kod to'ldirmasdi — `_write_memory_updates` har doim
+            # bo'sh ro'yxatni ko'rib, mission tugagach xotiraga hech
+            # narsa yozilmasdi. Endi COMPLETED'da mission yakuni haqida
+            # qisqa default yozuv qo'shiladi. NEGA faqat bo'sh bo'lsa:
+            # aniq berilgan memory_updates (masalan tashqi kod oldindan
+            # to'ldirgani) ustuvor qoladi, default ularni bosib ketmaydi.
+            if not mission.memory_updates:
+                # NEGA getattr: yengil run record'lar (testlardagi
+                # fake'lar, kelajakdagi minimal implementatsiyalar)
+                # `result_summary`siz bo'lishi mumkin — fail-open.
+                summary = str(getattr(run_record, "result_summary", None) or "").strip()
+                entry = f"Mission yakunlandi: {mission.objective}"
+                if summary:
+                    # 500 belgi — xotira yozuvi qisqa xulosalar uchun,
+                    # to'liq natija emas (run'ning o'zida saqlanadi).
+                    entry += f" — natija: {summary[:500]}"
+                mission = await self._repo.update(mission.id, memory_updates=[entry])
             await self._write_memory_updates(mission)
             log.info("mission.completed", mission_id=str(mission.id), runs=len(mission.run_ids))
             return mission

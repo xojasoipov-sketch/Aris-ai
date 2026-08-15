@@ -147,6 +147,52 @@ class PgMemoryStore:
         log.info("memory.pg.added", id=str(row.id), layer=layer.value)
         return _to_domain(row)
 
+    async def remember(
+        self,
+        owner_id: uuid.UUID,
+        content: str,
+        *,
+        layer: str,
+        source: str,
+    ) -> None:
+        """`MissionEngine` kutayotgan yozish yo'li (`core/mission.py::MemoryStoreLike`).
+
+        Ilgari bu metod umuman YO'Q edi — `_write_memory_updates`dagi
+        chaqiruv AttributeError otar, `except Exception` uni yutib
+        "mission.memory_write_failed" log qilar va mission yakuni xotiraga
+        HECH QACHON yozilmasdi. Ichkarida `add()` qayta ishlatiladi:
+        embedding (fail-open), TTL va model belgisi bir xil yo'ldan o'tadi.
+
+        Args:
+            owner_id: Mission egasi — store egasiga mos bo'lishi shart.
+            content: Xotira matni.
+            layer: Qatlam nomi (`MemoryLayer` qiymati, masalan "project").
+            source: Manba belgisi (masalan "mission:<id>").
+
+        Raises:
+            ValueError: `owner_id` store egasiga mos kelmasa yoki `layer`
+                noma'lum bo'lsa — chaqiruvchi (mission) log qilib davom etadi.
+        """
+        # NEGA tekshiruv: store bitta egaga bog'langan (`_owner_id`) va
+        # `add()` ham faqat shu ega nomidan yozadi. Mos kelmagan owner_id'ni
+        # jim qabul qilish yozuvni BOSHQA eganing xotirasiga o'tkazib
+        # yuborardi — bunday chalkashlik xatoni yashirgandan yomonroq.
+        if owner_id != self._owner_id:
+            raise ValueError(
+                f"remember(): owner_id {owner_id} store egasi {self._owner_id} bilan mos emas"
+            )
+
+        entry = await self.add(
+            layer=MemoryLayer(layer),
+            content=content,
+            source=source,
+            # NEGA "system": mission yakunini mashina yozadi, ega emas —
+            # `deps._memory_write_fn` bilan bir xil daraja. "system"
+            # PROJECT qatlamiga yozishi mumkin (memory/policy.py).
+            trust_level="system",
+        )
+        log.info("memory.pg.remembered", id=entry.id, layer=layer, source=source)
+
     async def get(self, entry_id: str) -> MemoryEntry | None:
         """Yozuvni ID bo'yicha olish (o'chirilgan/eskirgan/boshqa ega — None)."""
         row = await self._get_row(entry_id)

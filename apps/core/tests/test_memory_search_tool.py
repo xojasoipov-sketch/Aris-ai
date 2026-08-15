@@ -171,7 +171,10 @@ class TestThinkingStepSurvivesFailedDependencies:
         router = _FakeRouter("Profilingni topa olmadim.")
         executor = Executor(
             registry=tool_registry,
-            policy=PermissionPolicy(),
+            # Produksiya default'i (`ZET_AUTO_APPROVE_MEDIUM_RISK`) — bu
+            # testlar `note.write` MEDIUM approval siyosatini emas,
+            # bog'liqlik/fikrlash oqimini tekshiradi.
+            policy=PermissionPolicy(auto_approve_medium=True),
             killswitch=KillSwitchState(),
             router=router,  # type: ignore[arg-type]
             command_text="Men kimman?",
@@ -188,7 +191,10 @@ class TestThinkingStepSurvivesFailedDependencies:
         router = _FakeRouter()
         executor = Executor(
             registry=tool_registry,
-            policy=PermissionPolicy(),
+            # Produksiya default'i (`ZET_AUTO_APPROVE_MEDIUM_RISK`) — bu
+            # testlar `note.write` MEDIUM approval siyosatini emas,
+            # bog'liqlik/fikrlash oqimini tekshiradi.
+            policy=PermissionPolicy(auto_approve_medium=True),
             killswitch=KillSwitchState(),
             router=router,  # type: ignore[arg-type]
             command_text="Men kimman?",
@@ -224,7 +230,10 @@ class TestThinkingStepSurvivesFailedDependencies:
         )
         executor = Executor(
             registry=tool_registry,
-            policy=PermissionPolicy(),
+            # Produksiya default'i (`ZET_AUTO_APPROVE_MEDIUM_RISK`) — bu
+            # testlar `note.write` MEDIUM approval siyosatini emas,
+            # bog'liqlik/fikrlash oqimini tekshiradi.
+            policy=PermissionPolicy(auto_approve_medium=True),
             killswitch=KillSwitchState(),
         )
 

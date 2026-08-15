@@ -151,6 +151,36 @@ class Settings(BaseSettings):
     run_max_depth: int = Field(default=3, ge=1)
     run_timeout_s: int = Field(default=600, ge=1)
 
+    # ── Ruxsat siyosati (V-32, risk o'qi) ──────────────────────────
+    auto_approve_medium_risk: bool = Field(default=True)
+    """MEDIUM xavfli toollar tasdiqsiz o'tsinmi (`TOOL_RISK_LEVELS`).
+
+    MEDIUM = qaytarib bo'ladigan biznes yozuvlari: `note.write`,
+    `task.create`, `crm.*`, `order.set_status`. Default `True` — ilgarigi
+    xatti-harakat: Executor risk jadvalini umuman ko'rmasdi, bu yozuvlar
+    avtomatik ketardi. Ularni endi majburiy tasdiqqa o'tkazish har bir
+    "vazifa qo'sh" uchun Telegram tugmasini talab qilardi.
+
+    `False` qilsangiz — har MEDIUM amal ega tasdig'ini kutadi (fail-closed,
+    yuqoriroq nazorat, sekinroq oqim).
+
+    MUHIM: bu sozlama HIGH darajaga TA'SIR QILMAYDI. `shell.exec`,
+    `file.delete`, `telegram.channel_post`, `github.write`,
+    `instagram.publish_photo`, `youtube.publish`, `desktop.*` — har doim
+    tasdiq so'raydi va hech qanday sozlama buni chetlab o'tolmaydi (V-32).
+    """
+
+    # ── Kuzatuv (3-xususiyat, Bo'lim 9) ────────────────────────────
+    watcher_poll_interval_s: float = Field(default=60.0, ge=1)
+    """Watcher daemon ikki o'lchov orasida kutadigan vaqt (soniya).
+
+    Minut aniqligi yetarli — watcher metrikalari (agent xatolari, budjet
+    sarfi) sekundlik tebranish emas, trend. Qisqartirsangiz metrika
+    problar shunchalik tez-tez o'qiladi — tashqi API'li metrika uchun
+    kvota sarfini hisobga oling. `WatchRule.cooldown_s` signal
+    yog'ilishini alohida tormozlaydi — bu sozlama faqat O'LCHOV
+    chastotasi."""
+
     # ── Telegram (Bo'lim 5, V-17) ───────────────────────────────────
     telegram_bot_token: SecretStr | None = None
     """Telegram bot token. `.env` faylida saqlang — hech qachon kodda emas."""

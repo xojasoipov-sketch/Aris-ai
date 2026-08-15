@@ -308,8 +308,19 @@ def get_tool_registry() -> ToolRegistry:
 
 @lru_cache(maxsize=1)
 def get_permission_policy() -> PermissionPolicy:
-    """Global ruxsat siyosati (singleton)."""
-    return PermissionPolicy()
+    """Global ruxsat siyosati (singleton).
+
+    `auto_approve_medium` sozlamadan keladi (`ZET_AUTO_APPROVE_MEDIUM_RISK`).
+    NEGA: Executor endi risk jadvalini enforce qiladi (audit fix) —
+    sozlamasiz MEDIUM biznes yozuvlari (`note.write`, `task.create`,
+    `crm.*`) birdan majburiy tasdiqqa o'tib, har "vazifa qo'sh" uchun
+    Telegram tugmasini talab qilardi. Default `True` ilgarigi oqimni
+    saqlaydi; ega bir o'zgaruvchi bilan qattiqroq rejimga o'tadi.
+    HIGH darajaga bu ta'sir qilmaydi — u har doim tasdiq (V-32).
+    """
+    return PermissionPolicy(
+        auto_approve_medium=get_settings().auto_approve_medium_risk,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -1207,7 +1218,11 @@ def get_telegram_bot() -> object:
     """
     import uuid as _uuid
 
-    from zet.core.orchestrator import Orchestrator, RunNotFoundError
+    # NEGA faqat RunNotFoundError: `Orchestrator` modul darajasida allaqachon
+    # import qilingan — lokal qayta-import closure'larni alohida bindingga
+    # qulflab, testlarda `zet.api.deps.Orchestrator`ni monkeypatch qilishni
+    # imkonsiz qilardi.
+    from zet.core.orchestrator import RunNotFoundError
     from zet.db.session import session_scope
     from zet.domain.command import Command
     from zet.domain.enums import MessageRole
@@ -1271,6 +1286,12 @@ def get_telegram_bot() -> object:
                     budget_usd=settings.run_max_usd,
                     recall=recall,
                 ),
+                # F1 (BLOCK-3 audit): AWAITING_APPROVAL'ga o'tganda Telegram
+                # inline ✅/❌ xabar. NEGA: aynan Telegram-boshlangan run'da
+                # notifier uzatilmasdi — `_notify_awaiting_approval` jimgina
+                # chiqib ketib, ega "(bo'sh natija)" ko'rardi.
+                # `get_orchestrator()` bilan bir xil wiring.
+                notifier=get_notifier(),
             )
 
             command = Command(text=text, channel="telegram", history=history)
@@ -1341,6 +1362,11 @@ def get_telegram_bot() -> object:
                     budget_usd=settings.run_max_usd,
                     recall=recall,
                 ),
+                # F1 (BLOCK-3 audit): `resume()` davomida YANGI approval
+                # paydo bo'lishi mumkin (masalan, navbatdagi HIGH_RISK qadam)
+                # — u ham Telegram inline xabarini olishi shart.
+                # `get_orchestrator()`/`_runner` bilan bir xil wiring.
+                notifier=get_notifier(),
             )
 
             try:

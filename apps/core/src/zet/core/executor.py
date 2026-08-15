@@ -42,7 +42,8 @@ from zet.llm.router import ModelRouter
 from zet.prompts.answer import ANSWER_SYSTEM, build_answer_prompt
 from zet.security.injection import scan_text
 from zet.security.killswitch import KillSwitchState
-from zet.security.permissions import HIGH_RISK_TOOLS, PermissionDecision, PermissionPolicy
+from zet.security.permissions import PermissionDecision, PermissionPolicy
+from zet.security.risk import RiskLevel, risk_for
 from zet.tools.base import ToolPermissionDeniedError, ToolValidationError
 from zet.tools.registry import ToolNotFoundError, ToolRegistry
 
@@ -363,9 +364,28 @@ class Executor:
             # tekshiriladi — checkpoint'dan tiklangan qadam allaqachon
             # o'z vaqtida approval'dan o'tgan (yoki umuman kerak bo'lmagan).
             for step in pending_in_batch:
-                decision = self._policy.check(
-                    step.permission_required,
-                    effective_trust,
+                # AUDIT FIX: ilgari bu yerda eski `check()` chaqirilardi —
+                # u FAQAT legacy `HIGH_RISK_TOOLS` ro'yxatini (6 nom)
+                # biladi va markazlashtirilgan `TOOL_RISK_LEVELS`
+                # jadvalini (security/risk.py) UMUMAN ko'rmaydi. Natijada
+                # jadvalda HIGH deb belgilangan toollar — `telegram.
+                # channel_post`, `github.write`, `instagram.publish_photo`,
+                # `youtube.publish`, `desktop.*` — WRITE ruxsat bilan
+                # `auto_approve_write=True` default ostida TASDIQSIZ
+                # o'tardi. Ya'ni V-32 ning "HIGH — har doim ega tasdig'i"
+                # kafolati aynan ASOSIY ijro yo'lida buzilgan edi.
+                # `requires_approval()` risk o'qini ham hisobga oladi.
+                decision = self._policy.requires_approval(
+                    permission=step.permission_required,
+                    trust=effective_trust,
+                    # Tool obyekti berilsa subclass'ning o'z `risk_level`
+                    # override'i jadvaldan ustun turadi (permissions.py
+                    # dagi hal qilish tartibi 2 → 3).
+                    tool=(
+                        self._registry.get(step.tool_name)
+                        if step.tool_name and self._registry.has(step.tool_name)
+                        else None
+                    ),
                     tool_name=step.tool_name,
                 )
                 if decision.needs_approval and step.position not in ctx.approved_steps:
@@ -585,8 +605,12 @@ class Executor:
             if tool_result.success:
                 # HIGH_RISK yoki WRITE/EXECUTE/ADMIN toollar auditlanadi
                 # (SR-02). READ toollar shovqinni oshirmasin uchun tashlanadi.
+                # Markazlashtirilgan jadval — eski 6-nomli ro'yxat o'rniga.
+                # Jadvalda MEDIUM/HIGH deb belgilangan har qanday tool
+                # (masalan `telegram.channel_post`) READ ruxsat bilan
+                # kelsa ham auditga tushsin.
                 is_notable = (
-                    step.tool_name in HIGH_RISK_TOOLS
+                    risk_for(step.tool_name) >= RiskLevel.MEDIUM
                     or step.permission_required >= PermissionLevel.WRITE
                 )
                 if is_notable and self._audit_fn is not None:

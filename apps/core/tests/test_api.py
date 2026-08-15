@@ -143,7 +143,11 @@ def _make_orchestrator(
     return Orchestrator(
         router=router,
         tool_registry=tool_registry,
-        permission_policy=PermissionPolicy(),
+        # Produksiya default'i bilan bir xil (`deps.get_permission_policy`,
+        # `ZET_AUTO_APPROVE_MEDIUM_RISK`) — bu testlar API shartnomasini
+        # tekshiradi, MEDIUM approval siyosatini emas (u alohida
+        # `test_executor_risk_table.py`da).
+        permission_policy=PermissionPolicy(auto_approve_medium=True),
         approval_service=ApprovalService(),
         killswitch=killswitch or KillSwitchState(),
         run_store=RunStore(),

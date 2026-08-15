@@ -91,6 +91,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from zet.deploy.reports_daemon import ReportsDaemon
     from zet.deploy.selfimprove_daemon import SelfImproveDaemon
     from zet.deploy.shipment_daemon import ShipmentNotifyDaemon
+    from zet.deploy.watcher_daemon import WatcherDaemon
     from zet.monitoring.notify_bridge import AlertNotificationBridge
     from zet.security.killswitch_actions import register_killswitch_engage_callback
     from zet.security.killswitch_store import load_killswitch
@@ -222,6 +223,28 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     automation_daemon_task = asyncio.create_task(automation_daemon.run_forever())
 
+    # 3-xususiyat (kuzatuv) — proaktivlikning yo'qolgan bo'g'ini.
+    # `poll_watchers()` ilgari FAQAT qo'lda HTTP endpoint orqali
+    # chaqirilardi — fon tsikli yo'q edi, ya'ni "metrika o'zgarganda
+    # uyg'onadi" va'dasi o'z-o'zidan hech qachon bajarilmasdi. Endi har
+    # `watcher_poll_interval_s` soniyada metrikalar o'lchanadi va signal
+    # bergan qoidalarning triggerlari haqiqatan agent ishga tushiradi.
+    watcher_daemon = WatcherDaemon(
+        engine=get_automation_engine(),
+        agent_registry=get_agent_registry(),
+        tool_registry=get_tool_registry(),
+        permission_policy=get_permission_policy(),
+        core_state=get_core_state(),
+        killswitch=get_killswitch(),
+        tick_seconds=settings.watcher_poll_interval_s,
+        session_factory=get_session_factory(),
+        llm_providers=get_llm_providers(),
+        settings=settings,
+        # Natija egaga yetib borsin — AutomationDaemon bilan bir xil naqsh.
+        notifier=get_notifier(),
+    )
+    watcher_daemon_task = asyncio.create_task(watcher_daemon.run_forever())
+
     # Telegram bot polling — token bo'lsa haqiqiy long-polling boshlanadi.
     # `ZetBot.start()` ichida TelegramPoller task yaratiladi va darhol qaytadi
     # (lifespan'ni bloklamaydi). Tokensiz — stub rejim, hech qanday tarmoq
@@ -296,6 +319,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     automation_daemon_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await automation_daemon_task
+    watcher_daemon.stop()
+    watcher_daemon_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await watcher_daemon_task
     shipment_daemon.stop()
     shipment_daemon_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
