@@ -116,6 +116,21 @@ services:
     restart: unless-stopped
     networks: [zet]
 
+  vault-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile.vault-sync
+    container_name: zet-vault-sync
+    environment:
+      ZET_VAULT_GIT_REMOTE: ${ZET_VAULT_GIT_REMOTE:-}
+      ZET_VAULT_GIT_BRANCH: ${ZET_VAULT_GIT_BRANCH:-main}
+    volumes:
+      # Backend'dagi bilan AYNAN bir xil volume/yo'l — ikkalasi ham
+      # /data/vault'ni ko'radi.
+      - vault_data:/data/vault
+    restart: unless-stopped
+    networks: [zet]
+
   caddy:
     image: caddy:2-alpine
     container_name: zet-caddy

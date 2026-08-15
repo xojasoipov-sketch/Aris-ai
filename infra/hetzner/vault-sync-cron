@@ -1,0 +1,7 @@
+# ZET — vault git-sync jadvali (vault-sync konteyneri ichida ishlaydi).
+#
+# Har 10 daqiqada — Obsidian Git plugin tarafidagi odatiy auto-sync
+# oralig'iga yaqin, shu bilan ikkala tomon (server va Boss'ning
+# kompyuteri) orasidagi kutish vaqti qisqa bo'ladi.
+
+*/10 * * * * /vault-sync.sh >> /var/log/vault-sync.log 2>&1

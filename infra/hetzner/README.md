@@ -147,14 +147,42 @@ Bu — ZET'ning O'ZI yozadigan/o'qiydigan papka. Haqiqiy Obsidian dastur
 (desktop/mobil ilova)ni shu papkaga ULASH alohida qadam va uch yo'l bor
 (hajmi/tez-tezligiga qarab tanlang):
 
-- **Sync papka** — server papkasini Syncthing/Google Drive/iCloud kabi
-  vositalar bilan o'z kompyuteringizga sinxronlab, Obsidian'ni o'sha
-  mahalliy nusxaga ochasiz.
-- **Git vault** — `vault_data`ni alohida git repo qilib, Obsidian Git
-  plugin bilan pull/push qilasiz (versiyalangan tarix bilan).
+- **Git vault** (`vault-sync` konteyneri orqali — QUYIDA) — server va
+  Obsidian Git plugin bir xil git repo bilan gaplashadi, versiyalangan
+  tarix bilan. **Hozirgi tanlangan variant.**
+- **Sync papka** (keyingi bosqich) — server papkasini Syncthing/Google
+  Drive/iCloud kabi vositalar bilan o'z kompyuteringizga sinxronlab,
+  Obsidian'ni o'sha mahalliy nusxaga ochasiz. Git talab qilmaydi.
 - **Obsidian Local REST API** — o'z kompyuteringizda Obsidian ochiq
   turadi, ZET tarmoq orqali (tunnel/ngrok) unga to'g'ridan-to'g'ri
   ulanadi (real vaqtli, lekin kompyuter doim yoniq bo'lishi shart).
+
+### Git vault sozlash (variant "b")
+
+`docker-compose.prod.yml`dagi `vault-sync` konteyneri har 10 daqiqada
+`/data/vault`ni tashqi git repo bilan sinxronlaydi (commit + rebase
+pull + push — ziddiyat bo'lsa AVTOMATIK hech narsa hal qilinmaydi,
+mahalliy commit saqlanib qoladi, xato loglanadi).
+
+1. GitHub'da (yoki boshqa git host) **yangi PRIVATE repo** yarating
+   (masalan `zet-vault`) — bo'sh, README'siz.
+2. Fine-grained Personal Access Token yarating (faqat shu repo uchun,
+   Contents: Read and write).
+3. Serverda, TO'G'RIDAN-TO'G'RI (`nano .env`):
+   ```bash
+   ZET_VAULT_GIT_REMOTE=https://x-access-token:<TOKEN>@github.com/<owner>/zet-vault.git
+   ZET_VAULT_GIT_BRANCH=main
+   ```
+4. `sudo bash update.sh` — `vault-sync` konteyneri ko'tariladi va
+   birinchi sinxronlashni darhol qiladi.
+5. O'z kompyuteringizda: shu `zet-vault` repo'ni klonlang, Obsidian'da
+   vault sifatida oching, Obsidian Git plugin'ni sozlang (auto pull/
+   push oralig'ini ~10 daqiqaga qo'ying — serverdagi bilan mos).
+
+Keyinroq "a" variantga (sync-papka) o'tmoqchi bo'lsangiz —
+`ZET_VAULT_GIT_REMOTE`ni bo'sh qoldirib `update.sh` qayta ishga
+tushirilsa, `vault-sync` konteyneri o'zini o'chiradi (git tarixi
+`vault_data` volume ichida saqlanib qoladi, hech narsa o'chmaydi).
 
 Railway'dan mavjud vault ma'lumotini ko'chirish (agar bo'lsa):
 
