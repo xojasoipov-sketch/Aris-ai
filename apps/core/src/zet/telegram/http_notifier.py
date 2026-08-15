@@ -125,7 +125,15 @@ class TelegramNotifier(Notifier):
 
 
 def _format_text(notification: Notification) -> str:
-    """Bildirishnoma turiga qarab prefiks qo'shadi."""
+    """Bildirishnoma turiga qarab prefiks qo'shadi.
+
+    Prefiks o'zi HAQIQIY HTML (`<b>...</b>`) — qasddan yozilgan, xavfsiz.
+    `notification.text` esa LLM/tashqi manbadan kelishi mumkin va HTML
+    maxsus belgilarni (`<`, `>`, `&`) o'z ichiga olishi mumkin — agar
+    ularni qochirmasak, Telegram noto'g'ri teg deb, butun xabarni rad
+    etishi (400) yoki noto'g'ri render qilishi mumkin. Shu sabab FAQAT
+    matn qismi qochiriladi, prefiksdagi haqiqiy teglar tegilmaydi.
+    """
     prefix = {
         NotificationType.MESSAGE: "",
         NotificationType.APPROVAL: "🔐 <b>Tasdiq kerak</b>\n\n",
@@ -133,7 +141,12 @@ def _format_text(notification: Notification) -> str:
         NotificationType.AGENT_ALERT: "🤖 <b>Agent</b>\n\n",
         NotificationType.SYSTEM_ALERT: "⚠️ <b>Tizim</b>\n\n",
     }.get(notification.type, "")
-    return f"{prefix}{notification.text}"
+    return f"{prefix}{_escape_html(notification.text)}"
+
+
+def _escape_html(text: str) -> str:
+    """HTML maxsus belgilarni Telegram uchun xavfsiz qochiradi."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 __all__ = ["TelegramNotifier", "TelegramNotifierError"]

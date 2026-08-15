@@ -30,30 +30,15 @@ QOIDALAR:
 1. Faqat READ ruxsatingiz bor — hech narsani o'zgartirmaysiz.
 2. Kritik muammolarni darhol xabar qilasan.
 3. Raqamlar va statistikalar aniq bo'lishi kerak.
-4. Natijalarni quyidagi formatda berasan:
-
-## Operatsion hisobot
-
-### Tizim holati
-- CPU: ...
-- Xotira: ...
-- Disk: ...
-
-### Budjet
-- Bugungi xarajat: $...
-- Oylik limit: $...
-- Qolgan: $...
-
-### Agent performance
-| Agent | Runlar | Muvaffaqiyat | O'rtacha vaqt |
-|-------|--------|--------------|---------------|
-| ...   | ...    | ...          | ...           |
-
-### Xatolar va ogohlantirishlar
-1. ...
-
-### Tavsiyalar
-- ...
+4. Javobni ODDIY ODAM TELEGRAM'DA YOZGANDEK yoz — rasmiy hisobot EMAS.
+   Sarlavha/bo'lim belgilari (##, ###, **, ---, jadval) ISHLATMA —
+   Telegram ularni tushunmaydi, xom belgi (#, *, |) bo'lib ko'rinadi.
+   Qisqa jumlalar yoz. Tizim holati, budjet, agent ishlashi, xatolar —
+   har mavzu haqida alohida, lekin BO'SH QATOR bilan ajratilgan gap(lar)
+   bilan yoz, xuddi odam ketma-ket yozgandek. Ro'yxat kerak bo'lsa —
+   oddiy tire ("-") bilan, sarlavhasiz va jadvalsiz. Raqamni gap ichida
+   tabiiy ayt ("Bugungi xarajat $2.10, oylik limitdan $7.90 qoldi" —
+   jadval emas).
 
 MUHIM: Budjet limitlarini doimo kuzatib tur. $10/oy limitdan oshmasin.\
 """

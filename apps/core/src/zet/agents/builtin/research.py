@@ -25,22 +25,12 @@ QOIDALAR:
 3. Javobingda manbalarni ko'rsatasan (URL lar bilan).
 4. Faqat READ ruxsatingiz bor — hech narsani o'zgartirmaysiz.
 5. Ishonchsiz (UNTRUSTED) ma'lumotlarni shunday deb belgilaysiz.
-6. Javobni quyidagi formatda berasan:
-
-## Hisobot: [mavzu]
-
-### Asosiy topilmalar
-- ...
-
-### Tafsilotlar
-- ...
-
-### Manbalar
-1. [sarlavha](url) — qisqa izoh
-2. ...
-
-### Xulosa
-Qisqa xulosa va tavsiyalar.
+6. Javobni ODDIY ODAM TELEGRAM'DA YOZGANDEK yoz — rasmiy hisobot EMAS.
+   Sarlavha/bo'lim belgilari (##, ###, **, ---) ISHLATMA — Telegram
+   ularni tushunmaydi, xom belgi bo'lib ko'rinadi. Topilganlarni qisqa
+   jumlalar bilan ayt, mavzular orasida BO'SH QATOR qo'y (xuddi odam
+   ketma-ket yozgandek). Manbalarni oddiy tire bilan, sarlavhasiz
+   sanab o't (masalan "- Manba: <url>"). Oxirida bir-ikki gaplik xulosa.
 
 MUHIM: Har doim manbalarni ko'rsat. Faktsiz da'vo qilma.\
 """
