@@ -171,7 +171,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             async def _mission_engine_factory(sess):  # type: ignore[no-untyped-def]
                 orch = await build_orchestrator_for_session(sess, settings)
                 return await build_mission_engine_for_session(
-                    sess, orch, get_approval_service()
+                    sess,
+                    orch,
+                    get_approval_service(),
+                    # JB-12: restart'da qayta tiklangan mission ham
+                    # killswitch'ni hurmat qilsin — audit ochib bergan
+                    # gap: "mission resume MissionOrchestrator preflight'ini
+                    # chetlab o'tadi, killswitch UMUMAN tekshirilmasdi".
+                    killswitch=get_killswitch(),
                 )
 
             restored_missions = await load_incomplete_missions(
@@ -250,6 +257,28 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         killswitch=get_killswitch(),
     )
 
+    # JB-12 §2/§23/§27: Scheduler → Brain integratsiyasi va approval TTL
+    # sweep uchun ikkita fabrika yopilishi (closure). Bir xil DI naqshi
+    # `_mission_engine_factory` (yuqorida, mission restart recovery)
+    # bilan — ATAYLAB mustaqil nusxa: TTL sweep/`use_brain` xususiyati
+    # `settings.mission_restart_recovery_enabled=False` bo'lganda ham
+    # ishlashi kerak (ular mustaqil, bog'liq bo'lmagan xususiyatlar).
+    from zet.api.deps import (
+        build_brain_for_session,
+        build_mission_engine_for_session,
+        build_orchestrator_for_session,
+        get_approval_service,
+    )
+
+    async def _daemon_mission_engine_factory(sess):  # type: ignore[no-untyped-def]
+        orch = await build_orchestrator_for_session(sess, settings)
+        return await build_mission_engine_for_session(
+            sess, orch, get_approval_service(), killswitch=get_killswitch()
+        )
+
+    async def _daemon_brain_factory(sess):  # type: ignore[no-untyped-def]
+        return await build_brain_for_session(sess, settings)
+
     automation_daemon = AutomationDaemon(
         engine=get_automation_engine(),
         agent_registry=get_agent_registry(),
@@ -265,6 +294,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # ishlab, hech kimga hech narsa aytmasdi.
         notifier=get_notifier(),
         handoff_dispatcher=handoff_dispatcher,
+        # JB-12: approval TTL sweep (mission-level cancel) va
+        # `use_brain=True` qoidalar uchun — barchasi ixtiyoriy/fail-open,
+        # berilmasa daemon aynan eski (JB-11) xatti-harakatda qoladi.
+        approvals=get_approval_service(),
+        mission_engine_factory=_daemon_mission_engine_factory,
+        brain_factory=_daemon_brain_factory,
     )
     automation_daemon_task = asyncio.create_task(automation_daemon.run_forever())
 

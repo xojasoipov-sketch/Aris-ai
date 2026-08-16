@@ -1087,6 +1087,9 @@ def _build_task_graph_executor(
         llm_provider=RoutedLLMProvider(router, is_autonomous=True),
         agent_provisioner=_build_agent_provisioning_service(session),
         model_router=BrainModelRouter() if settings.brain_model_routing_enabled else None,
+        # JB-12: Mission/TaskGraph — asosiy ijro dvigateli — endi
+        # killswitch'ni real tekshiradi (ilgari butunlay "ko'r" edi).
+        killswitch=get_killswitch(),
     )
 
 
@@ -1240,6 +1243,29 @@ async def build_orchestrator_for_session(
     )
 
 
+async def build_brain_for_session(session: AsyncSession, settings: Settings) -> Brain:
+    """FastAPI DI'siz, berilgan sessiya ustida to'liq `Brain` quradi (JB-12).
+
+    `build_orchestrator_for_session()`ning to'g'ridan-to'g'ri davomi —
+    `_build_brain()` (barcha kanallar — Telegram, HTTP — uchun BIR XIL
+    wiring, `_build_brain` docstring'iga qarang) FastAPI `Depends(...)`ga
+    tayanmaydi (faqat `orchestrator`/`settings` — aniq argumentlar), shuning
+    uchun uni ham request kontekstidan tashqarida (masalan
+    `AutomationDaemon`ning scheduled-fire yo'lida, JB-12 §2) xavfsiz
+    chaqirish mumkin — xuddi JB-11 `build_orchestrator_for_session()` kabi.
+
+    NEGA KERAK: Scheduler → Brain integratsiyasi (JB-12) uchun
+    `AutomationDaemon` — FastAPI request emas, fon tsikli — HAR fire
+    uchun o'zining sessiyasi ustida to'liq, HAQIQIY Brain qurishi kerak
+    (Mission/Task Graph/AgentSelector/ModelRouter — hammasi SHU orqali).
+    Bu yordamchisiz daemon Brain'ni FAQAT `api.deps`ning ichki
+    (`_build_brain`) yoki noto'g'ri (bare `Depends(...)`) chaqiruvi bilan
+    qurishga majbur bo'lardi — JB-11 aynan shu turdagi xatoni topgan edi.
+    """
+    orchestrator = await build_orchestrator_for_session(session, settings)
+    return _build_brain(orchestrator=orchestrator, settings=settings)
+
+
 def get_orchestrator(
     router: ModelRouter = Depends(get_model_router),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -1297,6 +1323,8 @@ async def build_mission_engine_for_session(
     session: AsyncSession,
     orchestrator: Orchestrator,
     approvals: ApprovalService,
+    *,
+    killswitch: KillSwitchState | None = None,
 ):  # type: ignore[no-untyped-def]  # local imports return non-exported types
     """Approve/reject endpoint uchun kichik yordamchi: sessiya ustida MissionEngine.
 
@@ -1306,6 +1334,11 @@ async def build_mission_engine_for_session(
     yordamchi orqali MissionEngine ochib `approve()`/`run_to_completion()`
     ni chaqiradi. Sessiya ochilgan kontekstda saqlanadi (chaqiruvchi
     `async with session_scope(...)` bloki ichida).
+
+    `killswitch` (JB-12, ixtiyoriy): berilsa `MissionEngine.run_to_completion()`
+    har faza o'tishidan oldin tekshiradi — chaqiruvchi (`app.py` restart
+    recovery, `approvals.py` approve endpoint) `get_killswitch()`ni uzatishi
+    tavsiya etiladi. Berilmasa — eski xatti-harakat (tekshiruvsiz).
     """
     from zet.core.capability import CapabilityRegistry
     from zet.core.context import ContextEngine
@@ -1353,6 +1386,7 @@ async def build_mission_engine_for_session(
         # eski single-Command yo'lida qoladi (o'zgarishsiz).
         task_graph_executor=_build_task_graph_executor(orchestrator._router, session=session),
         max_retries=2,
+        killswitch=killswitch,
     )
 
 
@@ -1425,6 +1459,7 @@ async def get_mission_orchestrator(
         # eski single-Command yo'lida qoladi (o'zgarishsiz).
         task_graph_executor=_build_task_graph_executor(router, session=session),
         max_retries=2,
+        killswitch=killswitch,
     )
 
     return MissionOrchestrator(
@@ -1628,6 +1663,25 @@ def get_telegram_bot() -> object:
             2) `orchestrator.approve(approval_id)` — tasdiq qayd etish
             3) `orchestrator.resume(run_id)` — bajarilishni davom ettirish
         `reject` — 3-qadam o'rniga `orchestrator.reject()`.
+
+        JB-12 (audit topilmasi — HIGH funksional bug): Mission-level
+        approval'lar `request_approval(run_id=mission.id, mission_id=mission.id)`
+        orqali yoziladi (core/mission.py) — haqiqiy Run yo'q. Ilgari bu
+        funksiya buni HECH TEKSHIRMASDAN doim `orchestrator.approve()`/
+        `.resume()`ni chaqirardi, ya'ni `RunStore.get(mission_id)` —
+        RunStore'da mission.id HECH QACHON topilmaydi — `RunNotFoundError`
+        otardi, u pastdagi `except` bloki jimgina `ApprovalRunResult(
+        ok=False, text=f"Xato: {exc}")`ga aylantirardi. Natija: Telegram'da
+        ✅/❌ bosilganda — mission-darajali tasdiq bo'lsa — foydalanuvchi
+        umumiy "Xato: ..." xabarini ko'rardi, mission esa abadiy
+        WAITING_APPROVAL holatida qolib ketardi (xuddi ✅ hech bosilmagandek).
+        Bir xil so'rov REST `/api/v1/approvals/{id}/approve` orqali esa
+        TO'G'RI ishlagan (`api/routes/approvals.py` allaqachon shu
+        tarmoqlanishga ega edi) — ya'ni AYNAN BIR XIL amal kanaliga qarab
+        ISHLAYDIGAN yoki ISHLAMAYDIGAN edi. Endi Telegram ham REST bilan
+        AYNAN bir xil naqshni ishlatadi: mission-level bo'lsa
+        `MissionEngine.approve()`/`run_to_completion()` (yoki rad etishda
+        `MissionEngine.cancel()`), aks holda eski klassik Run yo'li.
         """
         try:
             run_id = _uuid.UUID(run_id_str)
@@ -1642,6 +1696,39 @@ def get_telegram_bot() -> object:
                 text="Kutilayotgan tasdiq topilmadi — run allaqachon bajarilgan yoki eskirgan.",
             )
         approval_id = pending[0].id
+        mission_id = pending[0].mission_id
+
+        if mission_id is not None:
+            async with session_scope(get_session_factory()) as session:
+                orch_for_mission = await build_orchestrator_for_session(session, settings)
+                mission_engine = await build_mission_engine_for_session(
+                    session,
+                    orch_for_mission,
+                    approvals,
+                    killswitch=get_killswitch(),
+                )
+                try:
+                    if action == "approve":
+                        mission = await mission_engine.approve(mission_id, approval_id)
+                        mission = await mission_engine.run_to_completion(mission.id)
+                    else:  # "reject"
+                        approvals.reject(approval_id)
+                        mission = await mission_engine.cancel(
+                            mission_id, "Ega tomonidan Telegram orqali rad etildi"
+                        )
+                except ApprovalExpiredError as exc:
+                    return ApprovalRunResult(ok=False, text=f"Tasdiq eskirgan: {exc}")
+                except (ApprovalError, KeyError) as exc:
+                    return ApprovalRunResult(ok=False, text=f"Xato: {exc}")
+
+                mission_answer = mission.error or (
+                    "Rad etildi." if action == "reject" else "Bajarildi."
+                )
+                return ApprovalRunResult(
+                    ok=mission.error is None,
+                    text=mission_answer,
+                    run_status=mission.status.value,
+                )
 
         async with session_scope(get_session_factory()) as session:
             owner = await get_or_create_owner(session, external_id=settings.owner_id)

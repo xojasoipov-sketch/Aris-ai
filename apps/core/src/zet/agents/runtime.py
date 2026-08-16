@@ -27,6 +27,7 @@ import structlog
 from zet.domain.agent import AgentRunResult, AgentSpec
 from zet.domain.tool import ToolResult
 from zet.llm.base import ChatMessage, ImageBlock, LLMProvider, LLMResponse, ToolSpec, ToolUse
+from zet.security.killswitch import KillSwitchEngagedError, KillSwitchState
 from zet.security.permissions import PermissionPolicy
 from zet.tools.base import ToolError
 from zet.tools.registry import ToolNotFoundError, ToolRegistry
@@ -64,11 +65,23 @@ class AgentRuntime:
         tool_registry: ToolRegistry,
         model: str = "fake",
         permission_policy: PermissionPolicy | None = None,
+        killswitch: KillSwitchState | None = None,
     ) -> None:
         self._provider = provider
         self._tool_registry = tool_registry
         self._model = model
         self._permission_policy = permission_policy or PermissionPolicy()
+        # JB-12 (audit topilmasi): ilgari `AgentRuntime` killswitch'ni
+        # HECH QACHON tekshirmasdi — `Orchestrator`/`Executor` yo'lidan
+        # farqli o'laroq (u har DAG batch'dan oldin `check()` chaqiradi).
+        # Bu `AgentRuntime` orqali ishlaydigan HAMMA yo'llarni (TaskGraph
+        # missionlar, AutomationDaemon/DailyScheduleDaemon/WatcherDaemon
+        # scheduled fire'lar, HandoffDispatcher, `automation/goal.py`)
+        # killswitch'dan "ko'r" qilib qo'yardi — emergency stop yoqilsa
+        # ham, allaqachon boshlangan agent tool-loop'i to'xtamasdi.
+        # Ixtiyoriy (`None` — eski xatti-harakat, chaqiruvchi hali
+        # yangilanmagan bo'lsa ham NOL regressiya).
+        self._killswitch = killswitch
 
     async def run(
         self,
@@ -108,6 +121,13 @@ class AgentRuntime:
             # 2. Tool loop
             for step in range(spec.max_steps):
                 steps_count = step + 1
+
+                # JB-12: har qadam boshida killswitch tekshiruvi —
+                # `Executor`ning har DAG batch'dan oldingi `check()`i
+                # bilan bir xil naqsh (core/executor.py). Emergency stop
+                # o'rtada yoqilsa, keyingi LLM/tool qadami boshlanmaydi.
+                if self._killswitch is not None:
+                    self._killswitch.check()
 
                 # A-07: timeout tekshiruvi
                 elapsed = time.monotonic() - start_time
@@ -185,6 +205,22 @@ class AgentRuntime:
             # A-07: max steps
             raise AgentMaxStepsError(f"Agent '{spec.name}' {spec.max_steps} qadamga yetdi")
 
+        except KillSwitchEngagedError as exc:
+            log.warning(
+                "agent.run.killswitch_engaged",
+                agent=spec.name,
+                steps=steps_count,
+                tool_calls=tool_calls_count,
+            )
+            return AgentRunResult(
+                agent_name=spec.name,
+                success=False,
+                output="",
+                sources=sources,
+                tool_calls_count=tool_calls_count,
+                steps_count=steps_count,
+                error=f"Emergency stop yoqilgan: {exc}",
+            )
         except AgentRuntimeError as exc:
             log.warning(
                 "agent.run.limit_reached",

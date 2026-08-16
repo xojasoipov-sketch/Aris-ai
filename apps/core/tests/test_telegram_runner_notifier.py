@@ -135,7 +135,9 @@ class TestTelegramRunnerNotifierWiring:
         # pending_for_run bo'sh bo'lsa runner Orchestrator qurmasdan qaytadi —
         # shuning uchun bitta soxta PENDING approval beramiz.
         fake_service = SimpleNamespace(
-            pending_for_run=lambda _run_id: [SimpleNamespace(id=uuid.uuid4())]
+            pending_for_run=lambda _run_id: [
+                SimpleNamespace(id=uuid.uuid4(), mission_id=None)
+            ]
         )
         monkeypatch.setattr(deps, "get_approval_service", lambda: fake_service)
 

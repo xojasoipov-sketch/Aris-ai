@@ -16,7 +16,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from zet.api.deps import get_approval_service, get_orchestrator, get_session_factory
+from zet.api.deps import (
+    get_approval_service,
+    get_killswitch,
+    get_orchestrator,
+    get_session_factory,
+)
 from zet.core.orchestrator import Orchestrator, RunNotFoundError
 from zet.db.session import session_scope
 from zet.security.approvals import (
@@ -125,7 +130,12 @@ async def approve(
         try:
             async with session_scope(get_session_factory()) as session:
                 mission_engine = await build_mission_engine_for_session(
-                    session, orchestrator, orchestrator.approvals
+                    session,
+                    orchestrator,
+                    orchestrator.approvals,
+                    # JB-12: approve orqali resume qilingan mission ham
+                    # killswitch'ni hurmat qilsin.
+                    killswitch=get_killswitch(),
                 )
                 mission = await mission_engine.approve(pending.mission_id, aid)
                 mission = await mission_engine.run_to_completion(mission.id)
@@ -189,8 +199,69 @@ async def reject(
     body: ApprovalDecisionRequest,
     orchestrator: Orchestrator = Depends(get_orchestrator),
 ) -> ApprovalDecisionResponse:
-    """Tasdiqni rad etib, run'ni bekor qiladi."""
+    """Tasdiqni rad etib, run yoki mission'ni bekor qiladi.
+
+    JB-12 (audit topilmasi — `approve()`dagi bilan AYNAN bir xil sinfdagi
+    bug): mission-level approval'lar `run_id=mission.id` bilan yoziladi
+    (haqiqiy Run yo'q). Ilgari bu yerda HECH QANDAY tarmoqlanish yo'q edi
+    — `orchestrator.reject()` doim `RunStore.get(approval.run_id)`ni
+    chaqirardi, mission.id esa RunStore'da HECH QACHON topilmaydi —
+    `RunNotFoundError` → 404, garchi tasdiq haqiqatda mavjud bo'lsa ham.
+    Endi `approve()` bilan bir xil naqsh: mission-level bo'lsa
+    `MissionEngine.cancel()` (mavjud, boshqa maqsad uchun yozilgan —
+    "har qanday non-terminal holatdan CANCELLED" — bu yerga ayni mos).
+    """
     aid = _parse_uuid(approval_id, "approval_id")
+
+    try:
+        pending = orchestrator.approvals.get(aid)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Tasdiq topilmadi") from exc
+
+    if pending.mission_id is not None:
+        from zet.api.deps import build_mission_engine_for_session
+
+        try:
+            async with session_scope(get_session_factory()) as session:
+                mission_engine = await build_mission_engine_for_session(
+                    session,
+                    orchestrator,
+                    orchestrator.approvals,
+                    killswitch=get_killswitch(),
+                )
+                # `reject()` ApprovalRequest'ni REJECTED qiladi — audit-
+                # trail uchun `approve()`dan ustuvor (avval shu, keyin
+                # mission'ni CANCELLED qilamiz).
+                orchestrator.approvals.reject(aid, note=body.note)
+                mission = await mission_engine.cancel(
+                    pending.mission_id, body.note or "Ega tomonidan rad etildi"
+                )
+        except ApprovalExpiredError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except ApprovalError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        await write_audit(
+            get_session_factory(),
+            actor="owner",
+            action="approval.rejected",
+            target=pending.tool_name,
+            permission_level=pending.requested_permission,
+            run_id=pending.run_id,
+            detail={
+                "reason": pending.reason,
+                "note": body.note,
+                "mission_id": str(pending.mission_id),
+                "mission_status": mission.status.value,
+            },
+        )
+        return ApprovalDecisionResponse(
+            approval=_to_response(orchestrator.approvals.get(aid)),
+            run_id=str(pending.mission_id),
+            run_status=mission.status.value,
+        )
+
+    # Klassik run-level rad etish.
     try:
         record = orchestrator.reject(aid, note=body.note)
     except KeyError as exc:

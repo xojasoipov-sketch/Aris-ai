@@ -27,18 +27,35 @@ NEGA YANGI DVIGATEL EMAS: `AutomationEngine.Scheduler` allaqachon:
 
 Yangi qatlam qurish bu ishning ustidan takrorlash bo'lardi.
 
-HALOL DOIRA (JB-9, ochiq kamchilik):
-    Bu bridge FAQAT bir "asosiy agent" tanlaydi va uning nomi bilan
-    ScheduleRule yozadi — Mission yo'lidagi to'liq Task Graph (2+ tool
-    uchun parallel ijro) HALI qo'llab-quvvatlanmaydi. Bu — Scheduler'ning
-    o'zi HOZIRDA bir ScheduleRule = bir agent naqshi bo'yicha qurilganidan.
-    "Har kuni ko'p bosqichli mission bajar" senariysi uchun keyingi
-    ish (JB-10+) kerak bo'ladi: ScheduleRule fire'i Mission YARATSIN,
-    o'sha Mission esa Task Graph orqali ijro etilsin.
+JB-12 YANGILANISHI (bu yerda yopilgan gap, JB-9/10/11'ning o'zi ochiq
+qoldirgan edi — "ScheduleRule fire'i Mission YARATSIN, o'sha Mission esa
+Task Graph orqali ijro etilsin"):
+    `_pick_agent()` bu yerda HALI ham FAQAT "asosiy agent" nomini
+    ScheduleRule.agent_name'ga yozadi (o'zgarishsiz — bu qoidaning
+    QAYSI agent bilan bog'liqligini ko'rsatuvchi metadata/audit maydoni
+    sifatida qoladi). LEKIN endi `use_brain` maydoni (2+ tool bo'lsa
+    `True`) `AutomationDaemon`ga "bu qoida fire bo'lganda to'g'ridan-
+    to'g'ri shu bitta agentni emas, HAQIQIY `Brain.handle()`ni chaqir"
+    deydi — Brain esa o'z navbatida IntentRecognizer→ExecutionMode→
+    Mission→TaskGraph→AgentSelector orqali kerakli barcha agent(lar)ni
+    o'zi tanlaydi (bitta bilan cheklanmaydi). Ya'ni `agent_name` endi
+    "taxminiy audit yorlig'i", HAQIQIY ijro esa Brain zimmasida —
+    `deploy/automation_daemon.py::_run_once_via_brain()`ga qarang.
+
+HALOL DOIRA (hali ochiq qolgan):
+    `use_brain=False` (0-1 tool) qoidalar hamon eski, to'g'ridan-to'g'ri
+    `run_agent_command(rule.agent_name, ...)` yo'lida — bu ATAYLAB (JB-8
+    "minimal yetarli mexanizm" tamoyili: oddiy bitta-agentli jadval uchun
+    to'liq Brain triaji ortiqcha xarajat). Rule yaratilgandan keyin agent
+    reestri o'zgarsa (masalan yangi, ko'proq mos agent qo'shilsa) — bu
+    bridge/`use_brain` qarori QAYTA BAHOLANMAYDI (faqat yaratish
+    paytida bir marta hisoblanadi); bu Scheduler'ning umumiy "frozen
+    qoida" arxitekturasidan kelib chiqadi, alohida JB-12 kamchiligi emas.
 
 Bog'liq qarorlar:
     JB-8 — ExecutionModeClassifier (BACKGROUND_WORKFLOW aniqlash)
     JB-9 — bu bridge
+    JB-12 — Scheduler → Brain (use_brain, murakkab rejalashtirilgan missiyalar)
     Bo'lim 9 — Scheduler / AutomationDaemon / run_agent_command
 """
 
@@ -134,6 +151,18 @@ class BackgroundWorkflowBridge:
             )
 
         rule_name = self._derive_rule_name(command_text)
+        # JB-12: HALOL DOIRA yopildi (yuqoridagi modul docstring'i endi
+        # eskirgan — "keyingi ish (JB-10+)" deb belgilangan edi). Endi
+        # `AutomationDaemon` bu qoidani `use_brain=True` bo'lsa
+        # `Brain.handle()` orqali (Mission/Task Graph avtomatik ishga
+        # tushadi, kerak bo'lsa) bajaradi — bir agent bilan cheklanmaydi.
+        # Mezon `ExecutionModeClassifier._base_decision`dagi TASK_GRAPH
+        # chegarasi bilan AYNAN bir xil (2+ tool → ko'p bosqichli
+        # kognitiv ijro kerak): JB-8 "Brain minimal yetarli mexanizmni
+        # tanlaydi" tamoyili shu yerda ham qo'llanadi — 0-1 toolli
+        # oddiy jadval hamon soddaroq to'g'ridan-to'g'ri agent yo'lida
+        # qoladi (o'zgarishsiz, use_brain=False).
+        use_brain = len(required_tools) >= 2
         try:
             rule = self._engine.scheduler.add_rule(
                 ScheduleRule(
@@ -141,6 +170,7 @@ class BackgroundWorkflowBridge:
                     agent_name=agent_name,
                     cron_expr=expression.cron,
                     command=command_text,
+                    use_brain=use_brain,
                 )
             )
         except ValueError as exc:

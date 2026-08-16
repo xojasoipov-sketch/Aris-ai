@@ -93,6 +93,20 @@ class ScheduleRule(BaseModel, frozen=True):
     max_runs: int | None = None
     """Maksimal ishga tushishlar (None = cheksiz)."""
 
+    use_brain: bool = False
+    """JB-12: `True` bo'lsa, fire — to'g'ridan-to'g'ri `run_agent_command()`
+    o'rniga — HAQIQIY `Brain.handle()` orqali (Mission/Task Graph, agar
+    kerak bo'lsa) bajariladi. Default `False` — 100% orqaga moslik:
+    mavjud barcha qoidalar (JSON snapshot'dan tiklangan eskilari
+    jumladan) o'zgarishsiz eski yo'l bilan ishlashda davom etadi.
+
+    `BackgroundWorkflowBridge.create_schedule()` buni avtomatik `True`
+    qiladi — qachon: bir martalik goal 2+ tool talab qilgan bo'lsa
+    (`ExecutionModeClassifier`ning TASK_GRAPH mezoni bilan AYNAN bir
+    xil chegara, `core/execution_mode.py::_base_decision`). Bitta
+    tool/agent yetarli oddiy jadval — eski, soddaroq yo'lda qoladi
+    (JB-8 "Brain minimal yetarli mexanizmni tanlaydi" tamoyili)."""
+
     @property
     def normalized_cron(self) -> str:
         """Cron ifodani normallash (shortcutlarni ochish)."""
@@ -181,6 +195,7 @@ class Scheduler:
             last_run_at=old.last_run_at,
             run_count=old.run_count,
             max_runs=old.max_runs,
+            use_brain=old.use_brain,
         )
         self._rules[rule_id] = updated
         log.info("schedule.paused", id=rule_id)
@@ -202,6 +217,7 @@ class Scheduler:
             last_run_at=old.last_run_at,
             run_count=old.run_count,
             max_runs=old.max_runs,
+            use_brain=old.use_brain,
         )
         self._rules[rule_id] = updated
         log.info("schedule.resumed", id=rule_id)
@@ -223,6 +239,7 @@ class Scheduler:
             last_run_at=datetime.now(UTC),
             run_count=old.run_count + 1,
             max_runs=old.max_runs,
+            use_brain=old.use_brain,
         )
         self._rules[rule_id] = updated
         return updated

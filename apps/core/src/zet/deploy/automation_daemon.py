@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import datetime
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -45,9 +46,11 @@ from zet.automation.fire_ledger import claim_fire_standalone
 from zet.automation.handoff import HandoffDispatcher
 from zet.automation.scheduler import ScheduleRule
 from zet.config import Settings
+from zet.core.approval_expiry import sweep_expired_approvals
 from zet.core.state import CoreState
 from zet.db.session import session_scope
 from zet.domain.agent import AgentRunResult
+from zet.domain.command import Command
 from zet.llm.base import LLMProvider
 from zet.llm.routed_provider import RoutedLLMProvider
 from zet.llm.router import ModelRouter
@@ -56,7 +59,59 @@ from zet.security.permissions import PermissionPolicy
 from zet.telegram.notifier import Notifier
 from zet.tools.registry import ToolRegistry
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from zet.core.brain import Brain, BrainResult
+    from zet.core.mission import MissionEngine
+    from zet.security.approvals import ApprovalService
+
 log = structlog.get_logger(__name__)
+
+
+def _brain_result_to_agent_run_result(
+    result: BrainResult, *, agent_name: str
+) -> AgentRunResult:
+    """`BrainResult` → `AgentRunResult` narrow adapter (JB-12 §2/§5).
+
+    NEGA yangi "canonical" tip EMAS: ikkala tip TURLI narsalarni
+    ifodalaydi — `AgentRunResult` bitta agentning bajarilish HISOBOTI
+    (success/output/error/tool_calls_count), `BrainResult` esa Brain'ning
+    MARSHRUTLASH natijasi (qaysi yo'l tanlandi — RUN/MISSION/
+    WORKFLOW_COMMAND/BACKGROUND_WORKFLOW_CREATED — `ok`/`text` bilan,
+    haqiqiy artefaktlar `run`/`mission` orqali chuqurroqda). Bularni
+    "bir xil qilish" — soxta maydonlar to'qish (`tool_calls_count`ni
+    Brain darajasida hech kim BILMAYDI). Shuning uchun eng tor, halol
+    adapter: faqat AutomationDaemon'ning `_fire()`/`_deliver()`/
+    `_dispatch_handoff()` HAQIQATDA o'qiydigan maydonlarni (success/
+    output/error) moslashtiradi, qolganini soxtalashtirmaydi.
+
+    `tool_calls_count`/`steps_count` — HALOL 0 (Brain darajasida bu
+    ma'lumot yo'q, to'qib chiqarish yolg'on bo'lardi).
+
+    Mission WAITING_APPROVAL holatida bo'lsa — bu XATO EMAS: mission
+    ROSTDAN yaratildi va mavjud approval infratuzilmasi orqali (Telegram/
+    REST, JB-12'da tuzatilgan mission-level approval yo'li) davom etadi.
+    `success=True` — "tasdiqqa yuborildi", "muvaffaqiyatsiz" emas.
+    """
+    mission = result.mission
+    if mission is not None and mission.status.value == "waiting_approval":
+        return AgentRunResult(
+            agent_name=agent_name,
+            success=True,
+            output=(
+                f"{result.text}\n\n(tasdiq kutilmoqda — mission_id={result.mission_id})"
+            ).strip(),
+            error=None,
+            metadata={"brain_route": result.route.value, "mission_id": result.mission_id or ""},
+        )
+    return AgentRunResult(
+        agent_name=agent_name,
+        success=result.ok,
+        output=result.text,
+        error=None if result.ok else (result.text or "Brain natijasi muvaffaqiyatsiz"),
+        metadata={"brain_route": result.route.value, "mission_id": result.mission_id or ""},
+    )
 
 DEFAULT_TICK_SECONDS = 60
 """Daemon tekshirish oralig'i — minut aniqligi yetarli (cron minut darajasida)."""
@@ -89,6 +144,9 @@ class AutomationDaemon:
         settings: Settings | None = None,
         notifier: Notifier | None = None,
         handoff_dispatcher: HandoffDispatcher | None = None,
+        approvals: ApprovalService | None = None,
+        mission_engine_factory: Callable[[AsyncSession], Awaitable[MissionEngine]] | None = None,
+        brain_factory: Callable[[AsyncSession], Awaitable[Brain]] | None = None,
     ) -> None:
         self._engine = engine
         self._agent_registry = agent_registry
@@ -102,6 +160,15 @@ class AutomationDaemon:
         self._llm_providers = llm_providers
         self._settings = settings
         self._notifier = notifier
+        # JB-12: ixtiyoriy — DI naqshi `core/mission_recovery.py` bilan
+        # bir xil (`api/app.py::lifespan()` closure quradi, bu daemon
+        # `api/deps.py`ga TO'G'RIDAN-TO'G'RI bog'lanmaydi — qatlamlar
+        # toza qoladi). Berilmasa — mos xususiyat (TTL sweep mission-
+        # cancel, `use_brain` qoidalar) fail-open o'chiriladi/eski
+        # xatti-harakatga qaytadi.
+        self._approvals = approvals
+        self._mission_engine_factory = mission_engine_factory
+        self._brain_factory = brain_factory
         # Ilgari `HandoffDispatcher` qurilgan-u, hech qanday agent tugash
         # nuqtasiga ulanmagan edi (Bo'lim 9 chala qolgan bo'g'in). Endi
         # muvaffaqiyatli fire'dan keyin AGENT_HANDOFF triggerlari uyg'onadi.
@@ -177,6 +244,22 @@ class AutomationDaemon:
         if self._core_state.is_sleeping:
             log.debug("automation_daemon.tick_skipped", reason="sleeping")
             return fired
+
+        # JB-12 §27: audit "genuinely missing" deb topgan approval TTL
+        # sweep. Yangi daemon YO'Q — mavjud, allaqachon 60 soniyada bir
+        # ishlaydigan shu tsiklga qo'shildi (reuse-existing-loop tamoyili,
+        # `claim_fire_standalone` JB-11'da xuddi shu tsiklga qo'shilgani
+        # kabi). Fail-open: `approvals` berilmagan bo'lsa (dev/test) —
+        # o'tkazib yuboriladi.
+        if self._approvals is not None:
+            try:
+                await sweep_expired_approvals(
+                    self._approvals,
+                    mission_engine_factory=self._mission_engine_factory,
+                    session_factory=self._session_factory,
+                )
+            except Exception:
+                log.warning("automation_daemon.approval_sweep_failed")
 
         current = now or datetime.now(tz=self._tz)
         minute_key = current.strftime("%Y-%m-%d %H:%M")
@@ -287,6 +370,7 @@ class AutomationDaemon:
                 agent_registry=self._agent_registry,
                 tool_registry=self._tool_registry,
                 permission_policy=self._permission_policy,
+                killswitch=self._killswitch,
             )
 
         async with session_scope(self._session_factory) as session:
@@ -301,11 +385,87 @@ class AutomationDaemon:
                 tool_registry=self._tool_registry,
                 permission_policy=self._permission_policy,
                 provider=provider,
+                killswitch=self._killswitch,
             )
 
+    async def _run_once_via_brain(self, rule: ScheduleRule) -> AgentRunResult:
+        """`rule.use_brain=True` uchun — to'g'ridan-to'g'ri agent o'rniga
+        HAQIQIY `Brain.handle()` orqali (JB-12 §2/§23).
+
+        Zanjir: ScheduleRule → (bu yerda) Command → Brain.handle() →
+        IntentRecognizer → ExecutionModeClassifier → MISSION/TASK_GRAPH →
+        MissionOrchestrator → CapabilityRegistry/AgentSelector →
+        BrainModelRouter → TaskGraphExecutor → tool'lar → COMPLETED gate →
+        Memory → `_brain_result_to_agent_run_result()` adapter.
+
+        Scheduler'ning boshqa hech qanday qismi (fire_ledger dedup,
+        `_persist_state`, `_deliver`, `_dispatch_handoff`,
+        `agent_registry.record_run`) O'ZGARMAYDI — ular faqat
+        `AgentRunResult` bilan ishlaydi, bu yerda ADAPTER orqali
+        ta'minlanadi.
+
+        Fail-open: `session_factory`/`brain_factory` berilmagan bo'lsa
+        (dev/test, yoki `use_brain=True` bo'lsa-da Brain wiring
+        o'chirilgan production) — klassik `_run_once()` yo'liga tushadi
+        (halol, "Brain yo'q" degani "hech narsa qilinmasin" degani emas).
+        """
+        if self._session_factory is None or self._brain_factory is None:
+            log.warning(
+                "automation_daemon.brain_factory_unavailable_fallback",
+                rule_id=rule.id,
+            )
+            return await self._run_once(rule)
+
+        async with session_scope(self._session_factory) as session:
+            brain = await self._brain_factory(session)
+            command = Command(
+                text=rule.command,
+                channel="schedule",
+                metadata={
+                    "schedule_id": rule.id,
+                    "schedule_name": rule.name,
+                    "origin": "scheduler",
+                },
+            )
+            result = await brain.handle(command)
+            return _brain_result_to_agent_run_result(result, agent_name=rule.agent_name)
+
     async def _fire(self, rule: ScheduleRule) -> None:
-        """Bitta qoidani bajarish — muvaffaqiyatsiz bo'lsa qayta urinish bilan."""
-        log.info("automation_daemon.fire", rule_id=rule.id, agent=rule.agent_name)
+        """Bitta qoidani bajarish — muvaffaqiyatsiz bo'lsa qayta urinish bilan.
+
+        JB-12: `rule.use_brain=True` bo'lsa — BITTA urinish, MAX_ATTEMPTS
+        siklisiz. SABAB: Brain-driven yo'l (Mission) o'zining ICHKI
+        RecoveryEngine/MissionRecoveryAdapter'iga ega (bounded, mustaqil
+        qayta urinish) — bu tashqi sikl UNI takrorlasa, HAR muvaffaqiyat-
+        siz urinish YANGI Mission yaratardi (Mission.id har `Brain.handle()`
+        chaqiruvida yangi) — bu aynan JB-11'ning "scheduled Mission
+        yaratish deterministik logik identifikatsiyaga muhtoj, ikki marta
+        yaratilmasin" talabini buzardi. Spec §25 ham buni aniq talab
+        qiladi: "do not create infinite retries... use existing retry/
+        recovery policy".
+        """
+        log.info(
+            "automation_daemon.fire",
+            rule_id=rule.id,
+            agent=rule.agent_name,
+            use_brain=rule.use_brain,
+        )
+
+        if rule.use_brain:
+            try:
+                result = await self._run_once_via_brain(rule)
+            except AgentUnavailableError as exc:
+                log.warning("automation_daemon.agent_unavailable", rule_id=rule.id, error=str(exc))
+                return
+            self._engine.scheduler.record_run(rule.id)
+            if result.success:
+                log.info("automation_daemon.fired", rule_id=rule.id, attempt=1, success=True)
+                await self._deliver(rule, result.output)
+                await self._dispatch_handoff(rule.agent_name, result)
+            else:
+                log.error("automation_daemon.fire_failed", rule_id=rule.id, error=result.error)
+            return
+
         last_error: str | None = None
 
         for attempt in range(1, MAX_ATTEMPTS + 1):

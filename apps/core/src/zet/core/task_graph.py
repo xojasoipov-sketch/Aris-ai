@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from zet.agents.registry import AgentRegistry
     from zet.core.mission import Mission, MissionTask
     from zet.llm.base import LLMProvider
+    from zet.security.killswitch import KillSwitchState
     from zet.security.permissions import PermissionPolicy
     from zet.tools.registry import ToolRegistry
 
@@ -200,11 +201,18 @@ class TaskGraphExecutor:
         model_router: BrainModelRouter | None = None,
         max_retries: int = 1,
         task_timeout_s: int | None = 120,
+        killswitch: KillSwitchState | None = None,
     ) -> None:
         self._agents = agent_registry
         self._tools = tool_registry
         self._permissions = permission_policy
         self._llm_provider = llm_provider
+        # JB-12 (audit topilmasi): ilgari `TaskGraphExecutor` — Mission/
+        # TaskGraph yo'lining ASOSIY ijro dvigateli — killswitch'ni
+        # HECH QACHON tekshirmasdi (`core/executor.py`dan farqli, u har
+        # DAG batch'dan oldin `check()` chaqiradi). Ixtiyoriy — berilmasa
+        # eski xatti-harakat (tekshiruvsiz, NOL regressiya).
+        self._killswitch = killswitch
         # JB-6: berilmasa (default) — xatti-harakat AYNAN JB-5'dagidek
         # (CapabilityGap faqat hisobotga yoziladi, hech narsa "tuzatib
         # qo'ymaydi"). Berilganda — Gap avval mavjud AgentFactory
@@ -327,6 +335,24 @@ class TaskGraphExecutor:
 
             if not to_run:
                 continue
+
+            # JB-12: har bosqichdan (batch) oldin killswitch tekshiruvi —
+            # `core/executor.py`ning har DAG batch'idan oldingi
+            # `check()`i bilan bir xil naqsh. Ilgari bu yo'l butunlay
+            # killswitch'dan "ko'r" edi. Emergency stop yoqilgan bo'lsa,
+            # JORIY bosqich bajarilmaydi — tasklar FAILED deb belgilanadi
+            # (mission-level RecoveryEngine ko'radi), KEYINGI bosqichlar
+            # umuman boshlanmaydi (`break`). Hali boshlanmagan keyingi
+            # bosqich tasklari PENDING holatida qoladi — killswitch
+            # o'chirilgach, keyingi resume ularni xavfsiz qayta sinaydi.
+            if self._killswitch is not None and self._killswitch.is_engaged:
+                reason = f"kill switch yoqilgan: {self._killswitch.reason or 'sabab korsatilmagan'}"
+                for task in to_run:
+                    task.status = StepStatus.FAILED
+                    task.error = reason
+                any_failed = True
+                log.warning("task_graph.killswitch_engaged", mission_id=str(mission.id))
+                break
 
             gaps = await asyncio.gather(*(self._run_task(mission, t) for t in to_run))
             for task, gap in zip(to_run, gaps, strict=True):
@@ -453,6 +479,7 @@ class TaskGraphExecutor:
                     timeout_s=self._task_timeout_s,
                     provider=self._llm_provider,
                     task_class_override=task_class_override,
+                    killswitch=self._killswitch,
                 )
             except AgentUnavailableError as exc:
                 # Reja tuzilgandan beri agent PAUSED/o'chirilgan bo'lishi

@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from zet.core.orchestrator import Orchestrator, RunRecord
     from zet.core.planner import Planner
     from zet.security.approvals import ApprovalService
+    from zet.security.killswitch import KillSwitchState
 
 log = structlog.get_logger(__name__)
 
@@ -356,6 +357,7 @@ class MissionEngine:
         task_graph_executor: TaskGraphExecutorLike | None = None,
         max_retries: int = 2,
         clock: Callable[[], datetime] = utcnow,
+        killswitch: KillSwitchState | None = None,
     ) -> None:
         self._repo = repository
         self._capabilities = capability_registry
@@ -367,6 +369,15 @@ class MissionEngine:
         self._memory = memory_store
         self._risk_classifier = risk_classifier
         self._understand_fn = understand_fn
+        # JB-12 (audit topilmasi): `MissionOrchestrator.run()` YANGI
+        # mission topshirilganda killswitch'ni bir marta (preflight)
+        # tekshiradi — lekin `mission_recovery.py` restart'da
+        # `MissionEngine.run_to_completion()`ni TO'G'RIDAN-TO'G'RI
+        # chaqiradi, `MissionOrchestrator`ni chetlab o'tib. Natijada
+        # RESTART'DAN KEYIN QAYTA TIKLANGAN mission — killswitch yoqilgan
+        # bo'lsa ham — ijroni davom ettirardi. Ixtiyoriy — berilmasa eski
+        # xatti-harakat (NOL regressiya).
+        self._killswitch = killswitch
         # JB-5: berilmasa (default) — xatti-harakat AYNAN eski ("mission =
         # bitta Command") qoladi, garchi `mission.tasks`da 2+ task bo'lsa
         # ham. Faqat berilganda va `mission.tasks` haqiqatan ham 2+
@@ -773,6 +784,19 @@ class MissionEngine:
         while not mission.status.is_terminal and mission.status != MissionStatus.WAITING_APPROVAL:
             if _deadline_expired(mission, self._clock()):
                 return await self.cancel(mission.id, "deadline exceeded")
+
+            # JB-12: killswitch — har faza o'tishidan OLDIN. Bu ayniqsa
+            # RESTART'dan keyin qayta tiklangan mission'lar uchun muhim
+            # (`mission_recovery.py` bevosita shu metodni chaqiradi,
+            # `MissionOrchestrator`ning bir martalik preflight
+            # tekshiruvini chetlab o'tib) — "restart killswitch'ni chetlab
+            # o'tmasligi kerak" talabi (spec §28) shu yerda ta'minlanadi.
+            # Xato emas, FAILED holatiga halol o'tish — `execute()`ning
+            # o'zidagi mavjud KillSwitchEngagedError qaytaruvi bilan bir
+            # xil naqsh (mission.py execute() ichida allaqachon bor).
+            if self._killswitch is not None and self._killswitch.is_engaged:
+                reason = f"kill switch yoqilgan: {self._killswitch.reason or 'sabab korsatilmagan'}"
+                return await self._transition(mission, MissionStatus.FAILED, error=reason)
 
             if mission.status == MissionStatus.RECEIVED:
                 mission = await self.understand(mission)

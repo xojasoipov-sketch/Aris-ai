@@ -37,6 +37,7 @@ from zet.domain.enums import TaskClass
 from zet.llm.base import LLMProvider
 from zet.llm.fake import FakeProvider
 from zet.llm.routed_provider import task_class_for_tier
+from zet.security.killswitch import KillSwitchState
 from zet.security.permissions import PermissionPolicy
 from zet.tools.registry import ToolRegistry
 
@@ -57,6 +58,7 @@ async def run_agent_command(
     timeout_s: int | None = None,
     provider: LLMProvider | None = None,
     task_class_override: TaskClass | None = None,
+    killswitch: KillSwitchState | None = None,
 ) -> AgentRunResult:
     """Bitta agent buyrug'ini haqiqiy `AgentRuntime` orqali bajarish va metrikani yozish.
 
@@ -96,6 +98,7 @@ async def run_agent_command(
         tool_registry=tool_registry,
         permission_policy=permission_policy,
         model=model,
+        killswitch=killswitch,
     )
     coro = runtime.run(state.spec, command)
     result = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
