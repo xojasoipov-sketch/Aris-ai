@@ -346,6 +346,74 @@ class TestVerificationAndRecovery:
         assert m.status is MissionStatus.COMPLETED
         assert m.retry_count == 1
 
+    async def test_futile_failure_class_stops_recovery_immediately(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        """JB-14 PART II §11: AUTHENTICATION — qayta urinish ma'nosiz.
+
+        Eski xatti-harakat: `recovery.diagnose_and_patch()` HAR safar
+        chaqirilardi (bir xil "401" bilan `max_retries` marta qayta
+        yiqilib). Endi: `MissionEngine.recover()` klassifikatsiyani
+        ko'radi va DARHOL FAILED'ga o'tadi — LLM diagnos ham, qayta
+        task-graph ijrosi ham YO'Q."""
+        recovery = FakeRecovery()
+        engine, orch, _, _ = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            recovery=recovery,
+            max_retries=5,  # katta budjet — baribir DARHOL to'xtashi kerak
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(),
+                status=RunStatus.DONE,
+                verified_ok=False,
+                error="401 unauthorized: invalid api key",
+            ),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.FAILED
+        assert "authentication" in (m.error or "")
+        assert recovery.calls == 0, "AUTHENTICATION uchun LLM diagnos chaqirilmasligi kerak edi"
+        # Faqat 1 ta run — qayta urinish HECH bo'lmagan.
+        runs = await repo.list_runs(m.id)
+        assert len(runs) == 1
+
+    async def test_invalid_plan_still_goes_through_replan(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        """JB-14 PART II §11: INVALID_PLAN → REPLAN (`is_retry_futile`ga
+        qaramay — `recover()`dagi ATAYLAB ISTISNO). AUTHENTICATION'dan
+        farqli o'laroq, INVALID_PLAN'ni "shu reja bilan qayta urinish"
+        emas, "YANGI reja" bilan davom ettirish mumkin — shu sabab
+        Mission darajasida FAILED'ga DARHOL o'tmasligi kerak."""
+        recovery = FakeRecovery()
+        engine, orch, _, _ = _engine(
+            repo=repo,
+            approvals=approvals,
+            session=session,
+            owner=owner,
+            recovery=recovery,
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(),
+                status=RunStatus.DONE,
+                verified_ok=False,
+                error="noto'g'ri reja: tool topilmadi",
+            ),
+            FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="ish")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.COMPLETED
+        assert recovery.calls == 1, "INVALID_PLAN REPLAN yo'liga tushishi (diagnose chaqirilishi) kerak edi"
+
 
 class TestCancel:
     async def test_cancel_from_planning(

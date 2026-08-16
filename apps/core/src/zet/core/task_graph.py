@@ -52,19 +52,37 @@ from typing import TYPE_CHECKING, Any, Protocol
 import structlog
 
 from zet.automation.executor import AgentUnavailableError, run_agent_command
+from zet.core.failure_classification import FailureClass, classify_failure, is_retry_futile
 from zet.core.model_routing import BrainModelRouter, CognitiveStage, RoutingSignal
+from zet.core.verifier import VerificationOutcome, classify_verification
 from zet.db.base import utcnow
-from zet.domain.enums import RiskLevel, StepStatus, TaskClass
+from zet.domain.enums import PermissionLevel, RiskLevel, StepStatus, TaskClass, TrustLevel
+from zet.domain.plan import PlanStep
+from zet.domain.tool import ToolResult
 from zet.security.risk import risk_for
 from zet.tools.registry import ToolNotFoundError
 
 if TYPE_CHECKING:
     from zet.agents.registry import AgentRegistry
     from zet.core.mission import Mission, MissionTask
+    from zet.core.verifier import Verifier
     from zet.llm.base import LLMProvider
     from zet.security.killswitch import KillSwitchState
     from zet.security.permissions import PermissionPolicy
     from zet.tools.registry import ToolRegistry
+
+
+class AgentSelectorLike(Protocol):
+    """`core.agent_selector.AgentSelector` uchun minimal interfeys (JB-14).
+
+    NEGA Protocol: boshqa ixtiyoriy DI komponentlar (`AgentProvisionerLike`
+    va h.k.) bilan bir xil naqsh — aylanma import xavfisiz, faqat
+    chaqiruvchi shakl kerak."""
+
+    def assign_tool_agents(
+        self, required_tools: Sequence[str], *, preferred: Sequence[str] = ()
+    ) -> Any:  # pragma: no cover — protocol
+        ...
 
 log = structlog.get_logger(__name__)
 
@@ -202,6 +220,8 @@ class TaskGraphExecutor:
         max_retries: int = 1,
         task_timeout_s: int | None = 120,
         killswitch: KillSwitchState | None = None,
+        verifier: Verifier | None = None,
+        agent_selector: AgentSelectorLike | None = None,
     ) -> None:
         self._agents = agent_registry
         self._tools = tool_registry
@@ -227,6 +247,18 @@ class TaskGraphExecutor:
         self._model_router = model_router
         self._max_retries = max_retries
         self._task_timeout_s = task_timeout_s
+        # JB-14 PART I: berilmasa (default) — xatti-harakat AYNAN
+        # eski (`AgentRunResult.success`ning o'zi "task DONE" degani).
+        # Berilganda — muvaffaqiyatli natija HAM mavjud `Verifier`
+        # orqali (`task.expected_outcome` bilan) tekshiriladi, natija
+        # `task.verification_status`ga yoziladi va DONE FAQAT haqiqiy
+        # VERIFIED holatda qo'yiladi (spec §8 — "success≠goal achieved").
+        self._verifier = verifier
+        # JB-14 PART II: berilmasa (default) — eski xatti-harakat (TOOL
+        # sinfidagi xato retries tugagach oddiy FAILED). Berilganda —
+        # retries tugagach BIR MARTA muqobil (joriy agentdan FARQLI)
+        # ACTIVE agent tanlab so'nggi urinish qilinadi.
+        self._agent_selector = agent_selector
 
     async def run(
         self,
@@ -291,6 +323,26 @@ class TaskGraphExecutor:
                 )
                 log.warning(
                     "task_graph.non_idempotent_interrupted",
+                    mission_id=str(mission.id),
+                    task=task.title,
+                    tool=task.tool,
+                )
+                continue
+            # JB-14 PART I: xuddi shu tamoyil — agar oldingi urinish
+            # VERIFICATION_UNCERTAIN bilan tugagan bo'lsa (haqiqatda
+            # bajarilgan-bajarilmagani noaniq, `Verifier` past ishonch
+            # bilan qaytargan) VA tool idempotent bo'lmasa — avtomatik
+            # qayta ishga tushirilmaydi (spec §6: "never blindly repeat
+            # a possibly-non-idempotent action"). Mission-darajasidagi
+            # RecoveryEngine/`MissionRecoveryAdapter` bu holatni ko'rib,
+            # foydalanuvchidan tasdiq so'rashi yoki boshqa yo'l tanlashi
+            # mumkin — TaskGraph o'zi ko'r-ko'rona qayta URINMAYDI.
+            if (
+                task.verification_status == VerificationOutcome.VERIFICATION_UNCERTAIN.value
+                and not self._tool_is_idempotent(task.tool)
+            ):
+                log.warning(
+                    "task_graph.uncertain_verification_blocks_retry",
                     mission_id=str(mission.id),
                     task=task.title,
                     tool=task.tool,
@@ -466,9 +518,11 @@ class TaskGraphExecutor:
         attempt = 0
         last_error: str | None = None
         gap: CapabilityGap | None = None
+        tried_alternate_agent = False
         while True:
             task.status = StepStatus.RUNNING
             task.started_at = task.started_at or utcnow()
+            failure_class: FailureClass | None = None
             try:
                 result = await run_agent_command(
                     task.agent,
@@ -497,6 +551,7 @@ class TaskGraphExecutor:
                     status=GapStatus.FAILED,
                 )
                 last_error = str(exc)
+                task.failure_class = FailureClass.TOOL.value
                 log.info(
                     "task_graph.agent_unavailable",
                     mission_id=str(mission.id),
@@ -507,25 +562,86 @@ class TaskGraphExecutor:
                 break
             except TimeoutError:
                 last_error = f"vaqt tugadi ({self._task_timeout_s}s)"
+                failure_class = FailureClass.NETWORK
             except Exception as exc:  # task darajasida yutiladi — mission davom etadi
                 last_error = f"kutilmagan xato: {type(exc).__name__}: {exc}"
+                # JB-14 PART II: bu istisno HAQIQIY turi orqali klassifikatsiya
+                # qilinadi (matn heuristikasi emas — aniqroq).
+                failure_class = classify_failure(exc)
                 log.warning(
                     "task_graph.task_error",
                     mission_id=str(mission.id),
                     task=task.title,
                     error=last_error,
+                    failure_class=failure_class.value,
                 )
             else:
                 if result.success:
-                    task.status = StepStatus.DONE
-                    task.result = (result.output or "")[:2000]
-                    task.error = None
-                    task.completed_at = utcnow()
-                    return None
-                last_error = result.error or "agent muvaffaqiyatsiz tugadi"
+                    # JB-14 PART I: `AgentRunResult.success=True`ning O'ZI
+                    # "maqsadga erishildi" degani EMAS — mavjud `Verifier`
+                    # orqali (agar ulangan bo'lsa) HAQIQIY tekshiruv.
+                    if await self._verify_task_result(task, result):
+                        task.status = StepStatus.DONE
+                        task.result = (result.output or "")[:2000]
+                        task.error = None
+                        task.completed_at = utcnow()
+                        return None
+                    last_error = f"verifikatsiya: {task.verification_reason}"
+                    if (
+                        task.verification_status
+                        == VerificationOutcome.VERIFICATION_UNCERTAIN.value
+                    ):
+                        # Spec §6: haqiqatda bajarilgan-bajarilmagani
+                        # NOANIQ — avtomatik qayta URINMAYMIZ (tool
+                        # idempotent bo'lsa ham: bu yerdagi noaniqlik
+                        # "tool xato qaytardi" EMAS, "tool muvaffaqiyat
+                        # deb aytdi-yu, biz buni tasdiqlay olmadik" —
+                        # qayta urinish ma'nosiz, faqat holatni yashiradi).
+                        task.failure_class = FailureClass.EXTERNAL_UNCERTAIN.value
+                        break
+                    failure_class = FailureClass.VALIDATION
+                else:
+                    last_error = result.error or "agent muvaffaqiyatsiz tugadi"
+                    failure_class = classify_failure(text=last_error)
+
+            if failure_class is not None:
+                task.failure_class = failure_class.value
+                if is_retry_futile(failure_class):
+                    log.info(
+                        "task_graph.retry_futile",
+                        mission_id=str(mission.id),
+                        task=task.title,
+                        failure_class=failure_class.value,
+                    )
+                    break
 
             attempt += 1
             if attempt > self._max_retries:
+                # JB-14 PART II: TOOL-sinfidagi xato uchun — retries
+                # tugagach, BIR MARTA (bounded — `tried_alternate_agent`
+                # bilan qulflangan) joriy agentdan FARQLI ACTIVE agent
+                # bilan so'nggi urinish. Muqobil topilmasa (yoki
+                # bir xil agent qaytsa) — oddiy FAILED.
+                if (
+                    not tried_alternate_agent
+                    and failure_class is FailureClass.TOOL
+                    and self._agent_selector is not None
+                    and task.tool
+                ):
+                    tried_alternate_agent = True
+                    selection = self._agent_selector.assign_tool_agents([task.tool])
+                    alt_agent = getattr(selection, "tool_agents", {}).get(task.tool)
+                    if alt_agent and alt_agent != task.agent:
+                        log.info(
+                            "task_graph.alternate_agent",
+                            mission_id=str(mission.id),
+                            task=task.title,
+                            old_agent=task.agent,
+                            new_agent=alt_agent,
+                        )
+                        task.agent = alt_agent
+                        scoped_tools = self._tools.subset([task.tool]) if task.tool else self._tools
+                        continue
                 break
             task.retries = attempt
             log.info(
@@ -534,12 +650,57 @@ class TaskGraphExecutor:
                 task=task.title,
                 attempt=attempt,
                 error=last_error,
+                failure_class=failure_class.value if failure_class else None,
             )
 
         task.status = StepStatus.FAILED
         task.error = last_error or "nomalum xato"
         task.completed_at = utcnow()
         return gap
+
+    async def _verify_task_result(self, task: MissionTask, result: Any) -> bool:
+        """EXECUTE → OBSERVE → VERIFY (JB-14 PART I).
+
+        `Verifier` berilmagan YOKI task tool'siz (faqat agent fikrlashi)
+        bo'lsa — eski xatti-harakat (`True`, tekshiruv so'ralmagan/mavjud
+        emas). Berilgan bo'lsa — mavjud `Verifier.verify_step()`ni
+        (YANGI, RAQOBATDOSH verifikator EMAS) chaqiradi, natijani
+        `task.verification_status`/`verification_reason`ga yozadi.
+
+        Returns:
+            `True` — VERIFIED yoki NOT_REQUIRED (task DONE bo'lishi
+            mumkin). `False` — VERIFICATION_FAILED yoki
+            VERIFICATION_UNCERTAIN (task DONE BO'LMASLIGI kerak).
+        """
+        if task.tool is None:
+            task.verification_status = VerificationOutcome.NOT_REQUIRED.value
+            return True
+        if self._verifier is None:
+            # Verifier ulanmagan — eski xatti-harakat (faqat success
+            # flag). `verification_status` `None` qoladi (halol: "biz
+            # bu haqda hech narsa bilmaymiz", NOT_REQUIRED bilan
+            # ARALASHTIRILMAYDI — u "so'ralmagan", bu esa "vosita yo'q").
+            return True
+
+        synthetic_step = PlanStep(
+            position=task.position,
+            description=task.title,
+            tool_name=task.tool,
+            expected_outcome=task.expected_outcome,
+            permission_required=PermissionLevel.READ,
+            trust_context=TrustLevel.SYSTEM,
+        )
+        synthetic_result = ToolResult(
+            tool_name=task.tool,
+            success=True,
+            output=result.output,
+            error=None,
+        )
+        verification = await self._verifier.verify_step(synthetic_step, synthetic_result)
+        outcome = classify_verification(verification)
+        task.verification_status = outcome.value
+        task.verification_reason = (verification.reason or "")[:500]
+        return outcome in (VerificationOutcome.VERIFIED, VerificationOutcome.NOT_REQUIRED)
 
     def _tool_is_idempotent(self, tool_name: str | None) -> bool:
         """`Tool.idempotent` bayrog'ini tekshiradi (JB-11 restart xavfsizligi).

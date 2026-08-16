@@ -26,6 +26,7 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import structlog
@@ -37,6 +38,61 @@ if TYPE_CHECKING:
     from zet.llm.base import LLMProvider
 
 log = structlog.get_logger(__name__)
+
+
+class VerificationOutcome(StrEnum):
+    """JB-14 PART I — `Verification`ning TaskGraph darajasidagi talqini.
+
+    NEGA yangi enum, `Verification.ok`ning o'zi YETARLI EMAS: `ok=True`
+    ikkita TUBDAN farqli holatni yashiradi — "haqiqatan tasdiqlandi"
+    (masalan matn/regex mos keldi, `confidence>=0.9`) va "tool
+    muvaffaqiyat deb aytdi, lekin biz buni HAQIQATDA tekshira olmadik"
+    (uzoq `expected_outcome`, LLM-judge yo'q — fail-open, `confidence=0.6`).
+    Ikkinchisi — spec so'zlashuvidagi "UNCERTAIN": Mission bu holatni
+    COMPLETED emas, degan qaror qabul qilishi kerak.
+
+    `NOT_REQUIRED` — tool yo'q (fikrlash qadami) yoki `expected_outcome`
+    berilmagan (faqat success flag) hollari uchun — bu ATAYLAB "kam
+    ishonchli" emas, "tekshiruv so'ralmagan" degani.
+    """
+
+    VERIFIED = "verified"
+    VERIFICATION_FAILED = "verification_failed"
+    VERIFICATION_UNCERTAIN = "verification_uncertain"
+    NOT_REQUIRED = "not_required"
+
+
+UNCERTAIN_CONFIDENCE_THRESHOLD = 0.65
+"""Shu qiymatdan PAST `confidence` bilan kelgan `ok=True` — VERIFIED emas,
+VERIFICATION_UNCERTAIN deb hisoblanadi.
+
+NEGA aynan 0.65: `Verifier`ning mavjud confidence darajalari — 1.0
+(fikrlash/hech narsa tekshirilmagan), 0.9 (aniq matn mos keldi), 0.85
+(regex mos keldi), 0.8 (faqat success flag, expected_outcome yo'q),
+0.75 (LLM-judge tasdiqladi), 0.6 (uzoq tavsif, LLM-judge YO'Q — ko'r
+fail-open). 0.65 chegara — 0.6 (haqiqiy noaniqlik) bilan 0.75+ (haqiqiy
+tekshiruv, LLM yoki qisqa shablon) orasidan AYNAN o'tadi."""
+
+
+def classify_verification(
+    verification: Verification, *, required: bool = True
+) -> VerificationOutcome:
+    """`Verification` → `VerificationOutcome` (JB-14 PART I §2).
+
+    Args:
+        verification: `Verifier.verify_step()`/`verify_run()` natijasi.
+        required: `False` bo'lsa — tekshiruv umuman so'ralmagan edi
+            (masalan tool yo'q/faqat fikrlash qadami) — natija har doim
+            `NOT_REQUIRED` (Verification'ning o'zi `ok=True` bo'lsa ham).
+    """
+    if not required:
+        return VerificationOutcome.NOT_REQUIRED
+    if not verification.ok:
+        return VerificationOutcome.VERIFICATION_FAILED
+    if verification.confidence < UNCERTAIN_CONFIDENCE_THRESHOLD:
+        return VerificationOutcome.VERIFICATION_UNCERTAIN
+    return VerificationOutcome.VERIFIED
+
 
 MAX_LITERAL_WORDS = 3
 """Shu so'zdan ko'p bo'lgan `expected_outcome` — TAVSIF, shablon emas.

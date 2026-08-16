@@ -1078,7 +1078,18 @@ def _build_task_graph_executor(
     JB-7: `brain_model_routing_enabled` yoqilgan bo'lsa, har task uchun
     `BrainModelRouter` orqali ALOHIDA `TaskClass` tanlanadi (agentning
     statik tieridan mustaqil) — `core/model_routing.py`ga qarang.
+
+    JB-14 PART I/II: `verifier` — Orchestrator'ning O'ZI ishlatadigan
+    (`_build_verifier_judge`, T1_FREE tier) bilan BIR XIL — YANGI,
+    raqobatdosh verifikator EMAS. `agent_selector` — `CapabilityRegistryComposer`
+    ham ishlatadigan `AgentSelector`ning yangi nusxasi (statsiz, holat
+    saqlamaydi — har chaqiruvda `AgentRegistry`ning JORIY holatini
+    o'qiydi) — TOOL-sinfidagi xatolardan keyin muqobil agent tanlash
+    uchun.
     """
+    from zet.core.agent_selector import AgentSelector
+    from zet.core.verifier import Verifier
+
     settings = get_settings()
     return TaskGraphExecutor(
         agent_registry=get_agent_registry(),
@@ -1090,6 +1101,8 @@ def _build_task_graph_executor(
         # JB-12: Mission/TaskGraph — asosiy ijro dvigateli — endi
         # killswitch'ni real tekshiradi (ilgari butunlay "ko'r" edi).
         killswitch=get_killswitch(),
+        verifier=Verifier(llm_judge_provider=_build_verifier_judge(router)),  # type: ignore[arg-type]
+        agent_selector=AgentSelector(get_agent_registry()),  # type: ignore[arg-type]
     )
 
 

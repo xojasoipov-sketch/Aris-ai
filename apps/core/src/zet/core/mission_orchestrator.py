@@ -329,6 +329,12 @@ class CapabilityBundle:
     (capability dependency grafidan olingan). `_bundle_to_tasks()` shu
     yerdan HAQIQIY `MissionTask.depends_on` DAG'ini quradi — bo'sh bo'lsa
     eski chiziqli zanjirga qaytadi."""
+    tool_expected_outcomes: dict[str, str] = field(default_factory=dict)
+    """JB-14 PART I: tool nomi → shu toolni tanlagan capability'ning
+    `description`si — `_bundle_to_tasks()` shu yerdan `MissionTask.
+    expected_outcome`ni to'ldiradi (real `Verifier.verify_step()`
+    tekshiruvi uchun). Bo'sh bo'lsa — eski xatti-harakat (`expected_
+    outcome=None`, tekshiruv faqat success flag darajasida)."""
 
 
 class CapabilityRegistryComposer:
@@ -414,7 +420,32 @@ class CapabilityRegistryComposer:
             risk_level=resolution.max_risk,
             tool_agents=tool_agents,
             tool_dependencies=_tool_dependencies_from_capabilities(resolution.capabilities),
+            tool_expected_outcomes=_tool_expected_outcomes_from_capabilities(resolution.capabilities),
         )
+
+
+def _tool_expected_outcomes_from_capabilities(capabilities: Sequence[Any]) -> dict[str, str]:
+    """Har tool uchun kutilgan natija tavsifi — capability'ning O'ZI
+    tanlagan `description`si (JB-14 PART I).
+
+    NEGA `description`, LLM-generatsiya EMAS: real evidence-based
+    tekshiruv uchun tool'ga xos "kutilgan natija" kerak, lekin buni har
+    task uchun ALOHIDA LLM chaqiruvi bilan generatsiya qilish — spec
+    §26/§30 ochiq taqiqlagan qo'shimcha xarajat ("Do not create
+    unnecessary LLM calls"). Capability'ning o'zi ALLAQACHON qisqa,
+    inson yozgan tavsifga ega (masalan "GitHub'da PR ochish, fix commit
+    va issue triage.") — bu HAQIQIY, tekshiriladigan matn, LLM chaqiruvi
+    shart emas. `Verifier._verify_against_expectation()` uzoq
+    tavsiflarni (>3 so'z) LLM-judge (ulangan bo'lsa) yoki past-ishonchli
+    fail-open (`confidence=0.6` → `VERIFICATION_UNCERTAIN`) bilan
+    boshqaradi — halol natija: "tekshirilmadi" tan olinadi, yolg'ondan
+    "tasdiqlandi" deb ko'rsatilmaydi.
+    """
+    outcomes: dict[str, str] = {}
+    for cap in capabilities:
+        for tool in cap.default_tools:
+            outcomes.setdefault(tool, cap.description)
+    return outcomes
 
 
 def _tool_dependencies_from_capabilities(capabilities: Sequence[Any]) -> dict[str, list[str]]:

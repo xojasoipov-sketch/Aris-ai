@@ -98,6 +98,27 @@ class MissionTask(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
+    # JB-14 PART I (TaskGraph real verification): task's execution result
+    # endi mustaqil ravishda tekshiriladi — `AgentRunResult.success`ning
+    # o'zi "maqsadga erishildi" degani EMAS (spec §1).
+    expected_outcome: str | None = None
+    """Kutilgan natija tavsifi — `CapabilityBundle.tool_expected_outcomes`
+    orqali (agar mavjud bo'lsa, `capability.description`dan) to'ldiriladi.
+    `None` — eski xatti-harakat (capability bundle bu maydonni bermasa),
+    `TaskGraphExecutor` bu holda tekshiruvni "faqat success flag"
+    darajasida qoldiradi (`Verifier.verify_step`ning o'zi shu holatni
+    to'g'ri boshqaradi)."""
+    verification_status: str | None = None
+    """`core.verifier.VerificationOutcome` qiymati — task DONE bo'lgach
+    to'ldiriladi. `None` — hali tekshirilmagan (yoki eski, JB-14'dan
+    oldingi checkpoint'dan tiklangan)."""
+    verification_reason: str | None = None
+    """Tekshiruv sababi (`Verification.reason`, qisqartirilgan)."""
+    failure_class: str | None = None
+    """`core.failure_classification.FailureClass` qiymati — task FAILED
+    bo'lganda to'ldiriladi (JB-14 PART II). `None` — muvaffaqiyatli yoki
+    hali klassifikatsiya qilinmagan."""
+
 
 class Mission(BaseModel):
     """Mission — strategiya (nima qilish, qanday tekshirish, nimani eslash).
@@ -167,6 +188,14 @@ class CapabilityBundleLike(Protocol):
     lekin haqiqatan ham hech qanday tool o'zaro bog'liq emas" (masalan
     ikkita mustaqil capability). Faqat BIRINCHISI eski chiziqli zanjirga
     qaytishi kerak."""
+    tool_expected_outcomes: dict[str, str]
+    """JB-14 PART I: tool nomi → shu toolni tanlagan capability'ning
+    `description`si (haqiqiy tekshiruv uchun `MissionTask.expected_outcome`
+    manbasi). Xuddi `tool_dependencies` bilan bir xil naqsh — `hasattr`
+    orqali ANIQLANADI, bo'sh `{}` esa "capability topildi, lekin tavsif
+    yo'q" degan HAQIQIY holat (eski test double'lar bu maydonni umuman
+    bilmaydi — o'sha holatda `expected_outcome` doim `None` qoladi,
+    NOL regressiya)."""
 
 
 class CapabilityRegistryLike(Protocol):
@@ -948,6 +977,33 @@ class MissionEngine:
         if result.capability_gaps:
             gaps = "; ".join(f"{g.tool}: {g.reason}" for g in result.capability_gaps)
             error_parts.append(f"capability gaps: {gaps}")
+        # JB-14 PART I/II: verifikatsiya/klassifikatsiya ma'lumoti
+        # RECOVERING xato matniga qo'shiladi — `MissionRecoveryAdapter`
+        # (T1_FREE LLM diagnos) endi "success=False" emas, HAQIQIY
+        # sababni (masalan "verifikatsiya rad etdi" vs "AUTHENTICATION
+        # xatosi") ko'radi, ko'r-ko'rona umumiy tashxis o'rniga.
+        failed_tasks = [t for t in result.tasks if t.status == StepStatus.FAILED]
+        if failed_tasks:
+            details = "; ".join(
+                f"{t.title}"
+                f"[{t.failure_class or 'unclassified'}"
+                f"{'/' + t.verification_status if t.verification_status else ''}]"
+                for t in failed_tasks
+            )
+            error_parts.append(f"failed tasks: {details}")
+            # `classify_text()` PRECIZ o'qiy oladigan token — task
+            # darajasida ALLAQACHON aniqlangan `failure_class` (haqiqiy
+            # istisno/xato turidan hosil qilingan, ANIQ) Mission
+            # darajasidagi `recover()`ga erkin matn orqali qayta
+            # taxmin qilinmasdan (lossy) o'tishi uchun. Birinchi
+            # klassifikatsiyalangan (unclassified emas) task'niki
+            # ustuvor — odatda bitta MissionTask FAILED bo'lganda
+            # yagona sabab bo'ladi.
+            first_classified = next(
+                (t.failure_class for t in failed_tasks if t.failure_class), None
+            )
+            if first_classified:
+                error_parts.append(f"failure_class={first_classified}")
         error_msg = "\n".join(error_parts)[:2000]
         mission = await self._transition(mission, MissionStatus.RECOVERING, error=error_msg)
         return mission, None
@@ -987,14 +1043,53 @@ class MissionEngine:
         return await self._transition(mission, MissionStatus.RECOVERING, error=error_msg)
 
     async def recover(self, mission: Mission, last_failure: str) -> Mission:
-        """RECOVERING → EXECUTING (yoki FAILED, max_retries oshsa).
+        """RECOVERING → EXECUTING (yoki FAILED, max_retries oshsa YOKI
+        muvaffaqiyatsizlik sinfi qayta urinishni ma'nosiz qilsa).
 
         RecoveryEngine (§2.5) tashxis qo'yadi va reja patch'ini
         qaytaradi. Berilmagan bo'lsa — fail-open: shunchaki qayta
         urinamiz. EXECUTING'ga qayta o'tganda `error`ni tozalaymiz —
         aks holda muvaffaqiyatli tugagan mission "Sabab: first attempt
         failed" bilan ko'rinardi (adversarial verify topgan bug #2).
-        """
+
+        JB-14 PART II (AUDIT FIX): ilgari BARCHA muvaffaqiyatsizlik
+        (AUTHENTICATION ham, oddiy TRANSIENT ham) BIR XIL — LLM diagnos
+        + butun task graph'ni QAYTA bajarish — yo'lidan o'tardi. Noto'g'ri
+        kredensial (masalan) `max_retries` marta LLM'dan "diagnos" so'rab,
+        har safar BIR XIL "avtorizatsiya xatosi" bilan qayta yiqilardi —
+        behuda LLM xarajati va vaqt. Endi: agar `last_failure`ning
+        klassifikatsiyasi `is_retry_futile()` bo'lsa (AUTHENTICATION/
+        AUTHORIZATION/VALIDATION/USER_REQUIRED) — DARHOL, HALOL FAILED
+        (LLM diagnos ham, qayta task-graph ijrosi ham YO'Q).
+
+        NEGA `INVALID_PLAN` bu yerda ISTISNO (task-darajasidan FARQLI):
+        `is_retry_futile()`ning ma'nosi — "AYNAN SHU narsani ko'r-ko'rona
+        qayta qilish naf bermaydi". Task darajasida bu to'g'ri (bitta
+        vazifani O'SHA yaroqsiz reja bilan qayta ishga tushirish naf
+        bermaydi). LEKIN Mission darajasida `INVALID_PLAN` uchun spec
+        §11'ning aniq tavsiyasi — REPLAN (`diagnose_and_patch()` — AYNAN
+        SHU yerda pastda, YANGI reja generatsiya qiladi, ESKISINI EMAS).
+        Shu sabab `INVALID_PLAN`ni bu yerda "futile" deb ERTA to'xtatish
+        REPLAN imkoniyatini o'zi yo'qqa chiqarar edi. `INVALID_PLAN`
+        pastdagi oddiy (chegaralangan — `_max_retries` bilan) diagnose+
+        retry yo'liga TUSHADI.
+
+        MA'LUM CHEKLOV (ochiq e'lon qilingan): spec §11 AUTHORIZATION
+        uchun "approval flow" (WAITING_APPROVAL, yangi urinish emas)ni
+        tavsiya qiladi — bu yerda soddalashtirilgan: AUTHORIZATION ham
+        boshqa "futile" sinflar bilan bir xil FAILED yo'liga tushadi,
+        alohida approval-so'rov OQIMIGA ULANMAGAN (bu — kelajakdagi ish,
+        JB-14'da ATAYLAB qilinmagan)."""
+        from zet.core.failure_classification import FailureClass, classify_failure, is_retry_futile
+
+        failure_class = classify_failure(text=last_failure)
+        if failure_class is not FailureClass.INVALID_PLAN and is_retry_futile(failure_class):
+            return await self._transition(
+                mission,
+                MissionStatus.FAILED,
+                error=f"[{failure_class.value}] qayta urinish ma'nosiz: {last_failure}"[:2000],
+            )
+
         new_count = mission.retry_count + 1
         mission = await self._repo.update(mission.id, retry_count=new_count)
         if new_count > self._max_retries:
@@ -1167,6 +1262,10 @@ def _bundle_to_tasks(bundle: CapabilityBundleLike) -> list[MissionTask]:
     tool_agents = getattr(bundle, "tool_agents", None) or {}
     supports_dag = hasattr(bundle, "tool_dependencies")
     tool_deps = bundle.tool_dependencies if supports_dag else {}
+    # JB-14 PART I: xuddi shu `hasattr` naqshi — eski test double'lar bu
+    # maydonni bilmaydi, `expected_outcome` ular uchun har doim `None`
+    # qoladi (NOL regressiya).
+    tool_outcomes = getattr(bundle, "tool_expected_outcomes", None) or {}
     tasks: list[MissionTask] = []
     position_by_tool: dict[str, int] = {name: i for i, name in enumerate(bundle.tools)}
 
@@ -1188,6 +1287,7 @@ def _bundle_to_tasks(bundle: CapabilityBundleLike) -> list[MissionTask]:
                 tool=tool_name,
                 agent=tool_agents.get(tool_name),
                 depends_on=depends_on,
+                expected_outcome=tool_outcomes.get(tool_name),
             )
         )
     return tasks
