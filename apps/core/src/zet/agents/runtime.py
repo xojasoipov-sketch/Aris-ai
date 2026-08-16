@@ -104,6 +104,11 @@ class AgentRuntime:
         tool_calls_count = 0
         steps_count = 0
         sources: list[str] = []
+        # JB-15: HAR bir tool chaqiruvining XOM (raw) `ToolResult`i —
+        # `AgentRunResult.output` (agentning matn xulosasi) EMAS,
+        # `EvidenceProvider` shu ro'yxatga muhtoj (qarang: domain/agent.py
+        # `AgentRunResult.tool_results` docstringi).
+        tool_results: list[ToolResult] = []
 
         # 1. Context assembly
         messages = self._assemble_context(spec, task, context)
@@ -154,6 +159,7 @@ class AgentRuntime:
                         sources=sources,
                         tool_calls_count=tool_calls_count,
                         steps_count=steps_count,
+                        tool_results=tool_results,
                     )
 
                 # Tool chaqiruvlarini bajarish
@@ -178,6 +184,7 @@ class AgentRuntime:
                         sources,
                     )
                     tool_calls_count += 1
+                    tool_results.append(tool_result)
 
                     # Tool natijasini kontekstga qo'shish
                     messages.append(
@@ -220,6 +227,7 @@ class AgentRuntime:
                 tool_calls_count=tool_calls_count,
                 steps_count=steps_count,
                 error=f"Emergency stop yoqilgan: {exc}",
+                tool_results=tool_results,
             )
         except AgentRuntimeError as exc:
             log.warning(
@@ -237,6 +245,7 @@ class AgentRuntime:
                 tool_calls_count=tool_calls_count,
                 steps_count=steps_count,
                 error=str(exc),
+                tool_results=tool_results,
             )
         except Exception as exc:
             log.exception("agent.run.error", agent=spec.name)
@@ -248,6 +257,7 @@ class AgentRuntime:
                 tool_calls_count=tool_calls_count,
                 steps_count=steps_count,
                 error=f"Kutilmagan xato: {type(exc).__name__}: {exc}",
+                tool_results=tool_results,
             )
 
     def _assemble_context(

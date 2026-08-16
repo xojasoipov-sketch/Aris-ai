@@ -19,6 +19,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from zet.domain.enums import AgentStatus, ModelTier, PermissionLevel, TrustLevel
+from zet.domain.tool import ToolResult
 
 
 class AgentSpec(BaseModel, frozen=True):
@@ -136,3 +137,16 @@ class AgentRunResult(BaseModel, frozen=True):
 
     metadata: dict[str, Any] = Field(default_factory=dict)
     """Qo'shimcha ma'lumot."""
+
+    tool_results: list[ToolResult] = Field(default_factory=list)
+    """JB-15 — run davomida bajarilgan HAR bir tool chaqiruvining XOM
+    (raw) natijasi, tartibda.
+
+    NEGA kerak (audit topilmasi): `output` — agentning O'ZI yozgan
+    YAKUNIY matn xulosasi (LLM tool natijasini o'z so'zi bilan qayta
+    aytib beradi), tool'ning haqiqiy strukturaviy qaytish qiymati
+    (masalan `{"message_id": 123, "path": "...", "number": 42}`) UNDA
+    YO'Q. `EvidenceProvider` (`core/evidence.py`) HAQIQIY tashqi holat
+    dalili uchun aynan shu XOM qiymatga muhtoj — agentning matn
+    paraphrase'iga emas ("agent shunday deb aytdi" ≠ "dalil"). Additive
+    maydon — default bo'sh ro'yxat, mavjud chaqiruvchilarga ta'sir yo'q."""

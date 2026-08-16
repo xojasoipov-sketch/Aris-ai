@@ -52,9 +52,14 @@ from typing import TYPE_CHECKING, Any, Protocol
 import structlog
 
 from zet.automation.executor import AgentUnavailableError, run_agent_command
+from zet.core.evidence import EvidenceProviderRegistry, EvidenceState
 from zet.core.failure_classification import FailureClass, classify_failure, is_retry_futile
 from zet.core.model_routing import BrainModelRouter, CognitiveStage, RoutingSignal
-from zet.core.verifier import VerificationOutcome, classify_verification
+from zet.core.verifier import (
+    UNCERTAIN_CONFIDENCE_THRESHOLD,
+    VerificationOutcome,
+    classify_verification,
+)
 from zet.db.base import utcnow
 from zet.domain.enums import PermissionLevel, RiskLevel, StepStatus, TaskClass, TrustLevel
 from zet.domain.plan import PlanStep
@@ -64,7 +69,9 @@ from zet.tools.registry import ToolNotFoundError
 
 if TYPE_CHECKING:
     from zet.agents.registry import AgentRegistry
+    from zet.core.evidence import Evidence
     from zet.core.mission import Mission, MissionTask
+    from zet.core.tool_substitution import ToolSubstitutionResolver
     from zet.core.verifier import Verifier
     from zet.llm.base import LLMProvider
     from zet.security.killswitch import KillSwitchState
@@ -222,6 +229,8 @@ class TaskGraphExecutor:
         killswitch: KillSwitchState | None = None,
         verifier: Verifier | None = None,
         agent_selector: AgentSelectorLike | None = None,
+        evidence_registry: EvidenceProviderRegistry | None = None,
+        tool_resolver: ToolSubstitutionResolver | None = None,
     ) -> None:
         self._agents = agent_registry
         self._tools = tool_registry
@@ -259,6 +268,17 @@ class TaskGraphExecutor:
         # retries tugagach BIR MARTA muqobil (joriy agentdan FARQLI)
         # ACTIVE agent tanlab so'nggi urinish qilinadi.
         self._agent_selector = agent_selector
+        # JB-15 PART I: berilmasa (default) — eski (JB-14) xatti-harakat
+        # (Verifier agentning matn xulosasini tekshiradi). Berilganda —
+        # `task.tool` uchun mos `EvidenceProvider` bo'lsa, tekshiruv
+        # HAQIQIY tashqi holat (fayl tizimi/GitHub GET/...) asosida
+        # bo'ladi, agentning paraphrase'i ENDI ISHLATILMAYDI.
+        self._evidence_registry = evidence_registry
+        # JB-15 PART II: berilmasa (default) — eski (JB-14) xatti-harakat
+        # (TOOL-sinf xatosida faqat muqobil AGENT sinaladi). Berilganda —
+        # muqobil AGENTdan OLDIN muqobil TOOL sinaladi (spec §13
+        # ierarxiyasi: retry → muqobil tool → muqobil agent → replan).
+        self._tool_resolver = tool_resolver
 
     async def run(
         self,
@@ -519,6 +539,7 @@ class TaskGraphExecutor:
         last_error: str | None = None
         gap: CapabilityGap | None = None
         tried_alternate_agent = False
+        tried_alternate_tool = False
         while True:
             task.status = StepStatus.RUNNING
             task.started_at = task.started_at or utcnow()
@@ -617,11 +638,49 @@ class TaskGraphExecutor:
 
             attempt += 1
             if attempt > self._max_retries:
-                # JB-14 PART II: TOOL-sinfidagi xato uchun — retries
-                # tugagach, BIR MARTA (bounded — `tried_alternate_agent`
-                # bilan qulflangan) joriy agentdan FARQLI ACTIVE agent
-                # bilan so'nggi urinish. Muqobil topilmasa (yoki
-                # bir xil agent qaytsa) — oddiy FAILED.
+                # JB-15 PART II (spec §13 ierarxiyasi — retry → muqobil
+                # TOOL → muqobil AGENT → replan): muqobil vositalarni
+                # SINAB ko'rishdan OLDIN killswitch ANIQ, ERTA
+                # tekshiriladi — pastdagi `run_agent_command()` o'zi ham
+                # har LLM/tool qadamida tekshiradi (`AgentRuntime.run()`),
+                # lekin bu yerdagi tekshiruv muqobilni hatto TANLAMAYDI
+                # ham (spec test J: "killswitch blocks alternative tool
+                # execution").
+                if self._killswitch is not None and self._killswitch.is_engaged:
+                    break
+                # JB-15 PART II: TOOL-sinfidagi xato uchun — retries
+                # tugagach, AVVAL muqobil TOOL (bounded —
+                # `tried_alternate_tool`), keyin (agar topilmasa/yordam
+                # bermasa) muqobil AGENT (JB-14, o'zgarmagan) sinaladi.
+                if (
+                    not tried_alternate_tool
+                    and failure_class is FailureClass.TOOL
+                    and self._tool_resolver is not None
+                    and task.tool
+                ):
+                    tried_alternate_tool = True
+                    caller_permission = self._agent_permission_level(task.agent)
+                    alt_tool = self._tool_resolver.find_alternative(
+                        task.tool, caller_permission=caller_permission
+                    )
+                    if alt_tool is not None:
+                        log.info(
+                            "task_graph.alternate_tool",
+                            mission_id=str(mission.id),
+                            task=task.title,
+                            old_tool=task.tool,
+                            new_tool=alt_tool.name,
+                        )
+                        task.tool = alt_tool.name
+                        scoped_tools = self._tools.subset([task.tool])
+                        command = _task_command_text(mission, task)
+                        continue
+                # JB-14 PART II: TOOL-sinfidagi xato uchun — muqobil tool
+                # topilmasa/yordam bermasa, BIR MARTA (bounded —
+                # `tried_alternate_agent` bilan qulflangan) joriy
+                # agentdan FARQLI ACTIVE agent bilan so'nggi urinish.
+                # Muqobil topilmasa (yoki bir xil agent qaytsa) — oddiy
+                # FAILED.
                 if (
                     not tried_alternate_agent
                     and failure_class is FailureClass.TOOL
@@ -659,13 +718,22 @@ class TaskGraphExecutor:
         return gap
 
     async def _verify_task_result(self, task: MissionTask, result: Any) -> bool:
-        """EXECUTE → OBSERVE → VERIFY (JB-14 PART I).
+        """EXECUTE → OBSERVE → [EvidenceProvider] → VERIFY (JB-14 PART I + JB-15 PART I).
 
-        `Verifier` berilmagan YOKI task tool'siz (faqat agent fikrlashi)
-        bo'lsa — eski xatti-harakat (`True`, tekshiruv so'ralmagan/mavjud
-        emas). Berilgan bo'lsa — mavjud `Verifier.verify_step()`ni
-        (YANGI, RAQOBATDOSH verifikator EMAS) chaqiradi, natijani
-        `task.verification_status`/`verification_reason`ga yozadi.
+        Ustuvorlik tartibi (spec §8: "Keep old behavior for tasks where
+        no external evidence provider exists"):
+            1. `task.tool is None` (faqat agent fikrlashi) — NOT_REQUIRED,
+               har doim (o'zgarmagan).
+            2. `task.tool` uchun `EvidenceProvider` MAVJUD (JB-15) —
+               HAQIQIY tashqi holat (`AgentRunResult.tool_results`dagi
+               XOM natija asosida, agentning matn paraphrase'i EMAS)
+               ustuvor. Provider mavjud, lekin agent tool'ni HAQIQATDA
+               chaqirmagan bo'lsa (masalan tool_results bo'sh) — bu ham
+               UNCERTAIN (soxta VERIFIED HECH QACHON emas).
+            3. Aks holda — eski (JB-14) yo'l: mavjud `Verifier` (agar
+               ulangan bo'lsa) agentning matn xulosasini tekshiradi.
+               `Verifier` ham ulanmagan bo'lsa — eng eski xatti-harakat
+               (`True`, faqat success flag).
 
         Returns:
             `True` — VERIFIED yoki NOT_REQUIRED (task DONE bo'lishi
@@ -675,6 +743,13 @@ class TaskGraphExecutor:
         if task.tool is None:
             task.verification_status = VerificationOutcome.NOT_REQUIRED.value
             return True
+
+        tool_name = task.tool
+        if self._evidence_registry is not None:
+            provider = self._evidence_registry.for_tool(tool_name)
+            if provider is not None:
+                return await self._verify_via_evidence(task, tool_name, result, provider)
+
         if self._verifier is None:
             # Verifier ulanmagan — eski xatti-harakat (faqat success
             # flag). `verification_status` `None` qoladi (halol: "biz
@@ -702,6 +777,36 @@ class TaskGraphExecutor:
         task.verification_reason = (verification.reason or "")[:500]
         return outcome in (VerificationOutcome.VERIFIED, VerificationOutcome.NOT_REQUIRED)
 
+    async def _verify_via_evidence(
+        self, task: MissionTask, tool_name: str, result: Any, provider: Any
+    ) -> bool:
+        """JB-15 PART I: `EvidenceProvider` orqali HAQIQIY tashqi holat
+        tekshiruvi — `_verify_task_result()`ning evidence-tarmog'i."""
+        raw_output = _last_tool_output(result, tool_name)
+        if raw_output is _NO_RAW_RESULT:
+            # Provider mavjud, lekin agent bu toolni HAQIQATDA hech
+            # qachon (muvaffaqiyatli) chaqirmagan — dalil YO'Q. Soxta
+            # VERIFIED emas, HALOL UNCERTAIN.
+            task.verification_status = VerificationOutcome.VERIFICATION_UNCERTAIN.value
+            task.verification_reason = (
+                "evidence provider mavjud, lekin agentning xom tool natijasi topilmadi"
+            )[:500]
+            return False
+
+        evidence: Evidence = await provider.observe(tool_name=tool_name, tool_output=raw_output)
+        outcome = _outcome_from_evidence(evidence)
+        task.verification_status = outcome.value
+        task.verification_reason = (evidence.reason or "")[:500]
+        log.info(
+            "task_graph.evidence_verification",
+            task=task.title,
+            tool=tool_name,
+            evidence_source=evidence.source,
+            evidence_state=evidence.state.value,
+            outcome=outcome.value,
+        )
+        return outcome in (VerificationOutcome.VERIFIED, VerificationOutcome.NOT_REQUIRED)
+
     def _tool_is_idempotent(self, tool_name: str | None) -> bool:
         """`Tool.idempotent` bayrog'ini tekshiradi (JB-11 restart xavfsizligi).
 
@@ -717,6 +822,20 @@ class TaskGraphExecutor:
             return self._tools.get(tool_name).idempotent
         except ToolNotFoundError:
             return False
+
+    def _agent_permission_level(self, agent_name: str | None) -> PermissionLevel:
+        """Agentning `AgentSpec.permission_level`i — muqobil TOOL tanlashda
+        (`ToolSubstitutionResolver.find_alternative()`) ruxsatni OSHIRIB
+        yubormaslik uchun (V-31). Noma'lum/topilmagan agent — XAVFSIZ
+        TOMONDA xato qiladi: `PermissionLevel.READ` (eng past — muqobil
+        tool tanlanmaydi, chunki deyarli hamma WRITE/EXECUTE tool undan
+        yuqori)."""
+        if not agent_name:
+            return PermissionLevel.READ
+        try:
+            return self._agents.get_active(agent_name).spec.permission_level
+        except Exception:
+            return PermissionLevel.READ
 
     def _route_task(self, mission: Mission, task: MissionTask, command: str) -> TaskClass | None:
         """JB-7: task uchun `TaskClass` ni tanlaydi (`self._model_router` bo'lsa).
@@ -744,6 +863,47 @@ class TaskGraphExecutor:
             reason=decision.reason,
         )
         return decision.task_class
+
+
+_NO_RAW_RESULT = object()
+"""Sentinel — `AgentRunResult.tool_results`da `task.tool` uchun HECH
+qanday yozuv topilmadi (agent bu toolni HAQIQATDA hech qachon
+chaqirmagan). `None`dan farqli — tool XOM natijasi `None` BO'LISHI
+mumkin (masalan `output=None` qaytargan tool), shu sabab alohida
+sentinel kerak (`None`ni "topilmadi" bilan aralashtirmaslik uchun)."""
+
+
+def _last_tool_output(result: Any, tool_name: str) -> Any:
+    """`AgentRunResult.tool_results`dan `tool_name`ning ENG SO'NGGI XOM
+    natijasi (JB-15) — agentning matn paraphrase'i EMAS.
+
+    Muvaffaqiyatli (`success=True`) yozuv ustuvor (dalil sifatida
+    ma'noliroq); umuman bo'lmasa — SO'NGGI muvaffaqiyatsiz yozuv
+    (masalan tool xato qaytargan bo'lsa, shuni ham "dalil" — NOT_FOUND
+    xulosasi uchun asos — sifatida ishlatish mumkin). Umuman topilmasa
+    — `_NO_RAW_RESULT` sentinel."""
+    tool_results = getattr(result, "tool_results", None) or []
+    matching = [r for r in tool_results if r.tool_name == tool_name]
+    if not matching:
+        return _NO_RAW_RESULT
+    successful = [r for r in matching if r.success]
+    return (successful[-1] if successful else matching[-1]).output
+
+
+def _outcome_from_evidence(evidence: Evidence) -> VerificationOutcome:
+    """`Evidence` → `VerificationOutcome` (JB-15 PART I).
+
+    Mavjud `UNCERTAIN_CONFIDENCE_THRESHOLD`ni (`core/verifier.py`, JB-14)
+    QAYTA ISHLATADI — yangi ishonch shkalasi ixtiro qilinmagan."""
+    if (
+        evidence.state == EvidenceState.FOUND
+        and evidence.authoritative
+        and evidence.confidence >= UNCERTAIN_CONFIDENCE_THRESHOLD
+    ):
+        return VerificationOutcome.VERIFIED
+    if evidence.state == EvidenceState.NOT_FOUND and evidence.authoritative:
+        return VerificationOutcome.VERIFICATION_FAILED
+    return VerificationOutcome.VERIFICATION_UNCERTAIN
 
 
 def _suggest_role(tool: str) -> str:

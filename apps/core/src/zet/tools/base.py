@@ -112,6 +112,26 @@ class Tool(ABC):
         return True
 
     @property
+    def capability_tag(self) -> str | None:
+        """Semantik amal turi — muqobil (substitutable) tool qidirish
+        uchun (JB-15 PART II, `core.tool_substitution.ToolSubstitutionResolver`).
+
+        Default `None` — "bu tool hech qanday boshqasi bilan avtomatik
+        almashtirilmasin" degani (xavfsiz tomonda xato). Faqat AYNAN BIR
+        XIL amalni bajaradigan (bir xil kirish/kontrakt semantikasi)
+        tool'lar BIR XIL tegni olishi kerak — masalan ikkita HAR XIL
+        "kanalga post joylash" tool'i (biri matn, biri rasm talab qilsa)
+        BIR XIL teg OLMASLIGI kerak, chunki ular o'zaro shaffof
+        almashtirilmaydi (spec §12: "Compatibility must be explicit").
+
+        Mavjud maydonlar bilan DUBLIKAT EMAS: `permission_level`
+        (READ/WRITE farqi), `risk_level` va `idempotent` ALLAQACHON
+        xavfsizlik o'lchovlarini beradi — `capability_tag` FAQAT "qaysi
+        ish", ular esa "qanday xavfli/qaytarib bo'ladimi" javob beradi.
+        """
+        return None
+
+    @property
     def timeout_s(self) -> int:
         """Maksimal bajarilish vaqti (sekundda). Default: 30."""
         return 30

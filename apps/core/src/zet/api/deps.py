@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     # qilinadi (aylanma importdan qochish: core.brain → core.mission →
     # core.orchestrator zanjiri).
     from zet.core.brain import Brain, MissionRunner
+    from zet.core.evidence import EvidenceProviderRegistry
     from zet.core.mission import Mission
     from zet.memory.store import MemoryStore
 
@@ -1048,6 +1049,42 @@ def _build_world_state_provider(settings: Settings) -> Callable[[], Awaitable[st
     return _provider
 
 
+def _build_evidence_registry(tool_registry: ToolRegistry) -> EvidenceProviderRegistry:
+    """JB-15 PART I: HAQIQIY `EvidenceProviderRegistry` — `tool_registry`da
+    ALLAQACHON ro'yxatdan o'tgan tool NUSXALARINI qayta ishlatadi (yangi
+    HTTP klient/token/vault-yo'l QURILMAYDI).
+
+    Har bir provider `try/except ToolNotFoundError` bilan himoyalangan —
+    kelajakda kimdir `build_default_registry()`ni o'zgartirib, biror
+    tool'ni chiqarib tashlasa, bu funksiya QOTIB QOLMAYDI (fail-open: shu
+    bitta provider ro'yxatga qo'shilmaydi, qolganlari ishlayveradi)."""
+    from zet.core.evidence import (
+        CameraEvidenceProvider,
+        EvidenceProviderRegistry,
+        FilesystemEvidenceProvider,
+        GitHubEvidenceProvider,
+        InstagramEvidenceProvider,
+        TelegramEvidenceProvider,
+    )
+    from zet.tools.registry import ToolNotFoundError
+
+    registry = EvidenceProviderRegistry()
+    registry.register(FilesystemEvidenceProvider())
+    registry.register(TelegramEvidenceProvider())
+    registry.register(CameraEvidenceProvider())
+    try:
+        registry.register(GitHubEvidenceProvider(tool_registry.get("github.read")))
+    except ToolNotFoundError:
+        log.warning("evidence_registry.github_read_missing")
+    try:
+        registry.register(
+            InstagramEvidenceProvider(tool_registry.get("instagram.recent_media"))
+        )
+    except ToolNotFoundError:
+        log.warning("evidence_registry.instagram_recent_media_missing")
+    return registry
+
+
 def _build_task_graph_executor(
     router: ModelRouter,
     *,
@@ -1086,14 +1123,26 @@ def _build_task_graph_executor(
     saqlamaydi — har chaqiruvda `AgentRegistry`ning JORIY holatini
     o'qiydi) — TOOL-sinfidagi xatolardan keyin muqobil agent tanlash
     uchun.
+
+    JB-15 PART I: `evidence_registry` — `get_tool_registry()`da
+    ALLAQACHON ro'yxatdan o'tgan tool NUSXALARINI qayta ishlatadi
+    (`note.write`, `github.read`, `telegram.channel_post`,
+    `instagram.recent_media`, `camera.snapshot`) — yangi HTTP klient/
+    token QURILMAYDI. `_build_evidence_registry()`ga qarang.
+
+    JB-15 PART II: `tool_resolver` — `get_tool_registry()`NING O'ZI
+    ustida ishlaydi (ikkinchi ToolRegistry EMAS) — `Tool.capability_tag`
+    metadata asosida muqobil tool qidiradi.
     """
     from zet.core.agent_selector import AgentSelector
+    from zet.core.tool_substitution import ToolSubstitutionResolver
     from zet.core.verifier import Verifier
 
     settings = get_settings()
+    tool_registry = get_tool_registry()
     return TaskGraphExecutor(
         agent_registry=get_agent_registry(),
-        tool_registry=get_tool_registry(),
+        tool_registry=tool_registry,
         permission_policy=get_permission_policy(),
         llm_provider=RoutedLLMProvider(router, is_autonomous=True),
         agent_provisioner=_build_agent_provisioning_service(session),
@@ -1103,6 +1152,8 @@ def _build_task_graph_executor(
         killswitch=get_killswitch(),
         verifier=Verifier(llm_judge_provider=_build_verifier_judge(router)),  # type: ignore[arg-type]
         agent_selector=AgentSelector(get_agent_registry()),  # type: ignore[arg-type]
+        evidence_registry=_build_evidence_registry(tool_registry),
+        tool_resolver=ToolSubstitutionResolver(tool_registry),
     )
 
 
