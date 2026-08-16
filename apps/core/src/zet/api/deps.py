@@ -26,6 +26,7 @@ from zet.commerce.repository import CommerceRepository
 from zet.config import Settings, get_settings
 from zet.core.agent_provisioning import AgentProvisioningPolicy, AgentProvisioningService
 from zet.core.executor import Executor
+from zet.core.model_routing import BrainModelRouter
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.recovery import RecoveryEngine
 from zet.core.state import CoreState
@@ -1035,13 +1036,19 @@ def _build_task_graph_executor(
     endi mavjud `AgentFactory` pipeline'iga ulanadi — `session` shu
     sabab talab qilinadi (Factory yaratgan agent DB'ga yozilishi uchun,
     `AgentRepository` orqali — restart'da yo'qolmasin).
+
+    JB-7: `brain_model_routing_enabled` yoqilgan bo'lsa, har task uchun
+    `BrainModelRouter` orqali ALOHIDA `TaskClass` tanlanadi (agentning
+    statik tieridan mustaqil) — `core/model_routing.py`ga qarang.
     """
+    settings = get_settings()
     return TaskGraphExecutor(
         agent_registry=get_agent_registry(),
         tool_registry=get_tool_registry(),
         permission_policy=get_permission_policy(),
         llm_provider=RoutedLLMProvider(router, is_autonomous=True),
         agent_provisioner=_build_agent_provisioning_service(session),
+        model_router=BrainModelRouter() if settings.brain_model_routing_enabled else None,
     )
 
 

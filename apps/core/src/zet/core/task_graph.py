@@ -52,8 +52,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 import structlog
 
 from zet.automation.executor import AgentUnavailableError, run_agent_command
+from zet.core.model_routing import BrainModelRouter, CognitiveStage, RoutingSignal
 from zet.db.base import utcnow
-from zet.domain.enums import RiskLevel, StepStatus
+from zet.domain.enums import RiskLevel, StepStatus, TaskClass
 from zet.security.risk import risk_for
 
 if TYPE_CHECKING:
@@ -195,6 +196,7 @@ class TaskGraphExecutor:
         permission_policy: PermissionPolicy,
         llm_provider: LLMProvider | None = None,
         agent_provisioner: AgentProvisionerLike | None = None,
+        model_router: BrainModelRouter | None = None,
         max_retries: int = 1,
         task_timeout_s: int | None = 120,
     ) -> None:
@@ -209,6 +211,11 @@ class TaskGraphExecutor:
         # ZAHOTI (qo'shimcha mission-level retry kutmasdan) yangi agent
         # bilan davom ettiriladi.
         self._agent_provisioner = agent_provisioner
+        # JB-7: berilmasa (default) — xatti-harakat AYNAN JB-5/6'dagidek
+        # (`run_agent_command` `agent.model_policy`ning STATIK tieriga
+        # tayanadi). Berilganda — har task uchun ALOHIDA, kontent-
+        # asoslangan `TaskClass` tanlanadi (`_task_class_for(task)`).
+        self._model_router = model_router
         self._max_retries = max_retries
         self._task_timeout_s = task_timeout_s
 
@@ -371,6 +378,7 @@ class TaskGraphExecutor:
 
         scoped_tools = self._tools.subset([task.tool]) if task.tool else self._tools
         command = _task_command_text(mission, task)
+        task_class_override = self._route_task(mission, task, command)
 
         attempt = 0
         last_error: str | None = None
@@ -387,6 +395,7 @@ class TaskGraphExecutor:
                     permission_policy=self._permissions,
                     timeout_s=self._task_timeout_s,
                     provider=self._llm_provider,
+                    task_class_override=task_class_override,
                 )
             except AgentUnavailableError as exc:
                 # Reja tuzilgandan beri agent PAUSED/o'chirilgan bo'lishi
@@ -447,6 +456,33 @@ class TaskGraphExecutor:
         task.error = last_error or "nomalum xato"
         task.completed_at = utcnow()
         return gap
+
+    def _route_task(self, mission: Mission, task: MissionTask, command: str) -> TaskClass | None:
+        """JB-7: task uchun `TaskClass` ni tanlaydi (`self._model_router` bo'lsa).
+
+        Berilmasa (`None`, default) — `run_agent_command()`ga
+        `task_class_override=None` uzatiladi, ya'ni ESKI xatti-harakat
+        (agent.model_policy statik tieri) o'zgarmaydi.
+        """
+        if self._model_router is None:
+            return None
+        signal = RoutingSignal(
+            stage=CognitiveStage.TASK_EXECUTION,
+            tool=task.tool,
+            risk_level=risk_for(task.tool),
+            text_length=len(command),
+            requires_tools=bool(task.tool),
+        )
+        decision = self._model_router.route(signal)
+        log.info(
+            "task_graph.model_routed",
+            mission_id=str(mission.id),
+            task=task.title,
+            tool=task.tool,
+            task_class=decision.task_class.value,
+            reason=decision.reason,
+        )
+        return decision.task_class
 
 
 def _suggest_role(tool: str) -> str:

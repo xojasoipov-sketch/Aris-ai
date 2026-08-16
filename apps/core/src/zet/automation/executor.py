@@ -33,6 +33,7 @@ from zet.agents.registry import AgentNotActiveError, AgentNotFoundError, AgentRe
 from zet.agents.runtime import AgentRuntime
 from zet.automation.workflow import WorkflowChain, WorkflowRunner, WorkflowStatus
 from zet.domain.agent import AgentRunResult
+from zet.domain.enums import TaskClass
 from zet.llm.base import LLMProvider
 from zet.llm.fake import FakeProvider
 from zet.llm.routed_provider import task_class_for_tier
@@ -55,13 +56,24 @@ async def run_agent_command(
     permission_policy: PermissionPolicy,
     timeout_s: int | None = None,
     provider: LLMProvider | None = None,
+    task_class_override: TaskClass | None = None,
 ) -> AgentRunResult:
     """Bitta agent buyrug'ini haqiqiy `AgentRuntime` orqali bajarish va metrikani yozish.
 
     `provider` berilmasa — `FakeProvider()` (default, testlar va eski
     chaqiruvchilar uchun o'zgarmagan xatti-harakat). Real LLM uchun
     chaqiruvchi `RoutedLLMProvider(router)` uzatishi kerak — `model`
-    parametri `agent.model_policy` asosida avtomatik hisoblanadi.
+    parametri odatda `agent.model_policy` asosida avtomatik hisoblanadi.
+
+    `task_class_override` (JB-7): berilsa, `agent.model_policy`ning
+    STATIK tier'i o'rniga shu `TaskClass` ishlatiladi. NEGA kerak:
+    `agent.model_policy` butun agent uchun BIR MARTA belgilangan — ikkita
+    turli task (biri oddiy `weather.now`, ikkinchisi murakkab `github.write`
+    reasoning) BIR XIL agent orqali bajarilsa ham, ular haqiqatda TURLI
+    reasoning chuqurligi talab qilishi mumkin. Chaqiruvchi (masalan
+    `TaskGraphExecutor`, `core.model_routing.BrainModelRouter` orqali)
+    har bitta vazifa uchun ALOHIDA, kontent-asoslangan qaror bera oladi.
+    Berilmasa (default `None`) — eski xatti-harakat (agent tier) o'zgarmaydi.
 
     Raises:
         AgentUnavailableError: agent mavjud emas yoki ACTIVE emas.
@@ -72,11 +84,18 @@ async def run_agent_command(
     except (AgentNotFoundError, AgentNotActiveError) as exc:
         raise AgentUnavailableError(str(exc)) from exc
 
+    if task_class_override is not None:
+        model = task_class_override.value
+    elif provider:
+        model = task_class_for_tier(state.spec.model_policy).value
+    else:
+        model = "fake"
+
     runtime = AgentRuntime(
         provider=provider or FakeProvider(),
         tool_registry=tool_registry,
         permission_policy=permission_policy,
-        model=task_class_for_tier(state.spec.model_policy).value if provider else "fake",
+        model=model,
     )
     coro = runtime.run(state.spec, command)
     result = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)

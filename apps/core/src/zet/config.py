@@ -191,6 +191,13 @@ class Settings(BaseSettings):
     MEDIUM) — agent yaratiladi, lekin ACTIVE emas: inson
     `PATCH /agents/{name}/status {activate}` orqali tasdiqlashi kerak."""
 
+    # ── Brain-level Model Routing (JB-7, V-29) ──────────────────────
+    brain_model_routing_enabled: bool = Field(default=True)
+    """Task Graph'da har task uchun ALOHIDA, kontent-asoslangan `TaskClass`
+    tanlansinmi (`core.model_routing.BrainModelRouter`). `False` — JB-5/6
+    xatti-harakati (agent.model_policy statik tieri, task mazmunidan
+    qat'i nazar)."""
+
     # ── Brain marshrutlash (JB-2) ──────────────────────────────────
     brain_goal_missions: bool = Field(default=True)
     """Ko'p qadamli MAQSAD (`request_kind=goal`) Mission qatlamiga ketsinmi.
