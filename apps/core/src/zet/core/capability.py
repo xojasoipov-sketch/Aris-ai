@@ -527,6 +527,30 @@ def builtin_capabilities() -> list[Capability]:
 
     Har capability halollik qoidasiga muvofiq belgilangan
     integration_status bilan chiqadi (REAL/PARTIAL/REQUIRES_API/...).
+
+    JB-13 Gap #3 AUDIT FIX: `default_tools` ilgari 20 tadan ~14 tasida
+    `ToolRegistry`da UMUMAN mavjud bo'lmagan nomlarga ishora qilardi
+    (masalan `instagram.publish` — haqiqiy nomi `instagram.publish_photo`;
+    `telegram.send` — umuman yo'q, eng yaqini `telegram.channel_post`).
+    Bu — jimgina xavfli edi: `MissionEngine.execute()` (JB-4) `mission.
+    tools`ni `ToolRegistry.subset()`ga uzatadi — noma'lum nom `subset()`
+    ichida xato beradi, bu esa FAIL-OPEN tarzda YUTILADI va Executor
+    TO'LIQ (cheklanmagan) global registry'ga qaytadi — ya'ni least-
+    privilege scoping (JB-4'ning butun maqsadi) o'sha capability uchun
+    JIMGINA ISHLAMAY QOLARDI. Endi HAR bir `default_tools` yozuvi
+    quyidagi ikki qoidadan biriga muvofiq:
+        1. Haqiqiy tool nomiga TUZATILDI (yaqin ekvivalent mavjud bo'lsa
+           — masalan `screen.capture` → `desktop.screenshot`).
+        2. Hech qanday haqiqiy ekvivalent yo'q bo'lsa — RO'YXATDAN
+           OLIB TASHLANDI (masalan `shell.run`, `email.send`,
+           `cron.create` — bunday tool umuman mavjud emas). Capability
+           o'zining `integration_status`i (PARTIAL/REQUIRES_API/
+           REQUIRES_EXTERNAL) orqali "hali to'liq real emas"ligini
+           allaqachon e'lon qiladi — soxta tool nomi bilan "bor" deb
+           ko'rsatish o'rniga halol bo'sh/qisqargan ro'yxat qoldirildi.
+        `test_capability_tools_resolve.py` — barcha 20 capability uchun
+        BUTUN `default_tools` ro'yxati haqiqiy `ToolRegistry`da
+        topilishini tasdiqlaydigan validatsiya testi.
     """
     return [
         Capability(
@@ -549,7 +573,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["files"],
             actions=["moodboard", "design", "review", "export"],
             default_agents=["design"],
-            default_tools=["image.generate", "note.write"],
+            # JB-13: `image.generate` — hech qanday shunday tool mavjud
+            # emas (ToolRegistry'da yo'q), ro'yxatdan olib tashlandi.
+            default_tools=["note.write"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.LOW,
             tags=["marketing", "creative"],
@@ -575,7 +601,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["metrics"],
             actions=["collect", "aggregate", "report"],
             default_agents=["analytics"],
-            default_tools=["metrics.query", "note.write"],
+            # JB-13: `metrics.query` — hech qanday shunday tool mavjud
+            # emas, ro'yxatdan olib tashlandi.
+            default_tools=["note.write"],
             permission_level=PermissionLevel.READ,
             risk_level=RiskLevel.LOW,
             verification_strategy=VerificationStrategy.METRIC_THRESHOLD,
@@ -589,7 +617,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["obsidian"],
             actions=["research", "design", "approve"],
             default_agents=["design", "strategy"],
-            default_tools=["note.write", "image.generate"],
+            # JB-13: `image.generate` — hech qanday shunday tool mavjud
+            # emas, ro'yxatdan olib tashlandi.
+            default_tools=["note.write"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.LOW,
             provides=["brand_kit"],
@@ -636,7 +666,11 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["files", "calendar"],
             actions=["research", "design", "write", "publish", "analyze"],
             default_agents=["smm", "content", "design", "analytics"],
-            default_tools=["instagram.publish", "image.generate", "note.write"],
+            # JB-13: `instagram.publish` haqiqiy nomi `instagram.
+            # publish_photo` (audit topilmasi, spec'da misol sifatida
+            # keltirilgan) — tuzatildi. `image.generate` — mavjud emas,
+            # olib tashlandi.
+            default_tools=["instagram.publish_photo", "note.write"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.MEDIUM,
             verification_strategy=VerificationStrategy.API_ECHO,
@@ -651,7 +685,10 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["obsidian"],
             actions=["draft", "send", "reply"],
             default_agents=["communication"],
-            default_tools=["telegram.send"],
+            # JB-13: `telegram.send` — bunday umumiy nom mavjud emas;
+            # eng yaqin haqiqiy ekvivalent — `telegram.channel_post`
+            # (broadcast_channel/send_message outcome'lariga mos).
+            default_tools=["telegram.channel_post"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.MEDIUM,
             verification_strategy=VerificationStrategy.API_ECHO,
@@ -665,7 +702,11 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["obsidian"],
             actions=["plan", "write", "reach_out", "track"],
             default_agents=["sales", "content", "analytics"],
-            default_tools=["note.write", "email.send", "crm.upsert"],
+            # JB-13: `email.send` — hech qanday shunday tool mavjud
+            # emas, olib tashlandi. `crm.upsert` — bunday umumiy nom
+            # yo'q; "follow_up_leads" outcome'ga eng mos haqiqiy tool —
+            # `crm.lead_create`.
+            default_tools=["note.write", "crm.lead_create"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.MEDIUM,
             tags=["sales"],
@@ -678,7 +719,11 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["github"],
             actions=["design", "wire", "test", "monitor"],
             default_agents=["automation", "developer"],
-            default_tools=["cron.create", "webhook.register", "github.write"],
+            # JB-13: `cron.create`/`webhook.register` — hech qanday
+            # shunday tool mavjud emas (Scheduler DB'da `automation/
+            # scheduler.py` orqali boshqariladi, alohida tool sifatida
+            # ochilmagan), olib tashlandi.
+            default_tools=["github.write"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.MEDIUM,
             tags=["devops"],
@@ -691,7 +736,11 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["calendar"],
             actions=["plan", "publish", "respond", "measure"],
             default_agents=["smm", "content", "analytics"],
-            default_tools=["instagram.publish", "telegram.send", "metrics.query"],
+            # JB-13: `instagram.publish`→`instagram.publish_photo`,
+            # `telegram.send`→`telegram.channel_post` (yuqoridagi
+            # izohlarga qarang). `metrics.query` — mavjud emas, olib
+            # tashlandi.
+            default_tools=["instagram.publish_photo", "telegram.channel_post"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.MEDIUM,
             dependencies=["content", "analytics"],
@@ -705,7 +754,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["camera"],
             actions=["query", "subscribe", "analyze"],
             default_agents=["vision"],
-            default_tools=["camera.snapshot", "vision.analyze"],
+            # JB-13: `vision.analyze` — bunday umumiy nom mavjud emas;
+            # eng yaqin haqiqiy tool — `vision.ocr` (matn ajratish).
+            default_tools=["camera.snapshot", "vision.ocr"],
             permission_level=PermissionLevel.READ,
             risk_level=RiskLevel.MEDIUM,
             verification_strategy=VerificationStrategy.VISUAL_DIFF,
@@ -719,7 +770,10 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["files"],
             actions=["shell", "fs", "screen"],
             default_agents=["computer"],
-            default_tools=["shell.run", "fs.write", "screen.capture"],
+            # JB-13: `shell.run`/`fs.write` — hech qanday shunday tool
+            # mavjud emas (xavfsizlik sababli local shell/fs ochilmagan).
+            # `screen.capture` haqiqiy nomi — `desktop.screenshot`.
+            default_tools=["desktop.screenshot"],
             permission_level=PermissionLevel.EXECUTE,
             risk_level=RiskLevel.HIGH,
             verification_strategy=VerificationStrategy.LOG_INSPECTION,
@@ -733,7 +787,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["github"],
             actions=["build", "deploy", "verify", "rollback"],
             default_agents=["deployer", "qa"],
-            default_tools=["deploy.push", "deploy.rollback"],
+            # JB-13: `deploy.rollback` — hech qanday shunday tool mavjud
+            # emas (faqat `deploy.push` ro'yxatdan o'tgan), olib tashlandi.
+            default_tools=["deploy.push"],
             permission_level=PermissionLevel.EXECUTE,
             risk_level=RiskLevel.HIGH,
             verification_strategy=VerificationStrategy.HTTP_CHECK,
@@ -775,7 +831,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["github"],
             actions=["scan", "recommend", "apply"],
             default_agents=["security"],
-            default_tools=["security.scan", "github.write"],
+            # JB-13: `security.scan` — hech qanday shunday tool mavjud
+            # emas, olib tashlandi.
+            default_tools=["github.write"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.HIGH,
             verification_strategy=VerificationStrategy.TEST_SUITE,
@@ -789,7 +847,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["files"],
             actions=["record", "project", "report"],
             default_agents=["finance"],
-            default_tools=["ledger.write", "note.write"],
+            # JB-13: `ledger.write` — hech qanday shunday tool mavjud
+            # emas, olib tashlandi.
+            default_tools=["note.write"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.MEDIUM,
             verification_strategy=VerificationStrategy.HUMAN_REVIEW,
@@ -803,7 +863,9 @@ def builtin_capabilities() -> list[Capability]:
             required_context_sources=["obsidian"],
             actions=["draft", "send", "summarize"],
             default_agents=["communication"],
-            default_tools=["email.send", "telegram.send", "note.write"],
+            # JB-13: `email.send` — mavjud emas, olib tashlandi.
+            # `telegram.send`→`telegram.channel_post`.
+            default_tools=["telegram.channel_post", "note.write"],
             permission_level=PermissionLevel.WRITE,
             risk_level=RiskLevel.LOW,
             tags=["communication"],

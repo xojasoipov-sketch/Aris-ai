@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -328,6 +329,20 @@ class MemoryStoreLike(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class _RunReconciliation:
+    """JB-13 Gap #1 — `MissionEngine._reconcile_run()` natijasi.
+
+    `outcome` — spec so'zlashuvidagi to'rt qiymatdan biri: "SAFE_TO_RESUME",
+    "ALREADY_COMPLETED", "NON_IDEMPOTENT_UNCERTAIN", "UNKNOWN". Qolgan
+    maydonlar outcome'ga qarab to'ldiriladi (ixtiyoriy — bo'lmasa `None`)."""
+
+    outcome: str
+    run_id: uuid.UUID | None = None
+    record: RunRecord | None = None
+    reason: str | None = None
+
+
 class MissionEngine:
     """Mission fazalari bo'yicha driver — Orchestrator'ni yuqoridan boshqaradi.
 
@@ -536,23 +551,40 @@ class MissionEngine:
         return await self._transition(mission, MissionStatus.EXECUTING)
 
     async def execute(self, mission: Mission) -> tuple[Mission, RunRecord | None]:
-        """EXECUTING → VERIFYING (yoki WAITING_APPROVAL / FAILED).
+        """EXECUTING → VERIFYING (yoki WAITING_APPROVAL / FAILED / RECOVERING).
 
         JB-5: `mission.tasks`da 2+ task bo'lsa VA `task_graph_executor`
         berilgan bo'lsa — Task Graph yo'liga o'tiladi (`_execute_task_graph`,
-        har task alohida agent/tool bilan, dependency bo'yicha bajariladi).
+        har task alohida agent/tool bilan, dependency bo'yicha bajariladi;
+        bu yo'l allaqachon JB-11'dan beri restart-xavfsiz — RUNNING'da
+        qolgan idempotent bo'lmagan task avtomatik qayta ishga
+        tushirilmaydi, `_tool_is_idempotent` tekshiruviga qarang).
         Aks holda (0-1 task yoki executor berilmagan) — eski xatti-harakat:
         butun mission BITTA Command sifatida Orchestrator.start()'ga
         uzatiladi. Bu — NOL regressiya kafolati: mavjud single-task
         missionlar (yoki hali `task_graph_executor` ulanmagan test/deploy
         muhitlari) aynan eski yo'l bilan ishlaydi.
+
+        JB-13 Gap #1 (EXECUTING run-level recovery, ENG YUQORI PRIORITET):
+        ilgari bu yo'l HAR DOIM `orchestrator.start()`ni SO'ZSIZ chaqirardi
+        — agar `execute()` mission crash/restart'dan keyin qayta chaqirilsa
+        (mission.status hali EXECUTING, chunki avvalgi urinish tugallanmagan
+        edi), bu YANGI, RAQOBATDOSH Orchestrator Run boshlardi, garchi
+        avvalgi run hali "tirik" (EXECUTING/AWAITING_APPROVAL) bo'lsa ham.
+        Endi — start()dan OLDIN `_reconcile_run()` mission.run_ids'dagi
+        OXIRGI run holatini DB'dan (kerak bo'lsa) tiklab tekshiradi va
+        SAFE_TO_RESUME/ALREADY_COMPLETED/NON_IDEMPOTENT_UNCERTAIN/UNKNOWN
+        siyosatiga qarab AYNAN BIR MISSION → BIR FAOL MANTIQIY IJRO
+        kafolatini beradi (JB-11 Mission lease — `try_claim`/`release_claim`
+        — bilan birga: lease ko'p WORKER orasida, bu reconciliation esa
+        BITTA worker ichida ketma-ket chaqiriqlar orasida himoya qiladi).
         """
         if len(mission.tasks) >= 2 and self._task_graph_executor is not None:
             return await self._execute_task_graph(mission)
 
-        from zet.core.orchestrator import Orchestrator  # noqa: F401 — TYPE_CHECKING
+        from zet.core.orchestrator import OrchestratorError, RunNotFoundError
         from zet.domain.command import Command, ConversationTurn
-        from zet.domain.enums import MessageRole, RunStatus, TrustLevel
+        from zet.domain.enums import MessageRole, TrustLevel
         from zet.security.killswitch import KillSwitchEngagedError
 
         # AUDIT FIX ("ko'r retry"): ilgari Command faqat `mission.objective`
@@ -601,6 +633,100 @@ class MissionEngine:
             except Exception:
                 log.warning("mission.tool_scope_failed", mission_id=str(mission.id))
 
+        # `run_store` — real `Orchestrator`da HAR DOIM bor (`.run_store`
+        # property). Ba'zi mavjud testlar `Orchestrator`ning yengil
+        # test-double'larini ishlatadi (`run_id=`/`run_store` bilmaydi) —
+        # bu holda reconciliation/pre-attach IMKONSIZ (mexanizm o'zi
+        # yo'q), shuning uchun ESKI xatti-harakatga (start() → keyin
+        # attach_run()) fail-open tushiladi (NOL regressiya kafolati).
+        run_store = getattr(self._orchestrator, "run_store", None)
+
+        if run_store is not None:
+            reconciliation = await self._reconcile_run(mission)
+
+            if reconciliation.outcome == "SAFE_TO_RESUME":
+                assert reconciliation.run_id is not None  # noqa: S101
+                try:
+                    record = await self._orchestrator.resume(reconciliation.run_id)
+                except (RunNotFoundError, OrchestratorError):
+                    # Materializatsiyadan keyin ham reja/run topilmadi
+                    # (masalan xotira-DB orasidagi tor poyga) — hech
+                    # qanday yon-samar bo'lmagan deb hisoblab, pastdagi
+                    # "yangi run" yo'liga xavfsiz tushamiz.
+                    log.warning(
+                        "mission.reconcile_resume_failed_fallback",
+                        mission_id=str(mission.id),
+                        run_id=str(reconciliation.run_id),
+                    )
+                else:
+                    return await self._finish_execute(mission, record)
+            elif reconciliation.outcome == "ALREADY_COMPLETED":
+                assert reconciliation.record is not None  # noqa: S101
+                return await self._finish_execute(mission, reconciliation.record)
+            elif reconciliation.outcome == "NON_IDEMPOTENT_UNCERTAIN":
+                mission = await self._transition(
+                    mission, MissionStatus.RECOVERING, error=reconciliation.reason
+                )
+                return mission, None
+            # outcome == "UNKNOWN" (yoki yuqoridagi resume-fallback) — hech
+            # qanday tasdiqlangan yon-samar yo'q, xavfsiz siyosat: YANGI run.
+
+            # Run id OLDINDAN ajratiladi va mission'ga `start()`DAN OLDIN
+            # biriktiriladi (JB-13) — shu bilan crash aynan `orchestrator.
+            # start()` ICHIDA bo'lsa ham, keyingi `execute()` chaqiruvi
+            # `mission.run_ids` orqali bu run'ni "tirik" deb topa oladi
+            # (ilgari `attach_run()` FAQAT `start()` MUVAFFAQIYATLI
+            # qaytgandan keyin chaqirilardi — bu tor, lekin haqiqiy oyna
+            # edi). `ensure_placeholder()` — SHART: `mission_run.run_id`
+            # `run.id`ga FK, `attach_run()` run qatori DB'da mavjud
+            # bo'lishini talab qiladi — shuning uchun PENDING placeholder
+            # OLDIN yoziladi, `start(run_id=...)` esa keyin ustiga
+            # haqiqiy holatni yozadi.
+            #
+            # MUHIM: agar DB haqiqatan yozib bo'lmasa (vaqtincha
+            # ulanmagan, `ensure_placeholder()` `False` qaytaradi) —
+            # pre-attach XAVFLI (FK'siz `attach_run()` `IntegrityError`
+            # bilan yiqiladi). Bu holda ESKI tartibga (avval `start()`,
+            # keyin `attach_run()` — pastdagi `run_store is None`
+            # tarmog'i bilan bir xil) fail-open tushiladi.
+            new_run_id = uuid.uuid4()
+            placed = await run_store.ensure_placeholder(new_run_id, command)
+
+            if placed:
+                await self._repo.attach_run(mission.id, new_run_id, attempt=attempt)
+                try:
+                    record = await self._orchestrator.start(
+                        command, tool_registry_override=tool_registry_override, run_id=new_run_id
+                    )
+                except KillSwitchEngagedError as exc:
+                    reason = f"kill switch engaged: {exc}"
+                    failed = await self._transition(mission, MissionStatus.FAILED, error=reason)
+                    return failed, None
+
+                return await self._finish_execute(mission, record)
+
+            log.warning(
+                "mission.ensure_placeholder_failed_legacy_ordering",
+                mission_id=str(mission.id),
+            )
+            # ESKI tartib — DB vaqtincha yozib bo'lmadi, pre-attach
+            # xavfli. `start()` o'zi ichida qayta persist urinadi
+            # (fail-open) va odatiy yo'l bilan davom etadi.
+            try:
+                record = await self._orchestrator.start(
+                    command, tool_registry_override=tool_registry_override
+                )
+            except KillSwitchEngagedError as exc:
+                reason = f"kill switch engaged: {exc}"
+                failed = await self._transition(mission, MissionStatus.FAILED, error=reason)
+                return failed, None
+
+            await self._repo.attach_run(mission.id, record.run_id, attempt=attempt)
+            return await self._finish_execute(mission, record)
+
+        # ESKI XATTI-HARAKAT — `run_store` yo'q (test-double `Orchestrator`):
+        # reconciliation/pre-attach chetlab o'tiladi, `attach_run()`
+        # `start()` MUVAFFAQIYATLI qaytgandan keyin chaqiriladi.
         try:
             record = await self._orchestrator.start(
                 command, tool_registry_override=tool_registry_override
@@ -611,6 +737,16 @@ class MissionEngine:
             return failed, None
 
         await self._repo.attach_run(mission.id, record.run_id, attempt=attempt)
+        return await self._finish_execute(mission, record)
+
+    async def _finish_execute(
+        self, mission: Mission, record: RunRecord
+    ) -> tuple[Mission, RunRecord | None]:
+        """`execute()`ning umumiy dispatch qismi (yangi start() natijasi
+        VA reconciliation orqali topilgan mavjud run — ikkalasi ham shu
+        yerdan o'tadi, JB-13)."""
+        from zet.domain.enums import RunStatus
+
         mission = await self._repo.get(mission.id)
 
         if record.status == RunStatus.AWAITING_APPROVAL:
@@ -625,9 +761,131 @@ class MissionEngine:
             mission = await self._transition(mission, MissionStatus.VERIFYING)
             return mission, record
 
-        # DONE — verify fazasiga
+        # DONE (yoki CANCELLED — nazariy, `verify()` verified_ok=None'ni
+        # False deb o'qib RECOVERING'ga yo'naltiradi) — verify fazasiga.
         mission = await self._transition(mission, MissionStatus.VERIFYING)
         return mission, record
+
+    async def _reconcile_run(self, mission: Mission) -> _RunReconciliation:
+        """JB-13 Gap #1: mission.run_ids'dagi OXIRGI run holatini aniqlaydi.
+
+        CRASH → LOAD MISSION → LOAD EXISTING RUNS → FIND LIVE NON-TERMINAL
+        RUN → RECONCILE → RESUME SAME LOGICAL RUN (yoki xavfsiz muqobil).
+
+        Natija spec so'zlashuvidagi to'rt sinfdan biri:
+
+            SAFE_TO_RESUME — mavjud run hali tugallanmagan (EXECUTING),
+                rejasi bor, keyingi bajarilmagan qadam idempotent (yoki
+                hali umuman boshlanmagan/nomalum) — `orchestrator.
+                resume()` xavfsiz (JB-11 checkpoint DONE qadamlarni
+                qayta bajarmaydi).
+            ALREADY_COMPLETED — mavjud run allaqachon terminal holatda
+                (DONE/FAILED/CANCELLED) yoki AWAITING_APPROVAL — yangi
+                run boshlanmaydi, mavjud yozuv `_finish_execute()`ga
+                to'g'ridan-to'g'ri uzatiladi (start() hech qachon
+                chaqirilmaydi — dublikat ijro yo'q).
+            NON_IDEMPOTENT_UNCERTAIN — run hali EXECUTING, lekin keyingi
+                bajarilmagan qadam yon-samarali (idempotent bo'lmagan
+                yoki noma'lum) tool ishlatadi — server AYNAN shu qadam
+                davomida qulagan bo'lishi mumkin edi, haqiqatda
+                bajarilgan-bajarilmagani noaniq. Avtomatik qayta ishga
+                tushirilmaydi — mission RECOVERING'ga o'tadi
+                (RecoveryEngine tashxis qo'yadi/qayta reja tuzadi/
+                foydalanuvchidan so'raydi).
+            UNKNOWN — run_ids bo'sh, yoki oxirgi run_id na xotirada, na
+                DB'da topilmadi (masalan LLM chaqiruvi paytida qulagan,
+                hali hech narsa persist qilinmagan edi — demak hech
+                qanday yon-samar bo'lmagan). Xavfsiz siyosat: YANGI run.
+
+        MUHIM FARQ (recovery-retry ≠ crash-resume): `RecoveryEngine`
+        muvaffaqiyatsiz urinishdan keyin `recover()` orqali `retry_count`ni
+        oshirib, ATAYLAB YANGI urinish uchun EXECUTING'ga qaytaradi —
+        `mission.run_ids`dagi OXIRGI yozuv bu holda ESKI (allaqachon
+        `verify()`/`recover()` tomonidan qayta ishlangan, terminal) urinish
+        bo'ladi. Bunga "ALREADY_COMPLETED" deb qarab uni QAYTA ishlatish
+        XATO bo'lardi — YANGI urinish rejasi (masalan recovery patch'idan
+        keyingi TUZATILGAN reja) hech qachon bajarilmay qolardi. Shuning
+        uchun: agar `mission.run_ids` soni JORIY urinish raqamidan (
+        `retry_count + 1`) KAM bo'lsa — oxirgi run ESKI urinishga tegishli,
+        reconciliation chetlab o'tiladi (UNKNOWN — xavfsiz, YANGI run).
+        """
+        if not mission.run_ids:
+            return _RunReconciliation(outcome="UNKNOWN")
+
+        current_attempt = mission.retry_count + 1
+        if len(mission.run_ids) < current_attempt:
+            return _RunReconciliation(outcome="UNKNOWN")
+
+        last_run_id = mission.run_ids[-1]
+        from zet.domain.enums import RunStatus
+
+        record = await self._orchestrator.run_store.materialize(last_run_id)
+        if record is None:
+            log.info(
+                "mission.reconcile_run_not_found",
+                mission_id=str(mission.id),
+                run_id=str(last_run_id),
+            )
+            return _RunReconciliation(outcome="UNKNOWN")
+
+        if record.status.is_terminal or record.status == RunStatus.AWAITING_APPROVAL:
+            return _RunReconciliation(
+                outcome="ALREADY_COMPLETED", run_id=last_run_id, record=record
+            )
+
+        if record.plan is None:
+            # EXECUTING holatida persist bo'lsa har doim reja bilan birga
+            # yoziladi (`orchestrator.py::_run_plan`) — bu amalda
+            # sodir bo'lmasligi kerak, lekin himoya sifatida: reja yo'q —
+            # hech qanday qadam bajarilmagan, xavfsiz, yangi run.
+            return _RunReconciliation(outcome="UNKNOWN")
+
+        completed = await self._orchestrator.run_store.load_completed_steps(
+            last_run_id, record.plan
+        )
+        next_step = next((s for s in record.plan.steps if s.position not in completed), None)
+        if next_step is not None and not self._tool_is_idempotent(next_step.tool_name):
+            reason = (
+                f"restart: run {last_run_id} EXECUTING holatida uzilib qoldi — "
+                f"keyingi qadam ('{next_step.tool_name}') yon-samarali (idempotent "
+                "emas yoki noma'lum) tool ishlatadi, haqiqatda bajarilgan-"
+                "bajarilmagani noaniq — xavfsizlik uchun avtomatik qayta ishga "
+                "tushirilmadi (JB-13)."
+            )
+            log.warning(
+                "mission.reconcile_non_idempotent_uncertain",
+                mission_id=str(mission.id),
+                run_id=str(last_run_id),
+                tool=next_step.tool_name,
+            )
+            return _RunReconciliation(
+                outcome="NON_IDEMPOTENT_UNCERTAIN", run_id=last_run_id, reason=reason
+            )
+
+        log.info(
+            "mission.reconcile_safe_resume",
+            mission_id=str(mission.id),
+            run_id=str(last_run_id),
+        )
+        return _RunReconciliation(outcome="SAFE_TO_RESUME", run_id=last_run_id)
+
+    def _tool_is_idempotent(self, tool_name: str | None) -> bool:
+        """`Tool.idempotent` bayrog'ini tekshiradi (JB-13 — `task_graph.py`
+        `_tool_is_idempotent`'i bilan BIR XIL naqsh, single-Run yo'li uchun).
+
+        Noma'lum/registryda topilmagan/`None` tool nomi — XAVFSIZ TOMONDA
+        xato qiladi: idempotent EMAS deb hisoblanadi ("noaniqlik borida
+        qayta ishga tushirilmadi" — "qayta ishga tushirib, dublikat
+        yon-samara yaratdi"dan HAR DOIM xavfsizroq).
+        """
+        from zet.tools.registry import ToolNotFoundError
+
+        if not tool_name:
+            return False
+        try:
+            return self._orchestrator.tool_registry.get(tool_name).idempotent
+        except ToolNotFoundError:
+            return False
 
     async def _execute_task_graph(self, mission: Mission) -> tuple[Mission, RunRecord | None]:
         """EXECUTING → VERIFYING → COMPLETED/RECOVERING (JB-5 Task Graph yo'li).

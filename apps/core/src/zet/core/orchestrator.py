@@ -162,9 +162,21 @@ class RunStore:
         self._session_factory = session_factory
         self._owner_external_id = owner_external_id
 
-    def create(self, command: Command) -> RunRecord:
-        """Yangi run yozuvi yaratadi."""
-        record = RunRecord(run_id=uuid.uuid4(), command=command)
+    def create(self, command: Command, *, run_id: uuid.UUID | None = None) -> RunRecord:
+        """Yangi run yozuvi yaratadi.
+
+        Args:
+            run_id: JB-13 — oldindan ajratilgan id. `MissionEngine.execute()`
+                crash'ga bardoshli bo'lish uchun `run_id`ni `start()`dan
+                OLDIN mission'ga biriktiradi (`attach_run`) — shu bilan
+                bir xil qiymat bu yerga uzatilishi SHART, aks holda
+                mission.run_ids'dagi yozuv Orchestrator hech qachon
+                yaratmagan "yetim" id'ga ishora qilib qoladi. `None` —
+                eski xatti-harakat (tasodifiy yangi id, masalan CLI/API
+                to'g'ridan-to'g'ri `Orchestrator.start()`ni Mission
+                qatlamisiz chaqirganda).
+        """
+        record = RunRecord(run_id=run_id or uuid.uuid4(), command=command)
         self._runs[record.run_id] = record
         return record
 
@@ -179,18 +191,75 @@ class RunStore:
         except KeyError as exc:
             raise RunNotFoundError(f"Run '{run_id}' topilmadi") from exc
 
-    async def persist(self, record: RunRecord) -> None:
+    async def ensure_placeholder(self, run_id: uuid.UUID, command: Command) -> bool:
+        """JB-13: `run_id`ni PENDING holatda OLDINDAN xotira+DB'ga yozadi.
+
+        NEGA kerak: `MissionEngine.execute()` crash-xavfsizlik uchun
+        `run_id`ni `orchestrator.start()`DAN OLDIN `MissionRunLink`
+        (`mission_run` jadvali) orqali mission'ga biriktirmoqchi bo'ladi
+        — lekin `mission_run.run_id` `run.id`ga FK (`IntegrityError`
+        aks holda, real Postgres'da VA FK yoqilgan SQLite'da ham). Bu
+        metod `run` qatorini OLDINDAN yaratishga URINADI (xotira + DB
+        persist) — muvaffaqiyatli bo'lsa `start(run_id=...)` keyin AYNAN
+        shu id bilan ustiga haqiqiy (PLANNING→...) holatni yozadi
+        (`create()` xotiradagi yozuvni almashtiradi, DB qatori esa
+        UPDATE bo'ladi — `persist_run()` allaqachon upsert).
+
+        Returns:
+            `True` — `run` qatori DB'da HAQIQATAN mavjud (chaqiruvchi
+            xavfsiz pre-attach qilishi mumkin). `False` — DB yozuvi
+            muvaffaqiyatsiz (masalan DB vaqtincha yetib bo'lmadi) YOKI
+            `session_factory` umuman yo'q — bu holda chaqiruvchi
+            (`MissionEngine.execute()`) pre-attach'dan VOZ KECHISHI
+            SHART (aks holda `attach_run()` FK bilan yiqiladi — run
+            qatori hali mavjud emas) va ESKI tartibga (avval `start()`,
+            keyin `attach_run()`) qaytishi kerak.
+        """
+        if run_id not in self._runs:
+            self._runs[run_id] = RunRecord(run_id=run_id, command=command)
+        return await self.persist(self._runs[run_id])
+
+    async def materialize(self, run_id: uuid.UUID) -> RunRecord | None:
+        """JB-13 Gap #1: xotirada bo'lmasa DB'dan (ISTALGAN status) tiklaydi.
+
+        `load_pending_runs()` (startup, ommaviy) faqat AWAITING_APPROVAL
+        run'larni tiklaydi. Bu — bitta run'ni ON-DEMAND, qaysi status
+        bo'lishidan qat'i nazar tiklaydigan variant: `MissionEngine.
+        execute()` restart/crash'dan keyin "bu mission uchun oldingi run
+        hali tirikmi?" deb so'raganda ishlatiladi. Topilsa xotiraga
+        keshlanadi (keyingi `get()`/`resume()` chaqiruvlari uchun).
+
+        Fail-open: DB yetib bo'lmasa yoki yozuv topilmasa — `None`.
+        """
+        if run_id in self._runs:
+            return self._runs[run_id]
+        if self._session_factory is None:
+            return None
+        from zet.core.run_checkpoint import load_run_by_id
+
+        record = await load_run_by_id(self._session_factory, run_id)
+        if record is not None:
+            self._runs[run_id] = record
+        return record
+
+    async def persist(self, record: RunRecord) -> bool:
         """Runni DB'ga yozib qo'yadi — fail-open, session_factory bo'lsa.
 
         AWAITING_APPROVAL holatida chaqirilsa, restart'da tiklash
         mumkin bo'ladi. Terminal holat (DONE/FAILED) yozilsa audit
         maqsadida saqlanadi lekin tiklash uchun ishlatilmaydi.
+
+        Returns:
+            JB-13: `True` — haqiqatan DB'ga yozildi. `False` —
+            `session_factory` yo'q (test/lean) YOKI yozish xatoga
+            uchradi (fail-open, eski chaqiruvchilar bu qiymatni
+            e'tiborsiz qoldiraveradi — orqaga moslik buzilmaydi).
         """
         if self._session_factory is None:
-            return
+            return False
         from zet.core.run_checkpoint import persist_run
 
-        await persist_run(
+        return await persist_run(
             self._session_factory,
             record,
             owner_external_id=self._owner_external_id,
@@ -340,6 +409,7 @@ class Orchestrator:
         dry_run: bool = False,
         intent: Intent | None = None,
         tool_registry_override: ToolRegistry | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> RunRecord:
         """Yangi buyruqni boshidan oxirigacha bajaradi (yoki tasdiq kutadi).
 
@@ -358,6 +428,10 @@ class Orchestrator:
                 cheklangan qism, `ToolRegistry.subset()` orqali
                 quriladi). `None` — to'liq global registry (eski
                 xatti-harakat).
+            run_id: JB-13 — oldindan ajratilgan run id (`MissionEngine.
+                execute()` crash'ga bardoshli bo'lish uchun `start()`dan
+                OLDIN mission'ga biriktiradi). `None` — eski xatti-harakat
+                (tasodifiy yangi id, `RunStore.create()`).
 
         Raises:
             KillSwitchEngagedError: emergency stop yoqilgan — hech narsa
@@ -375,9 +449,14 @@ class Orchestrator:
                     dry_run=dry_run,
                     intent=intent,
                     tool_registry_override=tool_registry_override,
+                    run_id=run_id,
                 )
         return await self._start_with_timeout(
-            command, dry_run=dry_run, intent=intent, tool_registry_override=tool_registry_override
+            command,
+            dry_run=dry_run,
+            intent=intent,
+            tool_registry_override=tool_registry_override,
+            run_id=run_id,
         )
 
     async def _start_with_timeout(
@@ -387,6 +466,7 @@ class Orchestrator:
         dry_run: bool,
         intent: Intent | None = None,
         tool_registry_override: ToolRegistry | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> RunRecord:
         """Wall-clock timeout — `run_timeout_s` sozlangan bo'lsa (A-07)."""
         if self._run_timeout_s is None:
@@ -395,6 +475,7 @@ class Orchestrator:
                 dry_run=dry_run,
                 intent=intent,
                 tool_registry_override=tool_registry_override,
+                run_id=run_id,
             )
         try:
             return await asyncio.wait_for(
@@ -403,6 +484,7 @@ class Orchestrator:
                     dry_run=dry_run,
                     intent=intent,
                     tool_registry_override=tool_registry_override,
+                    run_id=run_id,
                 ),
                 timeout=self._run_timeout_s,
             )
@@ -420,10 +502,11 @@ class Orchestrator:
         dry_run: bool = False,
         intent: Intent | None = None,
         tool_registry_override: ToolRegistry | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> RunRecord:
         """Asosiy start mantiqi (avvalgi `start`)."""
 
-        record = self._run_store.create(command)
+        record = self._run_store.create(command, run_id=run_id)
         record.status = RunStatus.PLANNING
         record.tool_registry_override = tool_registry_override
 

@@ -62,10 +62,19 @@ async def persist_run(
     record: RunRecord,
     *,
     owner_external_id: str,
-) -> None:
+) -> bool:
     """RunRecord'ni `run` jadvaliga UPSERT qiladi (fail-open).
 
     Har status o'zgarganida chaqiriladi. Idempotent (id bilan upsert).
+
+    Returns:
+        JB-13: `True` — DB'ga haqiqatan yozildi (commit muvaffaqiyatli).
+        `False` — xato yutildi (fail-open, eski chaqiruvchilar buni
+        e'tiborsiz qoldiradi — qaytish qiymati YANGI, orqaga moslik
+        buzilmaydi). `RunStore.ensure_placeholder()` bu bayroqni
+        `MissionEngine`ga uzatib, DB haqiqatan yozilmagan bo'lsa
+        `attach_run()`ni FK-halokatga uchratadigan pre-attach yo'lidan
+        xavfsiz voz kechish uchun ishlatadi.
     """
     try:
         async with session_scope(session_factory) as session:
@@ -114,8 +123,11 @@ async def persist_run(
                     existing.finished_at = datetime.now(UTC)
     except SQLAlchemyError:
         log.warning("run.persist_failed", run_id=str(record.run_id))
+        return False
     except Exception:
         log.warning("run.persist_failed_unexpected", run_id=str(record.run_id))
+        return False
+    return True
 
 
 async def load_pending_runs(
@@ -176,6 +188,57 @@ async def load_pending_runs(
     except Exception:
         log.warning("run.load_failed_unexpected")
         return 0
+
+
+async def load_run_by_id(
+    session_factory: async_sessionmaker[AsyncSession],
+    run_id: uuid.UUID,
+) -> RunRecord | None:
+    """Bitta run yozuvini — ISTALGAN status — DB'dan `RunRecord`ga tiklaydi.
+
+    JB-13 Gap #1: `load_pending_runs()`ning umumlashtirilgan varianti.
+    U FAQAT startup'da, FAQAT AWAITING_APPROVAL run'larni ommaviy
+    tiklaydi. Bu funksiya esa BITTA run'ni, QAYSI STATUS bo'lishidan
+    qat'i nazar (EXECUTING ham), on-demand tiklaydi — `MissionEngine.
+    execute()` restart/crash'dan keyin "bu mission uchun oldingi run
+    hali tirikmi?" deb so'raganda ishlatiladi (`RunStore.materialize()`
+    orqali). Fail-open: DB xatosi yoki topilmasa `None`.
+    """
+    from zet.core.orchestrator import RunRecord
+    from zet.domain.command import Command
+    from zet.domain.plan import Plan as DomainPlan
+
+    try:
+        async with session_scope(session_factory) as session:
+            row = (
+                await session.execute(select(RunRow).where(RunRow.id == run_id))
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+
+            restored_plan: DomainPlan | None = None
+            if row.plan_snapshot:
+                try:
+                    restored_plan = DomainPlan.model_validate(row.plan_snapshot)
+                except Exception:
+                    log.warning("run.plan_snapshot_invalid", run_id=str(row.id))
+
+            return RunRecord(
+                run_id=row.id,
+                command=Command(text=row.command_text),
+                plan=restored_plan,
+                status=row.status,
+                spent_usd=row.spent_usd,
+                verified_ok=row.verified_ok,
+                error=row.error,
+                result_summary=row.result_summary,
+            )
+    except SQLAlchemyError:
+        log.warning("run.load_by_id_failed", run_id=str(run_id))
+        return None
+    except Exception:
+        log.warning("run.load_by_id_failed_unexpected", run_id=str(run_id))
+        return None
 
 
 # ─── Step persistence (HIGH #2 audit fix — idempotent resume) ────
@@ -506,6 +569,7 @@ __all__ = [
     "load_completed_steps",
     "load_pending_approvals",
     "load_pending_runs",
+    "load_run_by_id",
     "persist_approval",
     "persist_run",
     "persist_step_result",

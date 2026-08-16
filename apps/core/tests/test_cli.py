@@ -73,6 +73,57 @@ class TestCLI:
         assert "ZET" in result.output
 
 
+class TestRunCommandUsesBrain:
+    """JB-13 Gap #5 (AUDIT FIX): `z run` `Brain.handle()` orqali ishlaydi,
+    o'zining ICHKI, mustaqil `Orchestrator`ini qurmaydi.
+
+    Ilgari `_run_pipeline()` `zet.core.orchestrator.Orchestrator`ni
+    to'g'ridan-to'g'ri qurib, `.start()` chaqirardi — `Brain`ni butunlay
+    chetlab o'tib (Telegram/HTTP esa allaqachon `Brain` orqali ishlagan).
+    Bu test `build_brain_for_session()` HAQIQATDA chaqirilishini va
+    natija sifatida `Brain.handle()` natijasi (`BrainResult`, `Orchestrator.
+    start()`ning xom `RunRecord`i EMAS) ishlatilishini isbotlaydi."""
+
+    def test_run_command_calls_build_brain_for_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import zet.api.deps as deps
+        from zet.core.brain import BrainResult, BrainRoute
+
+        captured: dict[str, object] = {}
+
+        class _FakeBrain:
+            async def handle(self, command: object, *, dry_run: bool = False) -> BrainResult:
+                captured["command"] = command
+                captured["dry_run"] = dry_run
+                return BrainResult(
+                    text="stub javob",
+                    ok=True,
+                    route=BrainRoute.RUN,
+                    run_id="00000000-0000-0000-0000-000000000000",
+                    request_kind="command",
+                )
+
+        async def _fake_build_brain_for_session(session: object, settings: object) -> _FakeBrain:
+            captured["build_brain_for_session_called"] = True
+            return _FakeBrain()
+
+        monkeypatch.setattr(deps, "build_brain_for_session", _fake_build_brain_for_session)
+
+        result = runner.invoke(app, ["run", "Salom ZET"])
+
+        assert result.exit_code == 0, result.output
+        assert captured.get("build_brain_for_session_called") is True, (
+            "`z run` `build_brain_for_session()`ni chaqirmadi — hali ham "
+            "eski, Brain'ni chetlab o'tuvchi yo'ldan ishlayapti"
+        )
+        assert captured["dry_run"] is False
+        command = captured["command"]
+        assert getattr(command, "text", None) == "Salom ZET"
+        assert getattr(command, "channel", None) == "cli"
+        assert "stub javob" in result.output
+
+
 class TestDaemonCommand:
     """F9 (BLOCK-3 audit): `z daemon` to'liq wiring bilan quriladimi.
 

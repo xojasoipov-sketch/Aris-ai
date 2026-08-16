@@ -61,7 +61,16 @@ def run(
     message: str = typer.Argument(..., help="Buyruq matni"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Haqiqiy ish bajarmaslik"),
 ) -> None:
-    """Yangi run boshlash — to'liq pipeline: intent → reja → bajarish → tekshirish."""
+    """Yangi run boshlash — to'liq pipeline: intent → reja → bajarish → tekshirish.
+
+    JB-13 Gap #5 AUDIT FIX: ilgari bu buyruq `Brain`ni chetlab o'tib,
+    o'zining ICHKI (Telegram/HTTP'dan MUSTAQIL) `Orchestrator`ini
+    qurardi va to'g'ridan-to'g'ri `.start()` chaqirardi — CLI orqali
+    yuborilgan "goal" (masalan "Sayt qur") HECH QACHON Mission yo'liga
+    tushmasdi, Scheduler-buyruqlar (`WORKFLOW_COMMAND`) ham tanilmasdi.
+    Endi `z run` xuddi Telegram/HTTP kabi `build_brain_for_session()` +
+    `Brain.handle()` orqali ishlaydi — BITTA kanonik kognitiv kirish
+    nuqtasi, CLI'ga xos ijro mantig'i yo'q."""
     import asyncio
 
     _setup()
@@ -82,15 +91,25 @@ def run(
         out.print(f"  [green]✓[/green] Qabul qilindi — trace_id: [dim]{trace_id}[/dim]")
 
         try:
-            record = asyncio.run(_run_pipeline(message, dry_run=dry_run))
+            result = asyncio.run(_run_pipeline(message, dry_run=dry_run))
         except Exception as exc:
             out.print(f"  [red]✗ Pipeline xatosi:[/red] {exc}")
             return
 
-        if record.status.value == "awaiting_approval":
+        # `result.run` — mavjud bo'lsa (RUN yo'li), eski (record-darajali)
+        # tafsilotlar (status/pending_approval_id/spent_usd) shundan.
+        run_record = result.run
+        run_status = getattr(run_record, "status", None)
+        run_status_value = getattr(run_status, "value", None)
+
+        if result.mission_id is not None:
+            # Mission (goal) yo'li — YANGI, `Brain`ning o'zi orqali.
+            out.print(f"  [cyan]◆ Mission boshlandi[/cyan] — mission_id: [dim]{result.mission_id}[/dim]")
+            out.print(f"  {result.text}")
+        elif run_status_value == "awaiting_approval":
+            pending_approval_id = getattr(run_record, "pending_approval_id", None)
             out.print(
-                f"  [yellow]⏸ Tasdiq kerak[/yellow] — approval_id: "
-                f"[dim]{record.pending_approval_id}[/dim]"
+                f"  [yellow]⏸ Tasdiq kerak[/yellow] — approval_id: [dim]{pending_approval_id}[/dim]"
             )
             # NOTA: bu holatdagi run CLI JARAYONida qoladi va API'da ko'rinmaydi
             # (RunStore singleton har jarayonda alohida). `z approve <id>` API'ga
@@ -102,48 +121,37 @@ def run(
                 "  [dim]yoki Telegram inline tugmalari orqali tasdiqlang.[/dim]"
             )
             out.print(
-                f"  [dim]Yoki: [/dim][cyan]z approve {record.pending_approval_id}[/cyan] "
+                f"  [dim]Yoki: [/dim][cyan]z approve {pending_approval_id}[/cyan] "
                 "[dim](API jarayonida ishlaydi)[/dim]"
             )
-        elif record.status.value == "done":
-            out.print(f"  [green]✓[/green] {record.result_summary}")
-            out.print(f"  [dim]xarajat: ${record.spent_usd:.4f}[/dim]")
+        elif result.ok:
+            out.print(f"  [green]✓[/green] {result.text}")
+            spent_usd = getattr(run_record, "spent_usd", None)
+            if spent_usd is not None:
+                out.print(f"  [dim]xarajat: ${spent_usd:.4f}[/dim]")
         else:
-            out.print(f"  [red]✗[/red] {record.status.value}: {record.error}")
+            out.print(f"  [red]✗[/red] {run_status_value or 'xato'}: {result.text}")
     finally:
         unbind_trace()
 
 
 async def _run_pipeline(message: str, *, dry_run: bool):
-    """`z run` uchun Orchestrator'ni qurib, buyruqni bajaradi."""
-    from zet.api.deps import (
-        get_approval_service,
-        get_killswitch,
-        get_llm_providers,
-        get_permission_policy,
-        get_run_store,
-        get_session_factory,
-        get_tool_registry,
-    )
-    from zet.core.orchestrator import Orchestrator
+    """`z run` uchun `Brain`ni qurib, buyruqni bajaradi (JB-13 Gap #5).
+
+    `build_orchestrator_for_session`/`build_brain_for_session` — JB-11/
+    JB-12'da FastAPI DI'siz, request kontekstidan tashqarida (`api/app.py`
+    `lifespan()`, `AutomationDaemon`) ishlatish uchun yaratilgan, endi
+    CLI ham aynan shu qurilishdan foydalanadi — Telegram/HTTP/Scheduler/
+    CLI barchasi BIR XIL Brain qurilish yo'lidan o'tadi.
+    """
+    from zet.api.deps import build_brain_for_session, get_session_factory
     from zet.db.session import session_scope
     from zet.domain.command import Command
-    from zet.llm.router import ModelRouter
 
     settings = get_settings()
     async with session_scope(get_session_factory()) as session:
-        router = ModelRouter(get_llm_providers(), session, settings)
-        orchestrator = Orchestrator(
-            router=router,
-            tool_registry=get_tool_registry(),
-            permission_policy=get_permission_policy(),
-            approval_service=get_approval_service(),
-            killswitch=get_killswitch(),
-            run_store=get_run_store(),
-            budget_usd=settings.run_max_usd,
-            max_steps=settings.run_max_steps,
-        )
-        return await orchestrator.start(Command(text=message, channel="cli"), dry_run=dry_run)
+        brain = await build_brain_for_session(session, settings)
+        return await brain.handle(Command(text=message, channel="cli"), dry_run=dry_run)
 
 
 # ── z status ───────────────────────────────────────────────────────
