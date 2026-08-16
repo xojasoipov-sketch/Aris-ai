@@ -128,6 +128,10 @@ class Mission(BaseModel):
     pending_approval_id: uuid.UUID | None = None
     retry_count: int = 0
     error: str | None = None
+    claimed_by: str | None = None
+    """JB-11 — restart-recovery lease egasi (`core/mission_recovery.py`)."""
+    claim_expires_at: datetime | None = None
+    """JB-11 — yuqoridagi lease tugash vaqti."""
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -291,9 +295,21 @@ class TaskGraphExecutorLike(Protocol):
     xavfi — `task_graph.py` `Mission`/`MissionTask`ni ishlatadi). Test'lar
     ham haqiqiy `TaskGraphExecutor` qurmasdan, shu shaklga mos soxta
     obyekt berishi mumkin.
-    """
 
-    async def run(self, mission: Mission) -> Any:  # pragma: no cover — protocol
+    JB-11: `on_checkpoint` — ixtiyoriy kalit so'z argument, default
+    `None`. Mavjud soxta implementatsiyalar (`async def run(self,
+    mission)`, kwargsz) ham ishlashda davom etadi — `_execute_task_graph`
+    uni FAQAT `**{"on_checkpoint": ...}` orqali emas, oddiy kwarg
+    sifatida uzatadi va Python bunda mos kelmasa `TypeError` beradi,
+    shuning uchun bu Protocol'ni yangilash HAQIQIY talab (yolg'on
+    moslik emas)."""
+
+    async def run(
+        self,
+        mission: Mission,
+        *,
+        on_checkpoint: Callable[[list[MissionTask]], Awaitable[None]] | None = None,
+    ) -> Any:  # pragma: no cover — protocol
         ...
 
 
@@ -618,8 +634,21 @@ class MissionEngine:
         """
         assert self._task_graph_executor is not None  # noqa: S101 — faqat shu yo'ldan kelinadi
 
+        # JB-11: bosqich-darajali checkpoint. `TaskGraphExecutor` DB'ni
+        # umuman bilmaydi (ataylab — clean separation, `task_graph.py`
+        # docstring'iga qarang), shuning uchun persist qilish callback
+        # sifatida shu yerdan (call-scoped closure, `mission.id`ni
+        # to'g'ridan-to'g'ri qamrab oladi — holat bo'lishmasligi yo'q)
+        # beriladi. Har bosqich tugagach chaqiriladi — process CRASH
+        # bo'lsa faqat OXIRGI (checkpoint qilinmagan) bosqich yo'qoladi,
+        # butun graf emas.
+        async def _checkpoint(tasks: list[MissionTask]) -> None:
+            await self._repo.update(
+                mission.id, tasks=[t.model_dump(mode="json") for t in tasks]
+            )
+
         try:
-            result = await self._task_graph_executor.run(mission)
+            result = await self._task_graph_executor.run(mission, on_checkpoint=_checkpoint)
         except Exception as exc:
             log.exception("mission.task_graph_error", mission_id=str(mission.id))
             failed = await self._repo.update(mission.id, error=f"task graph execution failed: {exc}")

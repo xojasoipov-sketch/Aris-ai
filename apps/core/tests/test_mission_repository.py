@@ -139,6 +139,91 @@ class TestRunLinks:
             await repo.get(mission.id)
 
 
+class TestRecoveryLease:
+    """JB-11 §12/§13 — DB-native "compare-and-set" mission egaligi."""
+
+    async def test_claim_succeeds_on_unclaimed_mission(
+        self, repo: MissionRepository, owner: Owner
+    ) -> None:
+        mission = await repo.create(Mission(owner_id=owner.id, objective="x"))
+
+        claimed = await repo.try_claim(mission.id, owner_token="worker-A")
+
+        assert claimed is True
+        fresh = await repo.get(mission.id)
+        assert fresh.claimed_by == "worker-A"
+        assert fresh.claim_expires_at is not None
+
+    async def test_second_claim_from_different_worker_fails(
+        self, repo: MissionRepository, owner: Owner
+    ) -> None:
+        """§12 — Worker B bir xil mission'ni Worker A ushlab turganda ola olmaydi."""
+        mission = await repo.create(Mission(owner_id=owner.id, objective="x"))
+        assert await repo.try_claim(mission.id, owner_token="worker-A") is True
+
+        claimed_by_b = await repo.try_claim(mission.id, owner_token="worker-B")
+
+        assert claimed_by_b is False
+        # HAQIQIY holat — hali ham worker-A'niki, worker-B bosib o'tmagan.
+        fresh = await repo.get(mission.id)
+        assert fresh.claimed_by == "worker-A"
+
+    async def test_release_clears_claim(self, repo: MissionRepository, owner: Owner) -> None:
+        mission = await repo.create(Mission(owner_id=owner.id, objective="x"))
+        await repo.try_claim(mission.id, owner_token="worker-A")
+
+        await repo.release_claim(mission.id, owner_token="worker-A")
+
+        fresh = await repo.get(mission.id)
+        assert fresh.claimed_by is None
+        assert fresh.claim_expires_at is None
+
+    async def test_release_by_wrong_owner_is_noop(
+        self, repo: MissionRepository, owner: Owner
+    ) -> None:
+        """Xato worker "release" chaqirsa — boshqa worker'ning yangi
+        claim'ini o'chirib qo'ymasligi kerak (lost-update himoyasi)."""
+        mission = await repo.create(Mission(owner_id=owner.id, objective="x"))
+        await repo.try_claim(mission.id, owner_token="worker-A")
+
+        # worker-B (hech qachon claim qilmagan) release chaqiradi.
+        await repo.release_claim(mission.id, owner_token="worker-B")
+
+        # worker-A'ning claim'i TEGILMAGAN qoldi.
+        fresh = await repo.get(mission.id)
+        assert fresh.claimed_by == "worker-A"
+
+    async def test_claim_after_release_succeeds(
+        self, repo: MissionRepository, owner: Owner
+    ) -> None:
+        mission = await repo.create(Mission(owner_id=owner.id, objective="x"))
+        await repo.try_claim(mission.id, owner_token="worker-A")
+        await repo.release_claim(mission.id, owner_token="worker-A")
+
+        claimed = await repo.try_claim(mission.id, owner_token="worker-B")
+
+        assert claimed is True
+
+    async def test_expired_lease_can_be_reclaimed(
+        self, repo: MissionRepository, owner: Owner
+    ) -> None:
+        """§13 — CRASH bo'lgan worker mission'ni abadiy qulflab qo'ymaydi."""
+        mission = await repo.create(Mission(owner_id=owner.id, objective="x"))
+        # Muddati allaqachon O'TGAN lease bilan da'vo qilamiz (0 soniya).
+        assert await repo.try_claim(mission.id, owner_token="crashed-worker", lease_seconds=0)
+
+        # Biroz vaqt o'tishini kutmasdan ham — lease_seconds=0 darhol tugagan.
+        import asyncio
+
+        await asyncio.sleep(0.01)
+
+        claimed = await repo.try_claim(mission.id, owner_token="worker-B")
+
+        assert claimed is True
+        fresh = await repo.get(mission.id)
+        assert fresh.claimed_by == "worker-B"
+
+
 class TestCountByStatus:
     async def test_counts_by_status(self, repo: MissionRepository, owner: Owner) -> None:
         await repo.create(Mission(owner_id=owner.id, objective="a"))

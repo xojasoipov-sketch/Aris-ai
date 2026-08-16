@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from zet.core.mission import (
@@ -83,6 +84,8 @@ class MissionRepository:
             pending_approval_id=mission.pending_approval_id,
             retry_count=mission.retry_count,
             error=mission.error,
+            claimed_by=mission.claimed_by,
+            claim_expires_at=mission.claim_expires_at,
         )
         self._session.add(row)
         await self._session.flush()
@@ -233,6 +236,82 @@ class MissionRepository:
             return None
         return await self._to_domain(row)
 
+    # ── Restart-recovery lease (JB-11) ──────────────────────────
+    #
+    # NEGA kerak: `core/mission_recovery.py`dagi `asyncio.Lock` FAQAT
+    # bitta process ichida ishlaydi. Ko'p worker/pod ishga tushsa (yoki
+    # bitta worker ichida ikkita mustaqil yo'l — masalan restart
+    # resumer VA foydalanuvchi `/approvals/{id}/approve` chertishi —
+    # bir vaqtda bir xil mission'ni haydab ketishi mumkin edi. Bu ikki
+    # metod DB-native atomik "compare-and-set" beradi — SELECT-FOR-UPDATE
+    # yoki tashqi lock xizmati kerak emas, chunki bitta `UPDATE ...
+    # WHERE ...` bayonoti o'zi SQL dvigateli darajasida atomik.
+
+    async def try_claim(
+        self,
+        mission_id: uuid.UUID,
+        *,
+        owner_token: str,
+        lease_seconds: int = 300,
+    ) -> bool:
+        """Mission'ni `owner_token` nomidan atomik da'vo qiladi.
+
+        Muvaffaqiyatli bo'ladi FAQAT: (a) hech kim da'vo qilmagan
+        (`claimed_by IS NULL`), yoki (b) oldingi da'vo lease'i tugagan
+        (`claim_expires_at < hozir`) — ya'ni CRASH bo'lgan worker
+        mission'ni abadiy qulflab qo'ymaydi (§13 "recovery lease").
+
+        Returns:
+            `True` — da'vo muvaffaqiyatli (chaqiruvchi mission'ni
+            xavfsiz haydashi mumkin). `False` — boshqa worker
+            allaqachon egalik qiladi (chaqiruvchi o'tkazib yuborishi
+            kerak).
+        """
+        now = utcnow()
+        expires = now + timedelta(seconds=lease_seconds)
+        stmt = (
+            update(MissionORM)
+            .where(
+                MissionORM.id == mission_id,
+                MissionORM.owner_id == self._owner_id,
+                or_(
+                    MissionORM.claimed_by.is_(None),
+                    MissionORM.claim_expires_at.is_(None),
+                    MissionORM.claim_expires_at < now,
+                ),
+            )
+            .values(claimed_by=owner_token, claim_expires_at=expires)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        # `Result[Any]` stub'ida `.rowcount` yo'q deb ko'rsatiladi — lekin
+        # `update()` statement uchun runtime'da haqiqiy `CursorResult`
+        # qaytadi (xuddi `devices/repository.py`/`killswitch_actions.py`
+        # allaqachon shu naqshni ishlatgani kabi — bazaviy, mavjud mypy
+        # cheklovi, yangi emas).
+        rowcount = result.rowcount  # type: ignore[attr-defined]
+        return bool(rowcount and rowcount > 0)
+
+    async def release_claim(self, mission_id: uuid.UUID, *, owner_token: str) -> None:
+        """Lease'ni bo'shatadi — FAQAT `owner_token` o'zi ushlab turgan bo'lsa.
+
+        NEGA shart bilan: agar lease muddati allaqachon tugab, boshqa
+        worker YANGI da'vo qilib ulgurgan bo'lsa, ESKI worker "release"
+        deb boshqa workerning yangi lease'ini o'chirib qo'ymasligi
+        kerak (klassik "lost update" muammosi).
+        """
+        stmt = (
+            update(MissionORM)
+            .where(
+                MissionORM.id == mission_id,
+                MissionORM.owner_id == self._owner_id,
+                MissionORM.claimed_by == owner_token,
+            )
+            .values(claimed_by=None, claim_expires_at=None)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
     # ── Dashboard metrikalari ────────────────────────────────────
 
     async def count_by_status(self) -> dict[MissionStatus, int]:
@@ -285,6 +364,8 @@ class MissionRepository:
             pending_approval_id=row.pending_approval_id,
             retry_count=row.retry_count,
             error=row.error,
+            claimed_by=row.claimed_by,
+            claim_expires_at=row.claim_expires_at,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

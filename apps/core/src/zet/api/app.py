@@ -149,21 +149,29 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # `run_to_completion(mid)` fon task'i spawn qilinadi. WAITING_APPROVAL
     # mission'lar allaqachon yuqorida approval tiklash bilan qamrab
     # olingan — bu yerda ular o'tkazib yuboriladi. Fail-open.
+    #
+    # JB-11 BUG FIX: ilgari `get_orchestrator()` FastAPI DI konteksti
+    # TASHQARISIDA bare chaqirilardi — bu funksiya HAR bir parametrni
+    # `Depends(...)` marker obyekti bilan default qiladi, shuning uchun
+    # `settings.run_max_usd` o'qish ichkarida `AttributeError` berardi.
+    # Xato `except Exception` bilan JIMGINA yutilardi — ya'ni JB-10'dan
+    # beri mission recovery HECH QACHON haqiqatda ishlamagan (faqat
+    # "spawned" logi ko'rinmasdi, lekin sabab aniqlanmagan edi). Endi
+    # `build_orchestrator_for_session()` — Telegram bilan bir xil
+    # qo'lda-qurish naqshi, har mission uchun O'Z sessiyasi ichida.
     if settings.mission_restart_recovery_enabled:
         try:
             from zet.api.deps import (
                 build_mission_engine_for_session,
+                build_orchestrator_for_session,
                 get_approval_service,
-                get_orchestrator,
             )
             from zet.core.mission_recovery import load_incomplete_missions
 
-            _orch_for_recovery = get_orchestrator()
-            _approvals_for_recovery = get_approval_service()
-
             async def _mission_engine_factory(sess):  # type: ignore[no-untyped-def]
+                orch = await build_orchestrator_for_session(sess, settings)
                 return await build_mission_engine_for_session(
-                    sess, _orch_for_recovery, _approvals_for_recovery
+                    sess, orch, get_approval_service()
                 )
 
             restored_missions = await load_incomplete_missions(

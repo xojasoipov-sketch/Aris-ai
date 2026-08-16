@@ -1181,6 +1181,65 @@ def get_capability_registry() -> object:
     return registry
 
 
+async def build_orchestrator_for_session(
+    session: AsyncSession, settings: Settings
+) -> Orchestrator:
+    """FastAPI DI'siz, berilgan sessiya ustida to'liq `Orchestrator` quradi.
+
+    MUHIM (JB-11 bug fix): `get_orchestrator()` FastAPI `Depends(...)`
+    marker obyektlariga tayanadi — HAR BIR parametri
+    `Depends(get_xxx)` bilan default qilingan. FastAPI DI konteksti
+    TASHQARISIDA (masalan `api/app.py`ning `lifespan()` funksiyasida)
+    uni bare (`get_orchestrator()`) chaqirish `settings` parametrini
+    `Depends`ning O'ZIGA bog'laydi — keyingi `settings.run_max_usd`
+    o'qish `AttributeError` beradi. JB-10 mission-recovery wiring'i
+    aynan shu xatoga tushib, `except Exception` orqali JIMGINA
+    yutilgan edi — ya'ni mission recovery HECH QACHON ishlamagan.
+
+    Bu funksiya — Telegram `_orchestrator_runner`/`_approval_runner`
+    (`get_telegram_bot()` ichida) allaqachon ishlatib kelayotgan QO'LDA
+    QURISH naqshining, endi qayta ishlatiladigan versiyasi. Har
+    chaqiruvda YANGI `Orchestrator` quradi (session-scoped — Telegram
+    bilan bir xil sabab: `ModelRouter` sessiyaga bog'langan).
+    """
+    router = ModelRouter(get_llm_providers(), session, settings)
+    tool_registry = get_tool_registry()
+    permission_policy = get_permission_policy()
+    killswitch = get_killswitch()
+    memory = PgMemoryStore(
+        session,
+        owner_id=(await get_or_create_owner(session, external_id=settings.owner_id)).id,
+        embedder=get_embedding_provider(),
+    )
+    recall = _build_recall(memory)
+    return Orchestrator(
+        router=router,
+        tool_registry=tool_registry,
+        permission_policy=permission_policy,
+        approval_service=get_approval_service(),
+        killswitch=killswitch,
+        run_store=get_run_store(),
+        budget_usd=settings.run_max_usd,
+        max_steps=settings.run_max_steps,
+        recall=recall,
+        audit_fn=_default_audit,
+        mark_verified_fn=_default_mark_verified,
+        run_timeout_s=settings.run_timeout_s,
+        concurrency_semaphore=get_run_semaphore(),
+        verifier_judge_provider=_build_verifier_judge(router),
+        recovery_engine=_build_recovery_engine(
+            router=router,
+            tool_registry=tool_registry,
+            permission_policy=permission_policy,
+            killswitch=killswitch,
+            budget_usd=settings.run_max_usd,
+            recall=recall,
+        ),
+        notifier=get_notifier(),
+        world_state_provider=_build_world_state_provider(settings),
+    )
+
+
 def get_orchestrator(
     router: ModelRouter = Depends(get_model_router),
     tool_registry: ToolRegistry = Depends(get_tool_registry),

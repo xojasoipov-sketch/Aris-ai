@@ -43,7 +43,7 @@ Bog'liq qarorlar:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -56,6 +56,7 @@ from zet.core.model_routing import BrainModelRouter, CognitiveStage, RoutingSign
 from zet.db.base import utcnow
 from zet.domain.enums import RiskLevel, StepStatus, TaskClass
 from zet.security.risk import risk_for
+from zet.tools.registry import ToolNotFoundError
 
 if TYPE_CHECKING:
     from zet.agents.registry import AgentRegistry
@@ -219,17 +220,45 @@ class TaskGraphExecutor:
         self._max_retries = max_retries
         self._task_timeout_s = task_timeout_s
 
-    async def run(self, mission: Mission) -> TaskGraphResult:
+    async def run(
+        self,
+        mission: Mission,
+        *,
+        on_checkpoint: Callable[[list[MissionTask]], Awaitable[None]] | None = None,
+    ) -> TaskGraphResult:
         """`mission.tasks`ni tugaguncha (yoki bloklanguncha) bajaradi.
+
+        Args:
+            mission: bajariladigan mission (`mission.tasks` DAG tugunlari).
+            on_checkpoint: JB-11 — berilsa, HAR BOSQICH tugagach
+                chaqiriladi (joriy `tasks` ro'yxati bilan) — chaqiruvchi
+                shu orqali DB'ga qisman progressni yozadi. `run()`ning
+                ARGUMENTI (constructor emas): chunki `mission.id` faqat
+                chaqiruv vaqtida ma'lum, va bitta `TaskGraphExecutor`
+                instansi umr davomida bir nechta chaqiruv uchun qayta
+                ishlatilishi mumkin — call-scoped callback holat
+                bo'lishmasligini (race) oldini oladi. Berilmasa (default)
+                — xatti-harakat AYNAN JB-5/6/7/9/10'dagidek (hech qanday
+                oraliq checkpoint yozilmaydi).
 
         Resume/qayta urinish siyosati (idempotency): FAQAT `DONE` tasklar
         HECH QACHON qayta ishga tushirilmaydi — jarayon qayta boshlangan
         (process restart, `RUNNING`da qotib qolgan task) yoki mission-level
         recovery (`MissionEngine.recover()` EXECUTING'ga qaytarganda) shu
-        `run()` QAYTA chaqiriladi. Ikkala holatda ham `FAILED`/`SKIPPED`/
-        `RUNNING` tasklar `PENDING`ga qaytariladi va QAYTA sinaladi —
-        aks holda bitta task muvaffaqiyatsiz bo'lgach, mission-level
-        recovery hech qachon uni tuzata olmasdi (abadiy bloklangan bo'lardi).
+        `run()` QAYTA chaqiriladi. `FAILED`/`SKIPPED` tasklar `PENDING`ga
+        qaytariladi va QAYTA sinaladi — aks holda bitta task muvaffaqiyatsiz
+        bo'lgach, mission-level recovery hech qachon uni tuzata olmasdi
+        (abadiy bloklangan bo'lardi).
+
+        JB-11 — YON-SAMARALI (idempotent EMAS) tool xavfsizligi:
+        `RUNNING` holatida qotib qolgan task uchun ENDI SHART TEKSHIRILADI.
+        Agar task'ning tooli `idempotent=False` (masalan Telegram xabar
+        yuborish) bo'lsa — HAQIQATDA bajarilgan-bajarilmagani NOANIQ (server
+        yon-samarani bajarib, natijani yozib ulgurmasdan qulashi mumkin edi).
+        Bunday holatda AVTOMATIK qayta ishga tushirilmaydi — task FAILED
+        deb belgilanadi, aniq xato bilan (mission-level RecoveryEngine
+        buni ko'radi). Idempotent (yoki noma'lum/READ) tool'lar uchun —
+        eski xatti-harakat (PENDING'ga qaytarib qayta sinash) saqlanadi.
         """
         tasks = list(mission.tasks)
         if not tasks:
@@ -242,8 +271,24 @@ class TaskGraphExecutor:
             )
 
         for task in tasks:
-            if task.status != StepStatus.DONE:
-                task.status = StepStatus.PENDING
+            if task.status == StepStatus.DONE:
+                continue
+            if task.status == StepStatus.RUNNING and not self._tool_is_idempotent(task.tool):
+                task.status = StepStatus.FAILED
+                task.error = (
+                    f"restart: '{task.tool}' yon-samarali (idempotent emas) tool "
+                    "RUNNING holatida uzilib qoldi — haqiqatda bajarilgan-"
+                    "bajarilmagani noaniq, xavfsizlik uchun avtomatik qayta "
+                    "ishga tushirilmadi (JB-11)."
+                )
+                log.warning(
+                    "task_graph.non_idempotent_interrupted",
+                    mission_id=str(mission.id),
+                    task=task.title,
+                    tool=task.tool,
+                )
+                continue
+            task.status = StepStatus.PENDING
 
         try:
             batches = _tasks_to_batches(tasks)
@@ -289,6 +334,18 @@ class TaskGraphExecutor:
                     capability_gaps.append(gap)
                 if task.status == StepStatus.FAILED:
                     any_failed = True
+
+            # JB-11 — bosqich-darajali checkpoint: chaqiruvchi (odatda
+            # `MissionEngine._execute_task_graph`) shu orqali DB'ga
+            # QISMAN progressni yozadi. Fail-open: checkpoint yozish
+            # xato bersa, ijroning o'zi TO'XTAMAYDI — faqat log yoziladi
+            # (checkpoint — optimallashtirish, mission oxirida baribir
+            # to'liq holat qayta yoziladi).
+            if on_checkpoint is not None:
+                try:
+                    await on_checkpoint(tasks)
+                except Exception:
+                    log.warning("task_graph.checkpoint_failed", mission_id=str(mission.id))
 
         any_blocked = any(t.status == StepStatus.SKIPPED for t in tasks)
         all_done = all(t.status == StepStatus.DONE for t in tasks)
@@ -456,6 +513,22 @@ class TaskGraphExecutor:
         task.error = last_error or "nomalum xato"
         task.completed_at = utcnow()
         return gap
+
+    def _tool_is_idempotent(self, tool_name: str | None) -> bool:
+        """`Tool.idempotent` bayrog'ini tekshiradi (JB-11 restart xavfsizligi).
+
+        Noma'lum/registryda topilmagan/`None` tool nomi — XAVFSIZ TOMONDA
+        xato qiladi: idempotent EMAS deb hisoblanadi. NEGA: noaniqlik
+        borida "qayta ishga tushirilmadi" — "qayta ishga tushirib,
+        dublikat yon-samara yaratdi"dan HAR DOIM xavfsizroq (spec §6:
+        "If uncertain: DO NOT blindly repeat the action").
+        """
+        if not tool_name:
+            return False
+        try:
+            return self._tools.get(tool_name).idempotent
+        except ToolNotFoundError:
+            return False
 
     def _route_task(self, mission: Mission, task: MissionTask, command: str) -> TaskClass | None:
         """JB-7: task uchun `TaskClass` ni tanlaydi (`self._model_router` bo'lsa).

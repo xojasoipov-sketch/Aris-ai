@@ -41,6 +41,7 @@ from zet.agents.registry import AgentRegistry
 from zet.automation.cron import is_due
 from zet.automation.engine import AutomationEngine
 from zet.automation.executor import AgentUnavailableError, run_agent_command
+from zet.automation.fire_ledger import claim_fire_standalone
 from zet.automation.handoff import HandoffDispatcher
 from zet.automation.scheduler import ScheduleRule
 from zet.config import Settings
@@ -184,7 +185,29 @@ class AutomationDaemon:
             if not is_due(rule.normalized_cron, current):
                 continue
             if self._last_fired_minute.get(rule.id) == minute_key:
-                continue  # shu daqiqada allaqachon ishga tushgan
+                continue  # shu daqiqada allaqachon ishga tushgan (bu process)
+
+            # JB-11: DB-backed dedup — mid-minute restart/crash yoki
+            # ko'p worker holatida ham dublikat fire'ni oldini oladi
+            # (`_last_fired_minute` faqat BITTA process ichida ishlaydi).
+            # `session_factory` berilmagan bo'lsa (dev/test) — bu qadam
+            # o'tkazib yuboriladi, faqat lokal dedup ishlaydi (eski
+            # xatti-harakat).
+            if self._session_factory is not None and self._settings is not None:
+                claimed = await claim_fire_standalone(
+                    self._session_factory,
+                    owner_external_id=self._settings.owner_id,
+                    rule_id=rule.id,
+                    minute_key=minute_key,
+                )
+                if not claimed:
+                    self._last_fired_minute[rule.id] = minute_key
+                    log.info(
+                        "automation_daemon.fire_claimed_elsewhere",
+                        rule_id=rule.id,
+                        minute_key=minute_key,
+                    )
+                    continue
 
             self._last_fired_minute[rule.id] = minute_key
             await self._fire(rule)

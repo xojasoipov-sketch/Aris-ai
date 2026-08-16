@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, Integer, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from zet.db.base import Base, JSONType, TimestampMixin, UTCDateTime, UUIDPrimaryKeyMixin
@@ -77,6 +77,21 @@ class Mission(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+
+    claimed_by: Mapped[str | None] = mapped_column(String(128), default=None)
+    """JB-11 — restart-recovery egalik lease'i. Bir process/worker mission'ni
+    `run_to_completion()` bilan haydashdan OLDIN shu maydonni O'ZINING
+    identifikatoriga o'rnatadi (atomik `UPDATE ... WHERE claimed_by IS
+    NULL OR claim_expires_at < now()`). Boshqa worker bir xil mission'ni
+    parallel haydab ketmasligi shu bilan ta'minlanadi — `asyncio.Lock`
+    faqat BITTA process ichida ishlaydi, bu esa DB-native va ko'p
+    worker/pod holatida ham ishlaydi."""
+
+    claim_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None)
+    """`claimed_by` lease'ining tugash vaqti. CRASH bo'lgan worker
+    mission'ni ABADIY qulflab qo'ymasligi uchun — lease muddati
+    o'tgach, boshqa worker qayta da'vo qila oladi (§13 "recovery
+    lease")."""
 
     __table_args__ = (
         Index("ix_mission_owner_status", "owner_id", "status"),

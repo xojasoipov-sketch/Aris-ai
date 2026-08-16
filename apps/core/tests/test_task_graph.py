@@ -36,11 +36,13 @@ class _StubTool(Tool):
         outcomes: list[Any] | None = None,
         risk: RiskLevel = RiskLevel.LOW,
         sleep_s: float = 0.0,
+        idempotent: bool = True,
     ) -> None:
         self._name = name
         self._outcomes = list(outcomes or ["ok"])
         self._risk = risk
         self._sleep_s = sleep_s
+        self._idempotent = idempotent
         self.calls: list[dict[str, Any]] = []
 
     @property
@@ -58,6 +60,12 @@ class _StubTool(Tool):
     @property
     def risk_level(self) -> RiskLevel:
         return self._risk
+
+    @property
+    def idempotent(self) -> bool:
+        """JB-11 — testda konfiguratsiya qilinadigan (default: `Tool`ning
+        o'zidagi True)."""
+        return self._idempotent
 
     async def _execute(self, params: dict[str, Any]) -> Any:
         self.calls.append(params)
@@ -545,6 +553,163 @@ class TestSynthesisAndEmptyGraph:
 
         assert "a" in text and "a natija" in text
         assert "b" in text and "b xato" in text
+
+
+class TestNonIdempotentResumeSafety:
+    """JB-11 §6/§8 — Telegram-uslubi dublikat yon-samara oldini olish.
+
+    `_StubTool(idempotent=False)` — masalan `telegram.channel_post`
+    modeli. RUNNING holatida qotib qolgan bunday task AVTOMATIK qayta
+    ishga tushirilmasligi kerak.
+    """
+
+    async def test_running_non_idempotent_task_marked_failed_not_rerun(self) -> None:
+        registry = AgentRegistry()
+        registry.register(_agent_spec("agent", tools=["telegram.send"]), status=AgentStatus.ACTIVE)
+        tools = ToolRegistry()
+        risky_tool = _StubTool("telegram.send", idempotent=False)
+        tools.register(risky_tool)
+
+        stuck_task = MissionTask(
+            position=0,
+            title="xabar yubor",
+            tool="telegram.send",
+            agent="agent",
+            status=StepStatus.RUNNING,
+        )
+        mission = _mission(tasks=[stuck_task])
+        executor = _executor(agent_registry=registry, tool_registry=tools)
+
+        result = await executor.run(mission)
+
+        # KRITIK DALIL: tool HECH QACHON chaqirilmadi — ya'ni ikkinchi
+        # marta "yubormadi".
+        assert risky_tool.calls == []
+        assert result.tasks[0].status == StepStatus.FAILED
+        assert "idempotent emas" in (result.tasks[0].error or "")
+
+    async def test_running_idempotent_task_still_reruns(self) -> None:
+        """Regressiya: idempotent tool — eski xatti-harakat (qayta ishga tushadi)."""
+        registry = AgentRegistry()
+        registry.register(_agent_spec("agent", tools=["weather.now"]), status=AgentStatus.ACTIVE)
+        tools = ToolRegistry()
+        tools.register(_StubTool("weather.now"))  # default idempotent=True
+
+        stuck_task = MissionTask(
+            position=0, title="ob-havo", tool="weather.now", agent="agent", status=StepStatus.RUNNING
+        )
+        mission = _mission(tasks=[stuck_task])
+        executor = _executor(agent_registry=registry, tool_registry=tools)
+
+        result = await executor.run(mission)
+
+        assert result.tasks[0].status == StepStatus.DONE
+
+    async def test_running_unknown_tool_treated_as_non_idempotent(self) -> None:
+        """Noma'lum/registrda yo'q tool — XAVFSIZ TOMONDA xato (qayta ishga tushirilmaydi)."""
+        registry = AgentRegistry()
+        registry.register(_agent_spec("agent", tools=["ghost.tool"]), status=AgentStatus.ACTIVE)
+        tools = ToolRegistry()  # "ghost.tool" umuman ro'yxatga OLINMAGAN
+
+        stuck_task = MissionTask(
+            position=0, title="x", tool="ghost.tool", agent="agent", status=StepStatus.RUNNING
+        )
+        mission = _mission(tasks=[stuck_task])
+        executor = _executor(agent_registry=registry, tool_registry=tools)
+
+        result = await executor.run(mission)
+
+        assert result.tasks[0].status == StepStatus.FAILED
+
+    async def test_done_non_idempotent_task_never_touched(self) -> None:
+        """DONE — idempotentlikdan qat'i nazar HECH QACHON qayta ishga tushmaydi."""
+        registry = AgentRegistry()
+        registry.register(_agent_spec("agent", tools=["telegram.send"]), status=AgentStatus.ACTIVE)
+        tools = ToolRegistry()
+        risky_tool = _StubTool("telegram.send", idempotent=False)
+        tools.register(risky_tool)
+
+        done_task = MissionTask(
+            position=0,
+            title="x",
+            tool="telegram.send",
+            agent="agent",
+            status=StepStatus.DONE,
+            result="allaqachon yuborilgan",
+        )
+        mission = _mission(tasks=[done_task])
+        executor = _executor(agent_registry=registry, tool_registry=tools)
+
+        result = await executor.run(mission)
+
+        assert risky_tool.calls == []
+        assert result.tasks[0].status == StepStatus.DONE
+        assert result.tasks[0].result == "allaqachon yuborilgan"
+
+
+class TestBatchCheckpointing:
+    """JB-11 §2/§3 — bosqich-darajali checkpoint callback."""
+
+    async def test_checkpoint_called_after_each_batch(self) -> None:
+        registry = AgentRegistry()
+        registry.register(_agent_spec("agent", tools=["a", "b"]), status=AgentStatus.ACTIVE)
+        tools = ToolRegistry()
+        tools.register(_StubTool("a"))
+        tools.register(_StubTool("b"))
+
+        # Ikki bosqich: task0 → task1 (bog'liq, ketma-ket).
+        tasks = [
+            MissionTask(position=0, title="a", tool="a", agent="agent"),
+            MissionTask(position=1, title="b", tool="b", agent="agent", depends_on=[0]),
+        ]
+        mission = _mission(tasks=tasks)
+        executor = _executor(agent_registry=registry, tool_registry=tools)
+
+        checkpoints: list[list[str]] = []
+
+        async def on_checkpoint(current_tasks: list[MissionTask]) -> None:
+            checkpoints.append([t.status.value for t in current_tasks])
+
+        result = await executor.run(mission, on_checkpoint=on_checkpoint)
+
+        assert result.all_done is True
+        # Ikki bosqich — ikki marta checkpoint chaqirilgan.
+        assert len(checkpoints) == 2
+        # Birinchi checkpoint'da faqat task0 DONE, task1 hali PENDING.
+        assert checkpoints[0] == ["done", "pending"]
+        # Ikkinchi checkpoint'da ikkalasi ham DONE.
+        assert checkpoints[1] == ["done", "done"]
+
+    async def test_checkpoint_failure_does_not_break_execution(self) -> None:
+        """Fail-open: checkpoint yozish xatosi ijroni to'xtatmaydi."""
+        registry = AgentRegistry()
+        registry.register(_agent_spec("agent", tools=["a"]), status=AgentStatus.ACTIVE)
+        tools = ToolRegistry()
+        tools.register(_StubTool("a"))
+
+        mission = _mission(tasks=[MissionTask(position=0, title="a", tool="a", agent="agent")])
+        executor = _executor(agent_registry=registry, tool_registry=tools)
+
+        async def broken_checkpoint(_: list[MissionTask]) -> None:
+            raise RuntimeError("DB yiqildi")
+
+        result = await executor.run(mission, on_checkpoint=broken_checkpoint)
+
+        assert result.all_done is True  # ijro baribir muvaffaqiyatli tugadi
+
+    async def test_no_checkpoint_callback_is_backward_compatible(self) -> None:
+        """`on_checkpoint` berilmasa — JB-5/6/7/9/10 xatti-harakati (o'zgarishsiz)."""
+        registry = AgentRegistry()
+        registry.register(_agent_spec("agent", tools=["a"]), status=AgentStatus.ACTIVE)
+        tools = ToolRegistry()
+        tools.register(_StubTool("a"))
+
+        mission = _mission(tasks=[MissionTask(position=0, title="a", tool="a", agent="agent")])
+        executor = _executor(agent_registry=registry, tool_registry=tools)
+
+        result = await executor.run(mission)  # on_checkpoint yo'q
+
+        assert result.all_done is True
 
 
 def _tool_use(name: str, arguments: dict[str, Any] | None = None):

@@ -5,7 +5,7 @@ Alembic autogenerate barcha modellarni ko'rishi uchun ular shu yerda import qili
 
 from zet.db.base import Base
 from zet.db.models.agent import Agent
-from zet.db.models.automation import AutomationState
+from zet.db.models.automation import AutomationState, ScheduledFire
 from zet.db.models.commerce import Order, Product
 from zet.db.models.cost import CostLedger, QuotaLedger
 from zet.db.models.crm import Business, CRMContact, CRMDeal, CRMLead
@@ -45,6 +45,7 @@ __all__ = [
     "Project",
     "QuotaLedger",
     "Run",
+    "ScheduledFire",
     "Step",
     "Task",
     "ToolCall",

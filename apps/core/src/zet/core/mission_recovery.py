@@ -34,11 +34,17 @@ XAVFSIZLIK QOIDALARI:
     - COMPLETED/FAILED/CANCELLED mission'lar HECH QACHON qayta ishga
       tushirilmaydi (`active_only=True` ularni filtrlab tashlaydi —
       `mission_repository.py:110-115`).
-    - Har mission uchun in-process asyncio.Lock (dublikat resumer
-      va parallel approval-triggered chaqiriqlar birga ishga
-      tushmasin uchun). Multi-worker/multi-pod uchun DB advisory
-      lock kerak bo'ladi — bu keyingi JB doirasi (audit halol
-      belgilagan).
+    - Har mission uchun in-process asyncio.Lock (bitta process ichida
+      dublikat resumer va parallel approval-triggered chaqiriqlar
+      birga ishga tushmasin uchun).
+    - JB-11: DB-native lease (`MissionRepository.try_claim`/
+      `release_claim`, `mission.claimed_by`/`claim_expires_at`
+      ustunlari) — bu esa KO'P WORKER/POD holatida ham ishlaydi
+      (asyncio.Lock faqat BITTA process ichida). Claim/release —
+      ALOHIDA qisqa tranzaksiyalarda (mission ijrosining o'zidan
+      AJRATILGAN) — aks holda uzoq ijro davomida claim UPDATE'i
+      boshqa worker'ning `try_claim` so'rovini butun ijro davomida
+      BLOKLAB qo'yardi (row-level lock, MVCC).
     - Fail-open: bir mission'ning yiqilishi startup'ni to'xtatmaydi,
       log yoziladi va boshqa mission'lar davom etadi.
     - `_ABSOLUTE_MAX_RESUME` — bir startup'da ko'p mission tiklamaslik
@@ -82,6 +88,21 @@ _ABSOLUTE_MAX_RESUME = 10_000
 """Startup'da nechta mission qayta tiklanishi mumkinligi chegarasi —
 kutilmagan buzuq holat yoki tegishli bug'dan himoya. Real jonli
 tizimlarda odatda 10-100 tartibida non-terminal mission bo'ladi."""
+
+_DEFAULT_LEASE_SECONDS = 300
+"""JB-11 — DB-native claim lease muddati. Bundan uzoqroq ishlaydigan
+mission resumelari kamdan-kam (odatiy LLM+tool ijrosi bir necha
+soniya-daqiqa), lekin uzoqroq bo'lsa ham xavfsiz: lease tugagach
+BOSHQA worker qayta da'vo qilishi mumkin — bu FAQAT chinakam qulagan
+worker'lar uchun ehtiyot chorasi (§13 "recovery lease")."""
+
+_PROCESS_TOKEN = uuid.uuid4().hex
+"""Bu process/worker'ni identifikatsiya qiluvchi tasodifiy token —
+modul import vaqtida bir marta generatsiya qilinadi. Bir process
+ichidagi barcha resume urinishlari BIR XIL tokenni ishlatadi (parallel
+task'lar bir process doirasida "bir xil egalik"ka ega — ular allaqachon
+`acquire_mission_lock` orqali ketma-ketlashtirilgan; token faqat
+BOSHQA process/worker'dan farqlash uchun kerak)."""
 
 
 # ── Per-mission in-process lock ───────────────────────────────────
@@ -132,6 +153,42 @@ Har mission uchun yangi session ochilishi kerak — request-scoped
 resumer'da to'g'ridan-to'g'ri ishlatib bo'lmaydi."""
 
 
+async def _try_claim(
+    session_factory: async_sessionmaker[AsyncSession], mission: Mission
+) -> bool:
+    """Qisqa, ALOHIDA tranzaksiyada mission'ni da'vo qiladi (JB-11).
+
+    NEGA ALOHIDA (mission ijrosi bilan BIR XIL sessiyada emas): agar
+    claim UPDATE'i uzoq davom etadigan `run_to_completion()` bilan
+    bitta ochiq tranzaksiyada bo'lsa, boshqa worker'ning `try_claim`
+    so'rovi butun mission ijrosi davomida BLOKLANIB qolardi (row-level
+    lock, MVCC) — bu funksionallik emas, lekin jiddiy LATENCY muammosi
+    bo'lardi. Alohida qisqa tranzaksiya — claim DARHOL commit bo'ladi,
+    boshqa worker'lar uni zudlik bilan ko'radi.
+    """
+    from zet.core.mission_repository import MissionRepository
+
+    async with session_scope(session_factory) as session:
+        repo = MissionRepository(session, owner_id=mission.owner_id)
+        return await repo.try_claim(
+            mission.id, owner_token=_PROCESS_TOKEN, lease_seconds=_DEFAULT_LEASE_SECONDS
+        )
+
+
+async def _release_claim(
+    session_factory: async_sessionmaker[AsyncSession], mission: Mission
+) -> None:
+    """Lease'ni bo'shatadi (JB-11) — fail-open, mission natijasiga ta'sir qilmaydi."""
+    from zet.core.mission_repository import MissionRepository
+
+    try:
+        async with session_scope(session_factory) as session:
+            repo = MissionRepository(session, owner_id=mission.owner_id)
+            await repo.release_claim(mission.id, owner_token=_PROCESS_TOKEN)
+    except Exception:
+        log.warning("mission_recovery.release_claim_failed", mission_id=str(mission.id))
+
+
 async def _resume_one(
     mission: Mission,
     session_factory: async_sessionmaker[AsyncSession],
@@ -140,26 +197,47 @@ async def _resume_one(
     """Bitta mission'ni `run_to_completion` orqali oldinga siljitadi.
 
     Fail-open: bu task'ning yiqilishi boshqa task'larga ta'sir
-    qilmaydi. Har mission'ga o'z lock'i, o'z session'i.
+    qilmaydi. Har mission'ga o'z lock'i (bitta process ichida) VA o'z
+    DB lease'i (ko'p worker/pod holatida ham) bor.
     """
     lock = await acquire_mission_lock(mission.id)
-    try:
-        async with lock, session_scope(session_factory) as session:
-            engine = await engine_factory(session)
-            await engine.run_to_completion(mission.id)
-        log.info(
-            "mission_recovery.resumed",
-            mission_id=str(mission.id),
-            initial_status=mission.status.value,
-        )
-    except Exception as exc:
-        # Bitta mission yiqilsa boshqalar davom etsin. Xato log'da
-        # ko'rinadi va foydalanuvchi HTTP orqali holatni ko'ra oladi.
-        log.warning(
-            "mission_recovery.resume_failed",
-            mission_id=str(mission.id),
-            error=str(exc),
-        )
+    async with lock:
+        try:
+            claimed = await _try_claim(session_factory, mission)
+        except Exception:
+            # JB-11 fail-open: claim mexanizmining o'zi yiqilsa —
+            # eski (JB-10) xatti-harakat: shunchaki davom etamiz
+            # (asyncio.Lock hali ham bitta process ichida himoya beradi).
+            log.warning("mission_recovery.claim_check_failed", mission_id=str(mission.id))
+            claimed = True
+
+        if not claimed:
+            log.info(
+                "mission_recovery.claim_denied",
+                mission_id=str(mission.id),
+                reason="boshqa worker allaqachon egalik qiladi",
+            )
+            return
+
+        try:
+            async with session_scope(session_factory) as session:
+                engine = await engine_factory(session)
+                await engine.run_to_completion(mission.id)
+            log.info(
+                "mission_recovery.resumed",
+                mission_id=str(mission.id),
+                initial_status=mission.status.value,
+            )
+        except Exception as exc:
+            # Bitta mission yiqilsa boshqalar davom etsin. Xato log'da
+            # ko'rinadi va foydalanuvchi HTTP orqali holatni ko'ra oladi.
+            log.warning(
+                "mission_recovery.resume_failed",
+                mission_id=str(mission.id),
+                error=str(exc),
+            )
+        finally:
+            await _release_claim(session_factory, mission)
 
 
 async def load_incomplete_missions(
