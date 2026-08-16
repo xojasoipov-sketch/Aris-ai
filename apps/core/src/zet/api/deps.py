@@ -1167,7 +1167,9 @@ async def build_mission_engine_for_session(
         workspace_repo=workspace,
     )
     capability_registry: CapabilityRegistry = get_capability_registry()  # type: ignore[assignment]
-    composer = CapabilityRegistryComposer(capability_registry)
+    composer = CapabilityRegistryComposer(
+        capability_registry, agent_registry=get_agent_registry()
+    )
     repo = MissionRepository(session, owner_id=owner.id)
     return MissionEngine(
         repository=repo,
@@ -1234,7 +1236,9 @@ async def get_mission_orchestrator(
 
     # Capability composer — singleton registry ustidan compose() beradi.
     capability_registry: CapabilityRegistry = get_capability_registry()  # type: ignore[assignment]
-    composer = CapabilityRegistryComposer(capability_registry)
+    composer = CapabilityRegistryComposer(
+        capability_registry, agent_registry=get_agent_registry()
+    )
 
     # MissionEngine — Bo'lim 2 §2.2 asosiy driver.
     repo = MissionRepository(session, owner_id=owner.id)

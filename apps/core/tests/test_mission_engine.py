@@ -107,7 +107,14 @@ class FakeOrchestrator:
     def queue(self, *records: FakeRunRecord) -> None:
         self._queued.extend(records)
 
-    async def start(self, command: Any, *, dry_run: bool = False) -> FakeRunRecord:
+    async def start(
+        self,
+        command: Any,
+        *,
+        dry_run: bool = False,
+        intent: Any = None,
+        tool_registry_override: Any = None,
+    ) -> FakeRunRecord:
         self.start_calls.append(command)
         if self.raise_kill_switch:
             raise KillSwitchEngagedError("stop")

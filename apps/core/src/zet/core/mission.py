@@ -133,6 +133,9 @@ class CapabilityBundleLike(Protocol):
     tools: list[str]
     permissions_required: list[PermissionLevel]
     risk_level: RiskLevel
+    tool_agents: dict[str, str]
+    """JB-4: tool nomi → HAQIQIY tanlangan agent (bo'sh dict = eski
+    xatti-harakat, `_bundle_to_tasks` barcha `task.agent`ni None qiladi)."""
 
 
 class CapabilityRegistryLike(Protocol):
@@ -502,8 +505,27 @@ class MissionEngine:
         )
         attempt = mission.retry_count + 1
 
+        # JB-4 (audit topilmasi): ilgari `mission.tools` (compose() bosqichida
+        # aniqlangan kerakli toollar) FAQAT ma'lumot uchun saqlanardi —
+        # ijro HAR DOIM to'liq global tool registry orqali borardi, ya'ni
+        # tanlov "o'lik metadata" edi. Endi Orchestrator FAQAT shu
+        # to'plamni ko'radi — LLM boshqa tool nomini bilsa/hallyutsinatsiya
+        # qilsa ham, Executor `ToolNotFoundError` bilan to'xtaydi.
+        #
+        # Fail-open: `mission.tools` bo'sh bo'lsa (nazariy holat —
+        # MissionOrchestrator preflight bo'sh bundle'ni allaqachon FAILED
+        # qiladi) cheklov qo'yilmaydi — to'liq registry, eski xatti-harakat.
+        tool_registry_override = None
+        if mission.tools:
+            try:
+                tool_registry_override = self._orchestrator.tool_registry.subset(mission.tools)
+            except Exception:
+                log.warning("mission.tool_scope_failed", mission_id=str(mission.id))
+
         try:
-            record = await self._orchestrator.start(command)
+            record = await self._orchestrator.start(
+                command, tool_registry_override=tool_registry_override
+            )
         except KillSwitchEngagedError as exc:
             reason = f"kill switch engaged: {exc}"
             failed = await self._transition(mission, MissionStatus.FAILED, error=reason)
@@ -681,7 +703,14 @@ def _max_permission(levels: list[PermissionLevel] | list[str]) -> PermissionLeve
 
 
 def _bundle_to_tasks(bundle: CapabilityBundleLike) -> list[MissionTask]:
-    """CapabilityBundle → MissionTask[] (bir tool = bir task, tartibli DAG)."""
+    """CapabilityBundle → MissionTask[] (bir tool = bir task, tartibli DAG).
+
+    JB-4 (audit topilmasi): `task.agent` ilgari HECH QACHON to'ldirilmasdi.
+    Endi `bundle.tool_agents` (mavjud bo'lsa — `CapabilityRegistryComposer`
+    `AgentSelector` bilan quradi) dan o'qiladi. Mos agent topilmagan
+    tool — `agent=None` (halol: hech kim tanlanmadi, o'ylab topilmadi).
+    """
+    tool_agents = getattr(bundle, "tool_agents", None) or {}
     tasks: list[MissionTask] = []
     for i, tool_name in enumerate(bundle.tools):
         tasks.append(
@@ -689,6 +718,7 @@ def _bundle_to_tasks(bundle: CapabilityBundleLike) -> list[MissionTask]:
                 position=i,
                 title=tool_name,
                 tool=tool_name,
+                agent=tool_agents.get(tool_name),
                 depends_on=[i - 1] if i > 0 else [],
             )
         )

@@ -111,7 +111,14 @@ class FakeInnerOrchestrator:
     def queue(self, *records: FakeRunRecord) -> None:
         self._queued.extend(records)
 
-    async def start(self, command: Any, *, dry_run: bool = False) -> FakeRunRecord:
+    async def start(
+        self,
+        command: Any,
+        *,
+        dry_run: bool = False,
+        intent: Any = None,
+        tool_registry_override: Any = None,
+    ) -> FakeRunRecord:
         _ = dry_run
         self.start_calls.append(command)
         if not self._queued:

@@ -129,6 +129,15 @@ class RunRecord:
     spent_usd: float = 0.0
     error: str | None = None
     pending_approval_id: uuid.UUID | None = None
+    tool_registry_override: ToolRegistry | None = None
+    """JB-4: berilsa — Planner/Executor FAQAT shu registrydagi toollarni
+    ko'radi (masalan Mission tanlagan agent(lar)ning `tool_allowlist`i
+    bilan cheklangan qism). `None` — eski xatti-harakat (to'liq global
+    registry). DB'ga YOZILMAYDI (`run_checkpoint.py` bu maydonni bilmaydi)
+    — server qayta ishga tushgach `resume()` chegarasiz registrga
+    qaytadi; bu xavfsiz degradatsiya, xato emas (approval allaqachon
+    berilgan qadam qayta tekshirilmaydi, faqat KEYINGI qadamlar kengroq
+    tool ko'radi)."""
     steps_total: int = 0
     steps_done: int = 0
 
@@ -318,12 +327,19 @@ class Orchestrator:
         kerak."""
         return self._intent
 
+    @property
+    def tool_registry(self) -> ToolRegistry:
+        """To'liq (global) tool registry — JB-4: `MissionEngine`
+        `.subset(mission.tools)` orqali cheklangan registry qurishi uchun."""
+        return self._tool_registry
+
     async def start(
         self,
         command: Command,
         *,
         dry_run: bool = False,
         intent: Intent | None = None,
+        tool_registry_override: ToolRegistry | None = None,
     ) -> RunRecord:
         """Yangi buyruqni boshidan oxirigacha bajaradi (yoki tasdiq kutadi).
 
@@ -336,6 +352,12 @@ class Orchestrator:
                 AYNAN BIR XIL LLM chaqiruvining ikki marta ketishini
                 oldini oladi. `None` bo'lsa — eski xatti-harakat, intent
                 shu yerda hisoblanadi.
+            tool_registry_override: JB-4 — berilsa, Planner/Executor
+                FAQAT shu registrydagi toollarni ko'radi (masalan Mission
+                tanlagan agent(lar)ning `tool_allowlist`i bilan
+                cheklangan qism, `ToolRegistry.subset()` orqali
+                quriladi). `None` — to'liq global registry (eski
+                xatti-harakat).
 
         Raises:
             KillSwitchEngagedError: emergency stop yoqilgan — hech narsa
@@ -348,18 +370,40 @@ class Orchestrator:
         # bir vaqtda ishlayotgan run'lar chegaralanadi. Bo'lmasa cheksiz.
         if self._concurrency_semaphore is not None:
             async with self._concurrency_semaphore:
-                return await self._start_with_timeout(command, dry_run=dry_run, intent=intent)
-        return await self._start_with_timeout(command, dry_run=dry_run, intent=intent)
+                return await self._start_with_timeout(
+                    command,
+                    dry_run=dry_run,
+                    intent=intent,
+                    tool_registry_override=tool_registry_override,
+                )
+        return await self._start_with_timeout(
+            command, dry_run=dry_run, intent=intent, tool_registry_override=tool_registry_override
+        )
 
     async def _start_with_timeout(
-        self, command: Command, *, dry_run: bool, intent: Intent | None = None
+        self,
+        command: Command,
+        *,
+        dry_run: bool,
+        intent: Intent | None = None,
+        tool_registry_override: ToolRegistry | None = None,
     ) -> RunRecord:
         """Wall-clock timeout — `run_timeout_s` sozlangan bo'lsa (A-07)."""
         if self._run_timeout_s is None:
-            return await self._start_impl(command, dry_run=dry_run, intent=intent)
+            return await self._start_impl(
+                command,
+                dry_run=dry_run,
+                intent=intent,
+                tool_registry_override=tool_registry_override,
+            )
         try:
             return await asyncio.wait_for(
-                self._start_impl(command, dry_run=dry_run, intent=intent),
+                self._start_impl(
+                    command,
+                    dry_run=dry_run,
+                    intent=intent,
+                    tool_registry_override=tool_registry_override,
+                ),
                 timeout=self._run_timeout_s,
             )
         except TimeoutError:
@@ -370,12 +414,18 @@ class Orchestrator:
             raise
 
     async def _start_impl(
-        self, command: Command, *, dry_run: bool = False, intent: Intent | None = None
+        self,
+        command: Command,
+        *,
+        dry_run: bool = False,
+        intent: Intent | None = None,
+        tool_registry_override: ToolRegistry | None = None,
     ) -> RunRecord:
         """Asosiy start mantiqi (avvalgi `start`)."""
 
         record = self._run_store.create(command)
         record.status = RunStatus.PLANNING
+        record.tool_registry_override = tool_registry_override
 
         # JB-3: muhit holatini run boshida bir marta o'qiymiz. To'liq
         # fail-open — bu qo'shimcha kontekst, majburiy bosqich emas:
@@ -391,7 +441,11 @@ class Orchestrator:
         try:
             intent = await self._intent.recognize(
                 command,
-                available_tools=self._tool_registry.tool_names(),
+                # JB-4: override berilgan bo'lsa, Intent ham FAQAT shu
+                # torroq to'plamni ko'rsin — aks holda LLM'ga "bor" deb
+                # ko'rsatilgan tool keyinroq Executor tomonidan rad
+                # etilardi (chalkash tajriba).
+                available_tools=(record.tool_registry_override or self._tool_registry).tool_names(),
                 run_id=record.run_id,
             )
         except AmbiguousCommandError as exc:
@@ -426,7 +480,11 @@ class Orchestrator:
             # ko'rmasa uni tushirib qoldiradi (`video.learn` `url`siz).
             plan = await self._planner.plan(
                 intent,
-                tool_specs=self._tool_registry.tool_signatures(),
+                # JB-4: mission tanlagan agent(lar) bilan cheklangan
+                # to'plam bo'lsa — Planner FAQAT o'shani ko'radi.
+                tool_specs=(
+                    record.tool_registry_override or self._tool_registry
+                ).tool_signatures(),
                 run_id=record.run_id,
                 # B3 audit fix (KONSOLIDATSIYA v2): Planner ham suhbat
                 # tarixini ko'rishi kerak — aks holda "shunga qo'shimcha
@@ -468,7 +526,12 @@ class Orchestrator:
     ) -> RunRecord:
         assert record.plan is not None  # noqa: S101 — yuqorida tekshirilgan
         executor = Executor(
-            registry=self._tool_registry,
+            # JB-4: `record.tool_registry_override` bo'lsa — Executor
+            # HAQIQATAN faqat shu toollarni bajara oladi (`ToolNotFoundError`
+            # boshqasiga). `resume()` ham shu yerdan o'tadi — bir marta
+            # `start()`da o'rnatilgan cheklov approval-dan keyingi qadamlarga
+            # ham qo'llanadi (record orqali saqlanadi).
+            registry=record.tool_registry_override or self._tool_registry,
             policy=self._permission_policy,
             killswitch=self._killswitch,
             budget_usd=self._budget_usd,

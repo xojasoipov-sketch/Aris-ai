@@ -119,6 +119,29 @@ class ToolRegistry:
         """Tool mavjudligini tekshiradi."""
         return name in self._tools
 
+    def subset(self, names: Sequence[str]) -> ToolRegistry:
+        """FAQAT berilgan nomlardagi toollarni o'z ichiga olgan YANGI registry (JB-4).
+
+        NEGA kerak: Mission tanlagan agent/capability'ning `tool_allowlist`i
+        bilan Planner/Executor'ning ko'radigan tool olamini cheklash uchun.
+        Ilgari Mission bundle qanday tool tanlagan bo'lsa ham, ijro
+        HAR DOIM to'liq global registry orqali borardi — tanlov shunchaki
+        ko'rsatma edi, chegara emas. Bu metod bilan qaytgan registry
+        `get()`/`has()`/`tool_names()`/`execute()` — barchasi FAQAT shu
+        to'plamni ko'radi, ya'ni LLM hatto boshqa tool'ni nomini bilsa ham
+        (hallyutsinatsiya) `ToolNotFoundError` bilan to'xtaydi.
+
+        Noma'lum nomlar jimgina o'tkazib yuboriladi (fail-open — chaqiruvchi
+        `mission.tools` kabi allaqachon tekshirilgan ro'yxatni beradi;
+        bu yerda qattiq xato kerak emas).
+        """
+        subset = ToolRegistry()
+        for name in names:
+            tool = self._tools.get(name)
+            if tool is not None:
+                subset._tools[name] = tool
+        return subset
+
     def validate_input(self, tool_name: str, params: dict[str, Any]) -> list[str]:
         """Input'ni tool'ning JSON Schema'siga tekshiradi.
 

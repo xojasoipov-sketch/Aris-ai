@@ -112,7 +112,14 @@ class RecordingOrchestrator:
     def queue(self, *records: Any) -> None:
         self._queued.extend(records)
 
-    async def start(self, command: Command, *, dry_run: bool = False) -> Any:
+    async def start(
+        self,
+        command: Command,
+        *,
+        dry_run: bool = False,
+        intent: Any = None,
+        tool_registry_override: Any = None,
+    ) -> Any:
         self.commands.append(command)
         if not self._queued:
             raise AssertionError("RecordingOrchestrator navbati bo'sh")

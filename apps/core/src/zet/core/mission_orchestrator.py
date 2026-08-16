@@ -319,6 +319,11 @@ class CapabilityBundle:
     tools: list[str] = field(default_factory=list)
     permissions_required: list[PermissionLevel] = field(default_factory=list)
     risk_level: RiskLevel = RiskLevel.LOW
+    tool_agents: dict[str, str] = field(default_factory=dict)
+    """JB-4: har bir tool uchun HAQIQIY tanlangan (ACTIVE, tool_allowlist
+    tekshirilgan) agent. `_bundle_to_tasks()` shu yerdan `MissionTask.agent`
+    ni to'ldiradi — `agent_registry` berilmasa bo'sh (eski xatti-harakat:
+    task.agent har doim None, sinovlar buzilmaydi)."""
 
 
 class CapabilityRegistryComposer:
@@ -330,9 +335,20 @@ class CapabilityRegistryComposer:
     MissionOrchestrator preflight uni FAILED holatiga o'tkazadi.
     """
 
-    def __init__(self, registry: Any, *, top_k: int = 5) -> None:
+    def __init__(
+        self,
+        registry: Any,
+        *,
+        top_k: int = 5,
+        agent_registry: Any = None,
+    ) -> None:
         self._registry = registry
         self._top_k = top_k
+        # JB-4: berilsa — `resolution.agents` (statik `default_agents`
+        # copy-through) HAQIQIY ACTIVE holatga qarab qayta baholanadi va
+        # har tool uchun aniq agent tanlanadi. Berilmasa — eski xatti-
+        # harakat (agents ro'yxati statik, tool_agents bo'sh).
+        self._agent_registry = agent_registry
 
     def compose(self, objective: str, context: dict[str, Any]) -> CapabilityBundle:
         # JB-3 (audit topilmasi): ilgari bu yerda `del context` turardi —
@@ -351,12 +367,47 @@ class CapabilityRegistryComposer:
             return CapabilityBundle()
         selected = [c.name for c in matches[: self._top_k]]
         resolution = self._registry.resolve(selected)
+
+        # JB-4 (audit topilmasi): ilgari `resolution.agents` — capability
+        # konfiguratsiyasidagi STATIK `default_agents` — hech qanday
+        # tekshiruvsiz `Mission.agents`ga ko'chirilardi. Agent PAUSED
+        # bo'lsa ham, hatto ro'yxatdan umuman o'tmagan bo'lsa ham "tanlangan"
+        # bo'lib ko'rinardi, va `MissionTask.agent` HECH QACHON
+        # to'ldirilmasdi (har doim None) — tanlov "o'lik metadata" edi.
+        agents = list(resolution.agents)
+        tool_agents: dict[str, str] = {}
+        if self._agent_registry is not None:
+            from zet.core.agent_selector import AgentSelector
+
+            selection = AgentSelector(self._agent_registry).assign_tool_agents(
+                resolution.tools, preferred=resolution.agents
+            )
+            tool_agents = selection.tool_agents
+            agents = list(selection.active_agents)
+            if selection.excluded_preferred:
+                log.info(
+                    "capability_composer.preferred_agents_unavailable",
+                    excluded=selection.excluded_preferred,
+                )
+            if selection.unmatched_tools:
+                # Halol holat: bu toollar uchun HECH QANDAY ACTIVE agent
+                # topilmadi. Bundle baribir qaytadi (bo'sh emas — boshqa
+                # tool'lar mos kelgan bo'lishi mumkin); mos kelmagan
+                # tool'lar `_bundle_to_tasks()`da agentsiz (None) qoladi —
+                # bu ilgarigi xatti-harakat bilan bir xil, faqat endi
+                # ATAYLAB va LOGLANGAN holda, tasodifan emas.
+                log.info(
+                    "capability_composer.no_agent_for_tools",
+                    tools=selection.unmatched_tools,
+                )
+
         return CapabilityBundle(
             capabilities=[c.name for c in resolution.capabilities],
-            agents=list(resolution.agents),
+            agents=agents,
             tools=list(resolution.tools),
             permissions_required=[resolution.required_permission],
             risk_level=resolution.max_risk,
+            tool_agents=tool_agents,
         )
 
 
