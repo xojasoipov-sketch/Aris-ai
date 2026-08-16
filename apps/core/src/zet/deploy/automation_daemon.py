@@ -105,8 +105,46 @@ class AutomationDaemon:
         # nuqtasiga ulanmagan edi (Bo'lim 9 chala qolgan bo'g'in). Endi
         # muvaffaqiyatli fire'dan keyin AGENT_HANDOFF triggerlari uyg'onadi.
         self._handoff_dispatcher = handoff_dispatcher
+        # JB-10: minute-key dedup dict. Restart bo'lganda `ScheduleRule.
+        # last_run_at` (persist qilingan) qiymatidan hydrat qilinadi —
+        # mid-minute redeploy'da bir xil daqiqada dublikat fire'ni oldini
+        # oladi. `hydrate_last_fired_from_rules()` explicit chaqiriladi
+        # (constructor kirjab bo'lgach, avval `load_automation()` bilan
+        # qoidalar tiklanadi, keyin bu daemon quriladi va hydrate qilinadi).
         self._last_fired_minute: dict[str, str] = {}
+        self.hydrate_last_fired_from_rules()
         self._stop_event = asyncio.Event()
+
+    def hydrate_last_fired_from_rules(self) -> None:
+        """`Scheduler`'dagi qoidalarning `last_run_at`'idan minute-key dict'ni to'ldiradi (JB-10).
+
+        NEGA KERAK: `_last_fired_minute` — bitta daqiqada ikki marta
+        fire bo'lishni oldini oluvchi in-process cache. Restart bo'lganda
+        u BO'SH: process yangi. Agar tik'dan keyin qayta ishga tushish
+        AYNAN o'sha daqiqada bo'lsa (redeploy, crash), `is_due` yana
+        `True` qaytaradi va qoida IKKINCHI marta ishga tushardi.
+        `last_run_at` (persist qilingan) ni minute-key sifatida
+        yuklab qo'ysak — o'sha daqiqada qayta fire bo'lmaydi.
+
+        HALOL CHEGARA: `last_run_at` faqat DAQIQAgacha aniqlikda
+        himoya beradi (cron 1-daqiqali minimal oraliq — bu yetarli).
+        `_persist_state` chaqiruv o'rtasida crash bo'lgan (record_run
+        xotirada, DB'ga yozilmagan) juda kichik oynada dublikat fire
+        ehtimoli qoladi — bu keyingi JB uchun (DB-backed atomic
+        fire-log).
+        """
+        rules = self._engine.scheduler.list_rules()
+        seeded = 0
+        for rule in rules:
+            if rule.last_run_at is None:
+                continue
+            # last_run_at server-side UTC bo'lishi mumkin — daemon tz'ga
+            # o'tkazish `is_due` bilan mos bo'lish uchun.
+            local = rule.last_run_at.astimezone(self._tz)
+            self._last_fired_minute[rule.id] = local.strftime("%Y-%m-%d %H:%M")
+            seeded += 1
+        if seeded:
+            log.info("automation_daemon.hydrated_last_fired", seeded=seeded)
 
     async def run_forever(self) -> None:
         """Doimiy tsikl — `stop()` chaqirilmaguncha ishlaydi."""

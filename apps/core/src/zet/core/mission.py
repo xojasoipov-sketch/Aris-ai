@@ -734,6 +734,10 @@ class MissionEngine:
 
         Deadline tekshiruvi har bosqichda: o'tgan bo'lsa mission
         avtomatik CANCELLED bo'ladi.
+
+        JB-10: barcha oraliq holatlar (jumladan `UNDERSTANDING` va
+        `VERIFYING`) — restart pickup uchun ishlaydi. Ilgari ular
+        `else: break`ga tushib jimgina qotib qolar edi (audit bug'i).
         """
         mission = await self._repo.get(mission_id)
 
@@ -743,6 +747,13 @@ class MissionEngine:
 
             if mission.status == MissionStatus.RECEIVED:
                 mission = await self.understand(mission)
+            elif mission.status == MissionStatus.UNDERSTANDING:
+                # JB-10 restart pickup: understand fazasi tugallanmagan.
+                # DISCOVERING'ga xavfsiz o'tamiz — `understand_fn`
+                # ixtiyoriy va yon-samarasiz, uni qayta chaqirish
+                # kerak emas. Kontekst DISCOVERING fazasida qayta
+                # yig'iladi.
+                mission = await self._transition(mission, MissionStatus.DISCOVERING)
             elif mission.status == MissionStatus.DISCOVERING:
                 mission = await self.discover(mission)
             elif mission.status == MissionStatus.PLANNING:
@@ -751,9 +762,20 @@ class MissionEngine:
                 mission, record = await self.execute(mission)
                 if record is not None and mission.status == MissionStatus.VERIFYING:
                     mission = await self.verify(mission, record)
+            elif mission.status == MissionStatus.VERIFYING:
+                # JB-10 restart pickup: verify fazasi tugallanmagan.
+                # RECOVERING'ga o'tamiz — HALOL: verifikatsiya bo'lmagan,
+                # muvaffaqiyat deb hisoblab bo'lmaydi. RecoveryEngine
+                # diagnostika qilib qayta reja tuzadi yoki failga
+                # o'tkazadi.
+                mission = await self._transition(
+                    mission,
+                    MissionStatus.RECOVERING,
+                    error="restart: verify fazasi uzilib qoldi (JB-10 pickup)",
+                )
             elif mission.status == MissionStatus.RECOVERING:
                 mission = await self.recover(mission, mission.error or "unknown failure")
-            else:  # UNDERSTANDING boshqa oraliq
+            else:  # pragma: no cover — barcha non-terminal holatlar yuqorida qamrab olingan
                 break
         return mission
 

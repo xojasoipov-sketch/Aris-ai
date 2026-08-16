@@ -143,6 +143,42 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         log.warning("zet.run_state_restore_failed")
 
+    # JB-10: uzilib qolgan Mission'larni qayta yuritish. Mavjud
+    # `load_pending_runs`/`load_pending_approvals` bilan bir xil
+    # dizayn: DB'dan non-terminal mission'larni o'qib, har biri uchun
+    # `run_to_completion(mid)` fon task'i spawn qilinadi. WAITING_APPROVAL
+    # mission'lar allaqachon yuqorida approval tiklash bilan qamrab
+    # olingan — bu yerda ular o'tkazib yuboriladi. Fail-open.
+    if settings.mission_restart_recovery_enabled:
+        try:
+            from zet.api.deps import (
+                build_mission_engine_for_session,
+                get_approval_service,
+                get_orchestrator,
+            )
+            from zet.core.mission_recovery import load_incomplete_missions
+
+            _orch_for_recovery = get_orchestrator()
+            _approvals_for_recovery = get_approval_service()
+
+            async def _mission_engine_factory(sess):  # type: ignore[no-untyped-def]
+                return await build_mission_engine_for_session(
+                    sess, _orch_for_recovery, _approvals_for_recovery
+                )
+
+            restored_missions = await load_incomplete_missions(
+                get_session_factory(),
+                _mission_engine_factory,
+                owner_external_id=settings.owner_id,
+            )
+            if restored_missions:
+                log.warning(
+                    "zet.mission_recovery_spawned",
+                    missions=restored_missions,
+                )
+        except Exception:
+            log.warning("zet.mission_recovery_failed")
+
     # SR-06: `engage()` chaqirilishi bilan barcha faol capability
     # tokenlarni bekor qiladigan hook. REST route ham, Telegram runner
     # ham revocation'ni AWAIT bilan alohida chaqiradi — bu callback

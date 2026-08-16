@@ -198,6 +198,22 @@ class Settings(BaseSettings):
     hisoblasinmi. `False` — JB-7'gacha bo'lgan xatti-harakat
     (`BrainResult.execution_mode` doim bo'sh, marshrutlash o'zgarmaydi)."""
 
+    # ── Mission restart recovery (JB-10) ─────────────────────────────
+    mission_restart_recovery_enabled: bool = Field(default=True)
+    """JB-10: startup'da uzilib qolgan Mission'larni topib qayta
+    yuritsinmi (`core/mission_recovery.py::load_incomplete_missions`).
+
+    `True` (default): non-terminal (EXECUTING/PLANNING/DISCOVERING/
+    VERIFYING/RECOVERING/UNDERSTANDING) mission'lar startup'da spawn
+    qilinadi. WAITING_APPROVAL mission'lar ATAYLAB tashlab yuboriladi —
+    ular mavjud approval oqimi orqali (load_pending_approvals +
+    /approvals/{id}/approve) qayta ishga tushiriladi.
+
+    `False`: JB-9 xatti-harakati (mission'lar DB'da qoladi lekin qayta
+    yuritilmaydi). MUHIM: COMPLETED/FAILED/CANCELLED mission'lar `True`
+    bo'lganda ham HECH QACHON qayta ishga tushirilmaydi (spec §20/§21
+    xavfsizlik qoidasi)."""
+
     # ── Workflow/Scheduler integratsiyasi (JB-9) ─────────────────────
     brain_workflow_integration_enabled: bool = Field(default=True)
     """JB-9: BACKGROUND_WORKFLOW → HAQIQIY `ScheduleRule` yaratsinmi va
