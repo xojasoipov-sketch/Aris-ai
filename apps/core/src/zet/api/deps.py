@@ -931,6 +931,7 @@ def _build_brain(
     Brain triajga LLM ham sarflamaydi.
     """
     from zet.core.brain import Brain
+    from zet.core.execution_mode import ExecutionModeClassifier
 
     mission_runner: MissionRunner | None = None
     if settings.brain_goal_missions:
@@ -972,6 +973,9 @@ def _build_brain(
         # Mission javobining MATNI oxirgi run yozuvidan olinadi.
         run_lookup=orchestrator.run_store.get,
         goal_missions_enabled=settings.brain_goal_missions,
+        execution_mode_classifier=(
+            ExecutionModeClassifier() if settings.brain_execution_mode_enabled else None
+        ),
     )
 
 

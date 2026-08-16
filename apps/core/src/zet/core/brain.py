@@ -32,15 +32,31 @@ QAYTISH bor: mission hech qanday run boshlamasdan yiqilsa, so'rov
 odatdagi Run yo'lidan qayta yuritiladi. Ya'ni JB-2 hech qachon
 mavjud xatti-harakatdan YOMONROQ natija bera olmaydi.
 
+JB-8 QO'SHIMCHASI — ijro rejimi ("Workflow har doim yoqilgan emas"):
+`request_kind == "goal"` allaqachon Mission yo'liga yuboradi (yuqorida),
+lekin Mission — "workflow" so'zi bilan chalkashtirilishi mumkin edi.
+`core.execution_mode.ExecutionModeClassifier` (ixtiyoriy, berilmasa
+Brain o'zgarmaydi) buyruq matnidan aniq workflow-signallarni ("workflow
+qilib qo'y", "har kuni...", "workflowni to'xtat") ajratadi va
+`BrainResult.execution_mode`/`execution_reason` orqali TUSHUNTIRADI —
+lekin HOZIRCHA hech qanday yangi Workflow/Schedule OBYEKTI yaratmaydi
+(`core/execution_mode.py` docstring'idagi "HALOL DOIRA"ga qarang).
+Yagona haqiqiy xatti-harakat o'zgarishi: `WORKFLOW_COMMAND` deb
+klassifikatsiya qilingan buyruqlar ("workflowni to'xtat" kabi) HECH
+QACHON yangi Mission yaratmaydi — LLM ularni xato ravishda "goal" deb
+belgilasa ham, xavfsiz Run yo'liga tushadi.
+
 Bog'liq qarorlar:
     JB-2 — goal→mission triaj (JARVIS Brain auditi)
     A-01 — mission holat mashinasi
     V-29 — task_class model marshrutlash (BU BOSHQA narsa: task_class
            modelni tanlaydi, request_kind esa ish YURITISH usulini)
+    JB-8 — ijro rejimi (Workflow ixtiyoriy, default emas)
 """
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -49,6 +65,7 @@ from typing import Protocol
 
 import structlog
 
+from zet.core.execution_mode import ExecutionDecision, ExecutionMode, ExecutionModeClassifier
 from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.mission import Mission
 from zet.domain.command import Command, Intent
@@ -101,6 +118,15 @@ class BrainResult:
     mission: Mission | None = None
     """Bog'liq Mission (goal yo'lida) — chaqiruvchi holatni ko'rsatishi uchun."""
 
+    execution_mode: str = ""
+    """JB-8: `ExecutionMode` qiymati (`execution_mode_classifier` berilgan
+    bo'lsa) — masalan `"workflow"`, `"task_graph"`. Klassifikator
+    berilmasa (default) — bo'sh (eski xatti-harakat, hech narsa
+    o'zgarmagan)."""
+
+    execution_reason: str = ""
+    """JB-8: yuqoridagi qarorning tushuntirilishi (audit/UX uchun)."""
+
 
 class _RunLike(Protocol):
     """`RunRecord`ning Brain ishlatadigan qismi (test fake'lari uchun ham)."""
@@ -148,6 +174,7 @@ class Brain:
         mission_runner: MissionRunner | None = None,
         run_lookup: RunLookup | None = None,
         goal_missions_enabled: bool = True,
+        execution_mode_classifier: ExecutionModeClassifier | None = None,
     ) -> None:
         """
         Args:
@@ -159,6 +186,12 @@ class Brain:
             run_lookup: mission bog'lagan run'ning natijasini o'qish uchun.
                 Berilmasa mission javobi qisqa holat matni bo'ladi.
             goal_missions_enabled: ega sozlamasi (`ZET_BRAIN_GOAL_MISSIONS`).
+            execution_mode_classifier: JB-8 — berilmasa (default `None`),
+                `BrainResult.execution_mode`/`execution_reason` bo'sh
+                qoladi va marshrutlash butunlay o'zgarmaydi (eski
+                xatti-harakat). Berilsa, `WORKFLOW_COMMAND` deb
+                klassifikatsiya qilingan buyruqlar hech qachon yangi
+                Mission yaratmaydi.
         """
         self._orchestrator = orchestrator
         self._intent = intent_recognizer
@@ -166,6 +199,7 @@ class Brain:
         self._mission_runner = mission_runner
         self._run_lookup = run_lookup
         self._goal_missions_enabled = goal_missions_enabled
+        self._execution_classifier = execution_mode_classifier
 
     @property
     def _mission_path_available(self) -> bool:
@@ -205,11 +239,57 @@ class Brain:
             channel=command.channel,
         )
 
+        decision = self._classify_execution(intent, command)
+
+        # JB-8 xavfsizlik qoidasi: workflow-boshqaruv buyruqlari
+        # ("Workflowni to'xtat" kabi) HECH QACHON yangi Mission
+        # yaratmasin — LLM ularni xato ravishda "goal" deb belgilagan
+        # bo'lsa ham. Mavjud workflow ustida amal — yangi maqsad EMAS.
+        if decision is not None and decision.mode == ExecutionMode.WORKFLOW_COMMAND:
+            record = await self._orchestrator.start(command, intent=intent)
+            return self._attach_decision(
+                _from_run(record, BrainRoute.RUN, request_kind=intent.request_kind), decision
+            )
+
         if intent.request_kind != "goal":
             record = await self._orchestrator.start(command, intent=intent)
-            return _from_run(record, BrainRoute.RUN, request_kind=intent.request_kind)
+            return self._attach_decision(
+                _from_run(record, BrainRoute.RUN, request_kind=intent.request_kind), decision
+            )
 
-        return await self._handle_goal(command, intent)
+        result = await self._handle_goal(command, intent)
+        return self._attach_decision(result, decision)
+
+    def _classify_execution(self, intent: Intent, command: Command) -> ExecutionDecision | None:
+        """JB-8: ijro rejimini aniqlaydi (`execution_mode_classifier` berilgan bo'lsa).
+
+        Fail-open: klassifikatsiyaning O'ZI hech qachon so'rovni
+        yiqitmasligi kerak (Brain'ning umumiy falsafasi — modul
+        docstring'iga qarang).
+        """
+        if self._execution_classifier is None:
+            return None
+        try:
+            decision = self._execution_classifier.classify(intent, text=command.text)
+        except Exception:
+            log.warning("brain.execution_mode_failed")
+            return None
+        log.info(
+            "brain.execution_mode",
+            mode=decision.mode.value,
+            reason=decision.reason,
+            confidence=decision.confidence,
+        )
+        return decision
+
+    @staticmethod
+    def _attach_decision(result: BrainResult, decision: ExecutionDecision | None) -> BrainResult:
+        """`BrainResult`ga ijro rejimi qarorini yozadi (`decision=None` — o'zgarishsiz)."""
+        if decision is None:
+            return result
+        return dataclasses.replace(
+            result, execution_mode=decision.mode.value, execution_reason=decision.reason
+        )
 
     async def _handle_goal(self, command: Command, intent: Intent) -> BrainResult:
         """Goal → Mission, boshlanmasa Run yo'liga qaytish."""

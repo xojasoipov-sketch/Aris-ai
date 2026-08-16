@@ -191,6 +191,20 @@ class Settings(BaseSettings):
     MEDIUM) — agent yaratiladi, lekin ACTIVE emas: inson
     `PATCH /agents/{name}/status {activate}` orqali tasdiqlashi kerak."""
 
+    # ── Ijro rejimi klassifikatori (JB-8) ────────────────────────────
+    brain_execution_mode_enabled: bool = Field(default=True)
+    """Brain har so'rov uchun `ExecutionMode` (DIRECT_RESPONSE/DIRECT_TOOL/
+    MISSION/TASK_GRAPH/WORKFLOW/BACKGROUND_WORKFLOW/WORKFLOW_COMMAND)
+    hisoblasinmi. `False` — JB-7'gacha bo'lgan xatti-harakat
+    (`BrainResult.execution_mode` doim bo'sh, marshrutlash o'zgarmaydi).
+
+    MUHIM: `True` bo'lganda ham WORKFLOW/BACKGROUND_WORKFLOW rejimlari
+    hozircha faqat ANIQLANADI va LOGLANADI — real persistent Workflow/
+    Schedule yaratilmaydi (`core/execution_mode.py`dagi "HALOL DOIRA"ga
+    qarang). Yagona haqiqiy xatti-harakat o'zgarishi: WORKFLOW_COMMAND
+    deb klassifikatsiya qilingan buyruqlar endi hech qachon yangi
+    Mission yaratmaydi."""
+
     # ── Brain-level Model Routing (JB-7, V-29) ──────────────────────
     brain_model_routing_enabled: bool = Field(default=True)
     """Task Graph'da har task uchun ALOHIDA, kontent-asoslangan `TaskClass`
