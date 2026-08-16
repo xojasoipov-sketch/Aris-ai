@@ -170,6 +170,22 @@ class Settings(BaseSettings):
     tasdiq so'raydi va hech qanday sozlama buni chetlab o'tolmaydi (V-32).
     """
 
+    # ── Brain marshrutlash (JB-2) ──────────────────────────────────
+    brain_goal_missions: bool = Field(default=True)
+    """Ko'p qadamli MAQSAD (`request_kind=goal`) Mission qatlamiga ketsinmi.
+
+    `True` (default): "biznesimni tekshir va nimaga e'tibor berishim
+    kerakligini ayt" kabi so'rov saqlanadigan, qayta uriniladigan va
+    xotiraga yoziladigan Mission bo'ladi. Oddiy savol/topshiriq
+    ilgarigidek Run pipeline'idan o'tadi.
+
+    `False`: hamma narsa Run yo'lidan ketadi (JB-2'gacha bo'lgan
+    xatti-harakat) — triaj uchun LLM chaqiruvi ham qilinmaydi.
+
+    Regressiya xavfi yo'q: mission birorta run boshlamasdan yiqilsa
+    (masalan capability mos kelmasa), `Brain` so'rovni avtomatik Run
+    yo'liga qaytaradi — `core/brain.py`ga qarang."""
+
     # ── Kuzatuv (3-xususiyat, Bo'lim 9) ────────────────────────────
     watcher_poll_interval_s: float = Field(default=60.0, ge=1)
     """Watcher daemon ikki o'lchov orasida kutadigan vaqt (soniya).

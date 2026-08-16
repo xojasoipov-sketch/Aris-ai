@@ -34,7 +34,7 @@ from zet.db.session import create_engine, create_session_factory, session_scope
 from zet.deploy.schedule import DailyScheduleManager
 from zet.deploy.selfimprove import SelfImproveEngine
 from zet.devices.repository import DeviceDBRepository
-from zet.domain.command import ConversationTurn
+from zet.domain.command import Command, ConversationTurn
 from zet.domain.enums import MessageRole, TaskClass
 from zet.domain.memory import MemoryQuery, MemorySearchResult
 from zet.llm.base import ChatMessage, LLMError, LLMProvider
@@ -66,6 +66,11 @@ from zet.voice.tts import StubTTS, TTSProvider
 from zet.workspace.repository import WorkspaceRepository
 
 if TYPE_CHECKING:
+    # JB-2: `Brain`/`Mission` faqat tip uchun — ish vaqtida lokal import
+    # qilinadi (aylanma importdan qochish: core.brain → core.mission →
+    # core.orchestrator zanjiri).
+    from zet.core.brain import Brain, MissionRunner
+    from zet.core.mission import Mission
     from zet.memory.store import MemoryStore
 
     MemoryStoreLike = MemoryStore | PgMemoryStore
@@ -901,6 +906,72 @@ def _build_verifier_judge(router: ModelRouter) -> object:
     return _VerifierJudgeProvider(router)
 
 
+def _build_brain(
+    *,
+    orchestrator: Orchestrator,
+    settings: Settings,
+) -> Brain:
+    """`Brain` quradi — barcha kanallar uchun bir xil wiring (JB-2).
+
+    NEGA yordamchi: Telegram `_runner` va HTTP `get_brain` bir xil
+    marshrutlashga ega bo'lishi SHART. Ikki joyda alohida qurilsa
+    kanallar orasida xatti-harakat sekin-asta farqlanib ketardi —
+    bu repoda allaqachon bir marta yuz bergan (Telegram recovery/
+    notifier'siz qolgan edi, D4 va F1 tuzatishlari).
+
+    NEGA sessiya ARGUMENT EMAS: `Brain` oddiy suhbat uchun DB'ga
+    umuman tegmasligi kerak. Sessiya faqat HAQIQATAN goal kelganda,
+    mission runner ichida ochiladi — aks holda har bir "salom" xabari
+    Postgres ulanishini talab qilardi.
+
+    Mission runner sozlama o'chirilganda UMUMAN qurilmaydi: bunda
+    Brain triajga LLM ham sarflamaydi.
+    """
+    from zet.core.brain import Brain
+
+    mission_runner: MissionRunner | None = None
+    if settings.brain_goal_missions:
+
+        async def _run_mission(command: Command) -> Mission:
+            from zet.db.session import session_scope
+
+            # Kechiktirilgan qurilish: MissionOrchestrator og'ir
+            # (repository + context engine + capability composer) va
+            # DB sessiya talab qiladi — faqat goal kelganda quramiz.
+            async with session_scope(get_session_factory()) as session:
+                mission_orchestrator = await get_mission_orchestrator(
+                    session=session,
+                    orchestrator=orchestrator,
+                    approval_service=get_approval_service(),
+                    permission_policy=get_permission_policy(),
+                    killswitch=get_killswitch(),
+                    notifier=get_notifier(),
+                    router=ModelRouter(get_llm_providers(), session, settings),
+                    settings=settings,
+                )
+                # `get_mission_orchestrator` forward-ref sabab tipsiz
+                # (Any) — natijani aniq tipga bog'laymiz.
+                mission: Mission = await mission_orchestrator.run(
+                    command, owner_id=mission_orchestrator.owner_id
+                )
+                return mission
+
+        mission_runner = _run_mission
+
+    return Brain(
+        orchestrator=orchestrator,
+        # AYNAN orchestrator'ning recognizer'i — bir run doirasidagi
+        # barcha LLM chaqiruvlari bitta router (bitta budjet hisobi,
+        # testlarda bitta provayder) orqali o'tishi kerak.
+        intent_recognizer=orchestrator.intent_recognizer,
+        tool_names=get_tool_registry().tool_names(),
+        mission_runner=mission_runner,
+        # Mission javobining MATNI oxirgi run yozuvidan olinadi.
+        run_lookup=orchestrator.run_store.get,
+        goal_missions_enabled=settings.brain_goal_missions,
+    )
+
+
 def _build_recovery_engine(
     *,
     router: ModelRouter,
@@ -1159,6 +1230,23 @@ async def get_mission_orchestrator(
     )
 
 
+def get_brain(
+    orchestrator: Orchestrator = Depends(get_orchestrator),
+    settings: Settings = Depends(get_config),
+) -> Brain:
+    """So'rov chegarasidagi `Brain` — barcha kanallar uchun yagona kirish (JB-2).
+
+    Brain so'rovni chat/command/goal deb ajratadi va goal bo'lsa Mission
+    qatlamiga yuboradi. Ilgari Mission'ga faqat `POST /api/v1/missions`
+    orqali yetsa bo'lardi — ya'ni Telegram'dan ham, web chatidan ham
+    hech qachon mission tug'ilmasdi.
+
+    Wiring `_build_brain()`da — Telegram oqimi bilan AYNAN bir xil
+    (kanallar orasida xatti-harakat farqlanmasin).
+    """
+    return _build_brain(orchestrator=orchestrator, settings=settings)
+
+
 @lru_cache(maxsize=1)
 def get_stt() -> STTProvider:
     """Global STT provayder (singleton).
@@ -1224,7 +1312,6 @@ def get_telegram_bot() -> object:
     # imkonsiz qilardi.
     from zet.core.orchestrator import RunNotFoundError
     from zet.db.session import session_scope
-    from zet.domain.command import Command
     from zet.domain.enums import MessageRole
     from zet.security.approvals import ApprovalError, ApprovalExpiredError
     from zet.security.audit_writer import write_audit
@@ -1295,16 +1382,25 @@ def get_telegram_bot() -> object:
             )
 
             command = Command(text=text, channel="telegram", history=history)
-            record = await orchestrator.start(command)
-            answer = record.result_summary or record.error or "(bo'sh natija)"
+
+            # JB-2: Telegram ham endi Brain orqali — ko'p qadamli MAQSAD
+            # ("biznesimni tekshir...") Mission bo'ladi, oddiy savol/
+            # topshiriq ilgarigidek Run. Ilgari Telegram kodida "mission"
+            # so'zi umuman uchramasdi: eng ko'p ishlatiladigan kanal
+            # avtonom qatlamdan butunlay uzilgan edi.
+            brain = _build_brain(orchestrator=orchestrator, settings=settings)
+            result = await brain.handle(command)
+            answer = result.text
 
             await store.append(conversation, role=MessageRole.USER, content=text)
             await store.append(conversation, role=MessageRole.ASSISTANT, content=answer)
 
             return OrchestratorRunResult(
                 text=answer,
-                ok=record.error is None,
-                run_id=str(record.run_id),
+                ok=result.ok,
+                # Approval tugmalari run darajasida ishlaydi — mission
+                # yo'lida ham oxirgi run ID qaytadi (`BrainResult.run_id`).
+                run_id=result.run_id or "",
             )
 
     async def _approval_runner(action: str, run_id_str: str) -> ApprovalRunResult:

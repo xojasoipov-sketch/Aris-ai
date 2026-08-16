@@ -21,6 +21,18 @@ QOIDALAR:
    - vision: rasm/video tahlili
    - speech: ovoz bilan ishlash
 4. Kerakli tool nomlarini aniqlaydi (masalan: time.now, note.write, shell.exec).
+4b. So'rov TURINI (request_kind) belgilayman — bu vazifa sinfidan BOSHQA
+   narsa (u model tanlash uchun, bu esa ishni QANDAY yuritishni hal qiladi):
+   - chat: suhbat, savol, tushuntirish so'rovi — hech narsa
+     o'zgartirilmaydi ("salom", "bu nima degani?", "tushuntir")
+   - command: bitta aniq, chegarasi ravshan topshiriq ("eslatma yoz",
+     "obunachilar sonini ayt", "bu faylni o'qi")
+   - goal: ko'p qadamli, davomli MAQSAD — bir nechta manba tekshirilishi,
+     natijalar birlashtirilishi va xulosa chiqarilishi kerak
+     ("biznesimni tekshir va nimaga e'tibor berishim kerakligini ayt",
+     "keyingi oy uchun Instagram kampaniyasini tayyorla va yurit",
+     "raqobatchilarni kuzatib boradigan tizim qur")
+   Shubhali bo'lsa — "command" tanlayman (kamroq va'da, ko'proq aniqlik).
 5. Agar buyruq noaniq bo'lsa (ambiguity=high), aniqlashtiruvchi savol yaz.
 6. Har doim `parse_intent` tool'ini chaqiraman.
 7. O'zbek va ingliz tillarini bir xil tushunaman.
@@ -57,6 +69,15 @@ INTENT_TOOL_SCHEMA: dict[str, object] = {
             "enum": ["simple", "normal", "complex", "coding", "vision", "speech"],
             "description": "Vazifa sinfi — model tanlash uchun",
         },
+        "request_kind": {
+            "type": "string",
+            "enum": ["chat", "command", "goal"],
+            "description": (
+                "So'rov turi — ishni qanday yuritish kerakligi: "
+                "chat (suhbat/savol), command (bitta aniq topshiriq), "
+                "goal (ko'p qadamli davomli maqsad)"
+            ),
+        },
         "requires_tools": {
             "type": "array",
             "items": {"type": "string"},
@@ -88,6 +109,7 @@ INTENT_TOOL_SCHEMA: dict[str, object] = {
         "constraints",
         "urgency",
         "task_class",
+        "request_kind",
         "requires_tools",
         "ambiguity",
         "confidence",

@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import zet.api.deps as deps
+from zet.domain.command import Intent
 from zet.domain.enums import RunStatus
 
 
@@ -34,6 +35,26 @@ class _FakeRecord:
         self.status = RunStatus.DONE
 
 
+class _FakeIntentRecognizer:
+    """Triaj uchun minimal stub — LLM'siz "command" qaytaradi (JB-2).
+
+    Telegram runner endi `Brain` orqali o'tadi, Brain esa
+    `orchestrator.intent_recognizer`dan foydalanadi. Bu test
+    marshrutlashni emas, NOTIFIER wiring'ini sinaydi — shuning uchun
+    triaj eng oddiy yo'lni (Run pipeline'i) tanlashi kifoya.
+    """
+
+    async def recognize(self, command: Any, **_: Any) -> Intent:
+        return Intent(action="test", request_kind="command", original_text=command.text)
+
+
+class _FakeRunStore:
+    """`Brain` mission javobini o'qish uchun ishlatadigan minimal do'kon."""
+
+    def get(self, run_id: Any) -> _FakeRecord:
+        return _FakeRecord()
+
+
 class _FakeOrchestrator:
     """Konstruktor kwargs'ini qo'lga oluvchi stub — runner'lar wiring'ini sinaydi."""
 
@@ -41,8 +62,14 @@ class _FakeOrchestrator:
 
     def __init__(self, **kwargs: Any) -> None:
         _FakeOrchestrator.captured.append(kwargs)
+        # `Brain` shu ikki OCHIQ xossani talab qiladi (haqiqiy
+        # Orchestrator'da ular mavjud).
+        self.intent_recognizer = _FakeIntentRecognizer()
+        self.run_store = _FakeRunStore()
 
-    async def start(self, command: Any) -> _FakeRecord:
+    async def start(
+        self, command: Any, *, dry_run: bool = False, intent: Any = None
+    ) -> _FakeRecord:
         return _FakeRecord()
 
     def approve(self, approval_id: Any) -> _FakeRecord:

@@ -189,8 +189,14 @@ class IntentRecognizer:
         except (TypeError, ValueError):
             confidence = 0.5
 
+        # request_kind — noma'lum qiymat kelsa "command" (eng ehtiyotkor
+        # tanlov: eski Run pipeline'i, hech qanday yangi va'da yo'q).
+        raw_kind = str(args.get("request_kind", "command")).strip().lower()
+        request_kind = raw_kind if raw_kind in {"chat", "command", "goal"} else "command"
+
         return Intent(
             action=str(args.get("action", "unknown")),
+            request_kind=request_kind,
             objects=[str(o) for o in (args.get("objects") or [])],
             constraints=[str(c) for c in (args.get("constraints") or [])],
             urgency=str(args.get("urgency", "normal")),

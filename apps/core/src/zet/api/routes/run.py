@@ -11,7 +11,7 @@ To'liq pipeline: `Orchestrator` orqali `IntentRecognizer` → `Planner` →
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from zet.api.deps import (
+    get_brain,
     get_config,
     get_db_session,
     get_killswitch,
@@ -27,6 +28,7 @@ from zet.api.deps import (
     save_conversation_turn,
 )
 from zet.config import Settings
+from zet.core.brain import Brain, BrainResult
 from zet.core.orchestrator import Orchestrator, RunNotFoundError, RunRecord
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.models.run import Run as RunRow
@@ -56,6 +58,14 @@ class RunResponse(BaseModel):
     steps_total: int = 0
     cost_usd: float = 0.0
     pending_approval_id: str | None = None
+
+    # JB-2 — Brain marshrutlash natijasi. Mavjud maydonlar o'zgarmadi
+    # (frontend shartnomasi buzilmasin), bular QO'SHIMCHA.
+    mission_id: str | None = None
+    """Goal deb tanilib Mission ochilgan bo'lsa — uning ID'si."""
+
+    request_kind: str = "command"
+    """Triaj natijasi: chat / command / goal."""
 
 
 class RunHistoryResponse(BaseModel):
@@ -137,6 +147,38 @@ def _run_history_response(row: RunRow) -> RunHistoryResponse:
     )
 
 
+def _brain_to_response(result: BrainResult, trace_id: str) -> RunResponse:
+    """`BrainResult` → HTTP javobi (JB-2).
+
+    Run yo'lida javob AYNAN ilgarigidek chiqadi — `RunRecord` bor va
+    barcha maydonlar (qadam soni, xarajat, pending approval) o'sha
+    joyidan olinadi. Mission yo'lida run yozuvi ham bo'lishi mumkin
+    (mission ichida bajarilgan oxirgi run) — bo'lmasa mission holati
+    status sifatida ko'rsatiladi, matn esa Brain tayyorlagan xulosa.
+    """
+    # `BrainResult.run` ataylab `object` (core.brain `RunRecord` tipiga
+    # bog'lanmasligi kerak) — bu yerda, ikkala tipni ham biladigan
+    # qatlamda, aniq tipga qaytariladi.
+    record = cast("RunRecord | None", result.run)
+    if record is not None:
+        response = _to_response(record, trace_id)
+        # Mission yo'lida javob MATNI Brain'niki (mission xulosasi
+        # bo'lishi mumkin) — run'ning xom summary'si emas.
+        response.message = result.text
+        response.mission_id = result.mission_id
+        response.request_kind = result.request_kind
+        return response
+
+    return RunResponse(
+        run_id=result.run_id or "",
+        trace_id=trace_id,
+        status=(result.mission.status.value if result.mission is not None else "failed"),
+        message=result.text,
+        mission_id=result.mission_id,
+        request_kind=result.request_kind,
+    )
+
+
 def _to_response(record: RunRecord, trace_id: str) -> RunResponse:
     message = record.result_summary or record.error or record.command.text
     return RunResponse(
@@ -157,7 +199,7 @@ def _to_response(record: RunRecord, trace_id: str) -> RunResponse:
 async def create_run(
     request: RunRequest,
     ks: KillSwitchState = Depends(get_killswitch),
-    orchestrator: Orchestrator = Depends(get_orchestrator),
+    brain: Brain = Depends(get_brain),
 ) -> RunResponse:
     """Yangi run boshlash — to'liq pipeline, suhbat tarixi bilan.
 
@@ -166,6 +208,11 @@ async def create_run(
     gapni umuman eslamasdi ("Tushuntir" kabi ergash buyruq kontekstsiz
     qolardi). Telegram oqimida esa tarix allaqachon saqlanardi. Bir xil
     yadro, ikki xil xotira — shu farq yopildi.
+
+    JB-2: endi `Orchestrator` o'rniga `Brain` chaqiriladi — u so'rovni
+    chat/command/goal deb ajratib, ko'p qadamli MAQSADni Mission
+    qatlamiga yuboradi. Oddiy savol/topshiriq uchun xatti-harakat
+    o'zgarmaydi (o'sha Run pipeline'i, o'sha javob shakli).
     """
     try:
         ks.check()
@@ -182,14 +229,14 @@ async def create_run(
         history = await load_conversation_history(request.channel)
         command = Command(text=request.message, channel=request.channel, history=history)
         try:
-            record = await orchestrator.start(command, dry_run=request.dry_run)
+            result = await brain.handle(command, dry_run=request.dry_run)
         except KillSwitchEngagedError as exc:
             raise HTTPException(
                 status_code=503,
                 detail=f"Emergency stop yoqilgan: {exc}",
             ) from exc
 
-        response = _to_response(record, trace_id)
+        response = _brain_to_response(result, trace_id)
         # Quruq ishga tushirish (`dry_run`) tarixga yozilmaydi — u
         # sinov, haqiqiy suhbat emas.
         if not request.dry_run:

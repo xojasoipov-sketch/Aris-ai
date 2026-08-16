@@ -87,6 +87,24 @@ class Intent(BaseModel, frozen=True):
     action: str
     """Asosiy harakat fe'li (masalan: "reminder.create", "file.delete", "note.write")."""
 
+    request_kind: str = "command"
+    """So'rov turi — Brain marshrutlash uchun: "chat", "command" yoki "goal".
+
+    NEGA kerak (JB-2 audit topilmasi): ilgari Intent'da so'rovning TURI
+    umuman yo'q edi — `task_class` faqat MODEL tanlash uchun. Natijada
+    har bir xabar (oddiy savol ham, "biznesimni ko'tar" kabi ko'p qadamli
+    maqsad ham) bitta Run pipeline'iga tushardi va Mission qatlami
+    (uzoq muddatli, saqlanadigan, qayta urinadigan) real foydalanuvchi
+    oqimidan butunlay uzilgan edi.
+
+        chat    — suhbat/savol, hech narsa o'zgartirmaydi
+        command — bitta aniq topshiriq ("eslatma yoz", "obuna sonini ayt")
+        goal    — ko'p qadamli, davomli maqsad ("biznesimni tekshir va
+                  nimaga e'tibor berishim kerakligini ayt")
+
+    Default `"command"` — eski xatti-harakat (Run pipeline'i), ya'ni
+    maydon to'ldirilmasa hech nima o'zgarmaydi."""
+
     objects: list[str] = Field(default_factory=list)
     """Harakat obyektlari (masalan: ["ertangi uchrashuv", "10:00"])."""
 

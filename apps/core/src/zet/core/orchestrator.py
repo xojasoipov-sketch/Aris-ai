@@ -47,7 +47,7 @@ from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.planner import Planner, PlannerError
 from zet.core.recovery import RecoveryApprovalRequiredError, RecoveryEngine
 from zet.core.verifier import Verifier
-from zet.domain.command import Command
+from zet.domain.command import Command, Intent
 from zet.domain.enums import RunStatus, StepStatus, TrustLevel
 from zet.domain.plan import Plan
 from zet.llm.base import LLMError
@@ -278,8 +278,35 @@ class Orchestrator:
         """Run holatlari do'koni (status endpoint'lari uchun)."""
         return self._run_store
 
-    async def start(self, command: Command, *, dry_run: bool = False) -> RunRecord:
+    @property
+    def intent_recognizer(self) -> IntentRecognizer:
+        """Intent tanuvchi — `Brain` triaj uchun AYNAN shu nusxani ishlatadi.
+
+        NEGA ochiq (public): Brain o'ziga alohida Recognizer qursa, u
+        boshqa `ModelRouter`ga (boshqa sessiya, boshqa budjet hisobi,
+        testlarda boshqa provayder) bog'lanib qolardi. Bitta run
+        doirasidagi barcha LLM chaqiruvlari bir xil router'dan o'tishi
+        kerak."""
+        return self._intent
+
+    async def start(
+        self,
+        command: Command,
+        *,
+        dry_run: bool = False,
+        intent: Intent | None = None,
+    ) -> RunRecord:
         """Yangi buyruqni boshidan oxirigacha bajaradi (yoki tasdiq kutadi).
+
+        Args:
+            command: bajariladigan buyruq
+            dry_run: haqiqiy yon effektsiz sinov
+            intent: OLDINDAN hisoblangan intent (JB-2). `Brain` so'rovni
+                chat/command/goal deb ajratish uchun IntentRecognizer'ni
+                allaqachon chaqirgan bo'ladi — uni bu yerga uzatish
+                AYNAN BIR XIL LLM chaqiruvining ikki marta ketishini
+                oldini oladi. `None` bo'lsa — eski xatti-harakat, intent
+                shu yerda hisoblanadi.
 
         Raises:
             KillSwitchEngagedError: emergency stop yoqilgan — hech narsa
@@ -292,16 +319,18 @@ class Orchestrator:
         # bir vaqtda ishlayotgan run'lar chegaralanadi. Bo'lmasa cheksiz.
         if self._concurrency_semaphore is not None:
             async with self._concurrency_semaphore:
-                return await self._start_with_timeout(command, dry_run=dry_run)
-        return await self._start_with_timeout(command, dry_run=dry_run)
+                return await self._start_with_timeout(command, dry_run=dry_run, intent=intent)
+        return await self._start_with_timeout(command, dry_run=dry_run, intent=intent)
 
-    async def _start_with_timeout(self, command: Command, *, dry_run: bool) -> RunRecord:
+    async def _start_with_timeout(
+        self, command: Command, *, dry_run: bool, intent: Intent | None = None
+    ) -> RunRecord:
         """Wall-clock timeout — `run_timeout_s` sozlangan bo'lsa (A-07)."""
         if self._run_timeout_s is None:
-            return await self._start_impl(command, dry_run=dry_run)
+            return await self._start_impl(command, dry_run=dry_run, intent=intent)
         try:
             return await asyncio.wait_for(
-                self._start_impl(command, dry_run=dry_run),
+                self._start_impl(command, dry_run=dry_run, intent=intent),
                 timeout=self._run_timeout_s,
             )
         except TimeoutError:
@@ -311,11 +340,19 @@ class Orchestrator:
             log.warning("orchestrator.timeout", timeout_s=self._run_timeout_s)
             raise
 
-    async def _start_impl(self, command: Command, *, dry_run: bool = False) -> RunRecord:
+    async def _start_impl(
+        self, command: Command, *, dry_run: bool = False, intent: Intent | None = None
+    ) -> RunRecord:
         """Asosiy start mantiqi (avvalgi `start`)."""
 
         record = self._run_store.create(command)
         record.status = RunStatus.PLANNING
+
+        # JB-2: `Brain` triaj uchun intent'ni allaqachon hisoblagan
+        # bo'lishi mumkin — uni qayta hisoblash bir xil LLM chaqiruvini
+        # ikki marta to'lash demakdir.
+        if intent is not None:
+            return await self._plan_and_run(record, command, intent, dry_run=dry_run)
 
         try:
             intent = await self._intent.recognize(
@@ -334,6 +371,22 @@ class Orchestrator:
             await self._run_store.persist(record)  # AR-01 audit trail
             return record
 
+        return await self._plan_and_run(record, command, intent, dry_run=dry_run)
+
+    async def _plan_and_run(
+        self,
+        record: RunRecord,
+        command: Command,
+        intent: Intent,
+        *,
+        dry_run: bool,
+    ) -> RunRecord:
+        """Intent tayyor bo'lgach: reja tuzish va bajarish.
+
+        `_start_impl`dan ajratildi (JB-2) — oldindan hisoblangan intent
+        bilan kelgan yo'l ham AYNAN shu zanjirdan o'tsin, nusxa mantiq
+        paydo bo'lmasin.
+        """
         try:
             # Nomlar emas, IMZOLAR: model qaysi parametr majburiyligini
             # ko'rmasa uni tushirib qoldiradi (`video.learn` `url`siz).
