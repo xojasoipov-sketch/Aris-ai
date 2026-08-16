@@ -18,6 +18,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from zet.domain.enums import RiskLevel
+
 
 def _find_repo_root() -> Path:
     """Loyiha ildizini topadi — papka chuqurligiga bog'liq bo'lmagan holda.
@@ -169,6 +171,25 @@ class Settings(BaseSettings):
     `instagram.publish_photo`, `youtube.publish`, `desktop.*` — har doim
     tasdiq so'raydi va hech qanday sozlama buni chetlab o'tolmaydi (V-32).
     """
+
+    # ── Agent Factory provisioning (JB-6, V-10/V-32) ────────────────
+    agent_auto_provisioning_enabled: bool = Field(default=True)
+    """Task Graph'da CapabilityGap topilganda avtomatik agent provisioning
+    yoqilganmi. `False` — JB-5 xatti-harakati (gap faqat hisobotga
+    yoziladi, hech narsa "tuzatib qo'ymaydi"). Bu — ochiq/yopiq kalit;
+    aniq qaysi risk darajasi avtomatik ketishini ikkita quyidagi sozlama
+    belgilaydi."""
+
+    agent_auto_provision_max_risk: RiskLevel = Field(default=RiskLevel.LOW)
+    """Bu darajagacha (shu bilan birga) — yangi agent AVTOMATIK yaratiladi
+    VA (eval o'tsa) faollashtiriladi, inson aralashuvisiz."""
+
+    agent_provision_disabled_min_risk: RiskLevel = Field(default=RiskLevel.HIGH)
+    """Bu darajadan boshlab (shu bilan birga) — provisioning UMUMAN
+    taqiqlanadi (V-32: hech qanday sozlama buni avtomatik chetlab
+    o'tolmaydi). Oralig'idagi darajalar (masalan default bo'yicha
+    MEDIUM) — agent yaratiladi, lekin ACTIVE emas: inson
+    `PATCH /agents/{name}/status {activate}` orqali tasdiqlashi kerak."""
 
     # ── Brain marshrutlash (JB-2) ──────────────────────────────────
     brain_goal_missions: bool = Field(default=True)

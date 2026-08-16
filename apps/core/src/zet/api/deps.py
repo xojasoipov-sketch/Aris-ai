@@ -24,6 +24,7 @@ from zet.automation.goal import GoalRegistry
 from zet.business.pg_crm import PgCRM
 from zet.commerce.repository import CommerceRepository
 from zet.config import Settings, get_settings
+from zet.core.agent_provisioning import AgentProvisioningPolicy, AgentProvisioningService
 from zet.core.executor import Executor
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.recovery import RecoveryEngine
@@ -1008,7 +1009,11 @@ def _build_world_state_provider(settings: Settings) -> Callable[[], Awaitable[st
     return _provider
 
 
-def _build_task_graph_executor(router: ModelRouter) -> TaskGraphExecutor:
+def _build_task_graph_executor(
+    router: ModelRouter,
+    *,
+    session: AsyncSession,
+) -> TaskGraphExecutor:
     """JB-5: `MissionEngine`ga ulanadigan Task Graph Executor — har mission-task
     HAQIQIY LLM (`RoutedLLMProvider`) orqali, o'ziga tayinlangan agent va
     FAQAT o'ziga ruxsat etilgan tool bilan ishlaydi.
@@ -1024,12 +1029,38 @@ def _build_task_graph_executor(router: ModelRouter) -> TaskGraphExecutor:
     yorlig'i (har task ega kutmasdan ishlaydi), XAVFSIZLIK GATE'I EMAS:
     V-32 (majburiy tasdiq) baribir `AgentRuntime._execute_tool()` orqali
     fail-closed enforce qilinadi (`task_graph.py` docstring'iga qarang).
+
+    JB-6: `agent_auto_provisioning_enabled` yoqilgan bo'lsa (default —
+    `_build_agent_provisioning_service()`ga qarang), CapabilityGap'lar
+    endi mavjud `AgentFactory` pipeline'iga ulanadi — `session` shu
+    sabab talab qilinadi (Factory yaratgan agent DB'ga yozilishi uchun,
+    `AgentRepository` orqali — restart'da yo'qolmasin).
     """
     return TaskGraphExecutor(
         agent_registry=get_agent_registry(),
         tool_registry=get_tool_registry(),
         permission_policy=get_permission_policy(),
         llm_provider=RoutedLLMProvider(router, is_autonomous=True),
+        agent_provisioner=_build_agent_provisioning_service(session),
+    )
+
+
+def _build_agent_provisioning_service(session: AsyncSession) -> AgentProvisioningService | None:
+    """JB-6: CapabilityGap → AgentFactory ulanishi — `Settings` orqali
+    o'chirilishi mumkin (fail-safe: `False` bo'lsa JB-5 xatti-harakatiga
+    qaytadi, `TaskGraphExecutor(agent_provisioner=None)` bilan bir xil).
+    """
+    settings = get_settings()
+    if not settings.agent_auto_provisioning_enabled:
+        return None
+    return AgentProvisioningService(
+        agent_registry=get_agent_registry(),
+        agent_repository=AgentRepository(session),
+        killswitch=get_killswitch(),
+        policy=AgentProvisioningPolicy(
+            auto_create_max_risk=settings.agent_auto_provision_max_risk,
+            disabled_min_risk=settings.agent_provision_disabled_min_risk,
+        ),
     )
 
 
@@ -1216,7 +1247,7 @@ async def build_mission_engine_for_session(
         # JB-5: 2+ taskli mission Task Graph yo'li orqali (parallel/
         # dependency-aware, per-task agent) bajariladi; 0-1 taskli mission
         # eski single-Command yo'lida qoladi (o'zgarishsiz).
-        task_graph_executor=_build_task_graph_executor(orchestrator._router),
+        task_graph_executor=_build_task_graph_executor(orchestrator._router, session=session),
         max_retries=2,
     )
 
@@ -1288,7 +1319,7 @@ async def get_mission_orchestrator(
         # JB-5: 2+ taskli mission Task Graph yo'li orqali (parallel/
         # dependency-aware, per-task agent) bajariladi; 0-1 taskli mission
         # eski single-Command yo'lida qoladi (o'zgarishsiz).
-        task_graph_executor=_build_task_graph_executor(router),
+        task_graph_executor=_build_task_graph_executor(router, session=session),
         max_retries=2,
     )
 

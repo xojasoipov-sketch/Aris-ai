@@ -45,13 +45,16 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
 from zet.automation.executor import AgentUnavailableError, run_agent_command
 from zet.db.base import utcnow
-from zet.domain.enums import StepStatus
+from zet.domain.enums import RiskLevel, StepStatus
+from zet.security.risk import risk_for
 
 if TYPE_CHECKING:
     from zet.agents.registry import AgentRegistry
@@ -71,20 +74,89 @@ class TaskGraphCycleError(TaskGraphError):
     """`MissionTask.depends_on` grafida sikl aniqlandi."""
 
 
-@dataclass(frozen=True, slots=True)
+class GapStatus(StrEnum):
+    """CapabilityGap'ning provisioning bosqichi (JB-6).
+
+    NEGA HAMMA 8 holat "tashqi ko'rinadigan" emas: `AgentFactory.create()`
+    (Bo'lim 3-4, JB-6dan OLDIN qurilgan va sinovdan o'tgan) UNDERSTAND→
+    DESIGN→REGISTER→TESTING→EVAL→ACTIVATE bosqichlarini BITTA sinxron
+    chaqiruvda bajaradi — tashqi checkpoint yo'q. `VALIDATING`/`ACTIVATING`
+    shu ichki EVAL/ACTIVATE bosqichlariga MOS KELADI (batafsili
+    `ProvisioningOutcome.factory_steps`da), lekin alohida tashqi
+    `GapStatus` o'tishi sifatida KUZATILMAYDI — bu honest soddalashtirish
+    (Factory'ni qayta yozmasdan, mavjud pipeline'ga faqat ULANADI).
+    """
+
+    DETECTED = "detected"
+    ANALYZING = "analyzing"
+    PROVISIONING = "provisioning"
+    VALIDATING = "validating"
+    ACTIVATING = "activating"
+    READY = "ready"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+@dataclass(slots=True)
 class CapabilityGap:
     """Task uchun mos ACTIVE agent topilmadi yoki ijro paytida yo'qoldi.
 
     NEGA alohida tip: JB-5 spetsifikatsiyasi aniq talab qiladi — "mos agent
     topilmasa jim boshqa agent bilan bajarmang, Capability Gap qaytaring".
-    Bu — kelajakdagi Agent Factory (JB-6+) uchun TOZA INTERFEYS; hozircha
-    Agent Factory'ning o'zi QURILMAGAN — gap faqat aniqlanadi va
-    `TaskGraphResult.capability_gaps`ga yoziladi, hech narsa "o'zi tuzatib
-    qo'ymaydi" (fake avtonomiya emas).
+    JB-6: bu endi shunchaki hisobot EMAS — `TaskGraphExecutor`ga ixtiyoriy
+    `agent_provisioner` berilsa, shu gap mavjud `AgentFactory` pipeline'iga
+    (Bo'lim 3-4) topshiriladi. Berilmasa — eski xatti-harakat (faqat
+    aniqlanadi, hech narsa "tuzatib qo'ymaydi").
+
+    NEGA mutable (frozen EMAS): provisioning davomida `status` yangilanadi
+    (`MissionTask` bilan bir xil naqsh — davomli holat, yangi obyekt emas).
     """
 
     tool: str
     reason: str
+    mission_id: str = ""
+    task_position: int = -1
+    required_tools: list[str] = field(default_factory=list)
+    risk_level: RiskLevel = RiskLevel.LOW
+    suggested_role: str = ""
+    context: dict[str, Any] = field(default_factory=dict)
+    detected_at: datetime = field(default_factory=utcnow)
+    status: GapStatus = GapStatus.DETECTED
+
+
+class _ProvisioningOutcomeLike(Protocol):
+    """`AgentProvisioningService.provision()` natijasining minimal shakli.
+
+    NEGA `@property` (oddiy atribut e'loni emas): Protocol'dagi oddiy
+    atribut e'lonlari INVARIANT talab qiladi (yozish HAM mumkin deb
+    hisoblanadi) — `ProvisioningPolicyDecision` (StrEnum, `str`ning
+    pastki turi) `decision: str` bilan mos kelmay qolardi. `@property`
+    faqat O'QISHNI bildiradi — kovariant, subtype qabul qilinadi."""
+
+    @property
+    def activated_agent(self) -> str | None: ...  # pragma: no cover — protocol
+
+    @property
+    def reason(self) -> str: ...  # pragma: no cover — protocol
+
+    @property
+    def decision(self) -> str:  # pragma: no cover — protocol
+        """`ProvisioningPolicyDecision` qiymati (`"disabled"` bo'lsa gap
+        REJECTED deb belgilanadi, aks holda FAILED — siyosat rad etishi
+        bilan haqiqiy ijro xatosi orasidagi farq ko'rinsin)."""
+        ...
+
+
+class AgentProvisionerLike(Protocol):
+    """`core.agent_provisioning.AgentProvisioningService` uchun minimal interfeys.
+
+    NEGA Protocol: `task_graph.py` `agent_provisioning.py`ni to'g'ridan-
+    to'g'ri import qilmaydi (aylanma import xavfi yo'q, lekin bog'liqlik
+    yo'nalishi toza qoladi — boshqa DI komponentlar bilan bir xil naqsh).
+    """
+
+    async def provision(self, gap: CapabilityGap) -> _ProvisioningOutcomeLike:  # pragma: no cover
+        ...
 
 
 @dataclass
@@ -122,6 +194,7 @@ class TaskGraphExecutor:
         tool_registry: ToolRegistry,
         permission_policy: PermissionPolicy,
         llm_provider: LLMProvider | None = None,
+        agent_provisioner: AgentProvisionerLike | None = None,
         max_retries: int = 1,
         task_timeout_s: int | None = 120,
     ) -> None:
@@ -129,6 +202,13 @@ class TaskGraphExecutor:
         self._tools = tool_registry
         self._permissions = permission_policy
         self._llm_provider = llm_provider
+        # JB-6: berilmasa (default) — xatti-harakat AYNAN JB-5'dagidek
+        # (CapabilityGap faqat hisobotga yoziladi, hech narsa "tuzatib
+        # qo'ymaydi"). Berilganda — Gap avval mavjud AgentFactory
+        # pipeline'iga topshiriladi, muvaffaqiyatli bo'lsa task O'SHA
+        # ZAHOTI (qo'shimcha mission-level retry kutmasdan) yangi agent
+        # bilan davom ettiriladi.
+        self._agent_provisioner = agent_provisioner
         self._max_retries = max_retries
         self._task_timeout_s = task_timeout_s
 
@@ -236,22 +316,58 @@ class TaskGraphExecutor:
         darajasiga tushirilgan.
         """
         if task.agent is None:
+            gap_tool = task.tool or task.title
             no_agent_gap = CapabilityGap(
-                tool=task.tool or task.title,
+                tool=gap_tool,
                 reason="mos ACTIVE agent topilmadi (compose bosqichida tanlanmagan)",
-            )
-            task.status = StepStatus.FAILED
-            task.error = (
-                f"Capability gap: '{no_agent_gap.tool}' uchun agent topilmadi — "
-                "begona agent bilan avtomatik bajarilmadi (Agent Factory hali qurilmagan)."
+                mission_id=str(mission.id),
+                task_position=task.position,
+                required_tools=[gap_tool],
+                risk_level=risk_for(task.tool),
+                suggested_role=_suggest_role(gap_tool),
+                context={"mission_objective": mission.objective, "task_title": task.title},
             )
             log.info(
                 "task_graph.capability_gap",
                 mission_id=str(mission.id),
                 task=task.title,
                 reason=no_agent_gap.reason,
+                risk=no_agent_gap.risk_level.value,
             )
-            return no_agent_gap
+
+            if self._agent_provisioner is not None and task.tool:
+                no_agent_gap.status = GapStatus.ANALYZING
+                outcome = await self._agent_provisioner.provision(no_agent_gap)
+                if outcome.activated_agent is not None:
+                    no_agent_gap.status = GapStatus.READY
+                    log.info(
+                        "task_graph.capability_gap_resolved",
+                        mission_id=str(mission.id),
+                        task=task.title,
+                        tool=gap_tool,
+                        agent=outcome.activated_agent,
+                    )
+                    # HALOL: bu YANGI birinchi urinish — begona agent
+                    # emas, aynan shu gap uchun provision qilingan/tanlangan
+                    # agent. Pastdagi oddiy ijro yo'liga tushamiz.
+                    task.agent = outcome.activated_agent
+                else:
+                    no_agent_gap.status = (
+                        GapStatus.REJECTED if outcome.decision == "disabled" else GapStatus.FAILED
+                    )
+                    task.status = StepStatus.FAILED
+                    task.error = (
+                        f"Capability gap: '{gap_tool}' uchun agent topilmadi va "
+                        f"avtomatik provisioning muvaffaqiyatsiz: {outcome.reason}"
+                    )
+                    return no_agent_gap
+            else:
+                task.status = StepStatus.FAILED
+                task.error = (
+                    f"Capability gap: '{gap_tool}' uchun agent topilmadi — "
+                    "begona agent bilan avtomatik bajarilmadi."
+                )
+                return no_agent_gap
 
         scoped_tools = self._tools.subset([task.tool]) if task.tool else self._tools
         command = _task_command_text(mission, task)
@@ -276,7 +392,17 @@ class TaskGraphExecutor:
                 # Reja tuzilgandan beri agent PAUSED/o'chirilgan bo'lishi
                 # mumkin — bu ham Capability Gap (begona agentga
                 # o'tkazilmaydi), oddiy retry emas.
-                gap = CapabilityGap(tool=task.tool or task.title, reason=str(exc))
+                gap = CapabilityGap(
+                    tool=task.tool or task.title,
+                    reason=str(exc),
+                    mission_id=str(mission.id),
+                    task_position=task.position,
+                    required_tools=[task.tool] if task.tool else [],
+                    risk_level=risk_for(task.tool),
+                    suggested_role=_suggest_role(task.tool or task.title),
+                    context={"mission_objective": mission.objective, "task_title": task.title},
+                    status=GapStatus.FAILED,
+                )
                 last_error = str(exc)
                 log.info(
                     "task_graph.agent_unavailable",
@@ -321,6 +447,17 @@ class TaskGraphExecutor:
         task.error = last_error or "nomalum xato"
         task.completed_at = utcnow()
         return gap
+
+
+def _suggest_role(tool: str) -> str:
+    """Tool nomining namespace qismidan oddiy rol taklifi (JB-6).
+
+    Masalan `instagram.publish_photo` → `instagram_specialist`. Bu —
+    `AgentFactory`ga uzatiladigan tavsif matni uchun kontekst, HAQIQIY
+    rol tanlovi emas (`AgentFactory._understand()` o'z kalit-so'z
+    xaritasi bilan yakuniy rolni belgilaydi — bu yerda faqat taklif)."""
+    namespace = tool.split(".", 1)[0] if tool else "general"
+    return f"{namespace}_specialist"
 
 
 def _task_command_text(mission: Mission, task: MissionTask) -> str:
@@ -423,7 +560,9 @@ def _synthesize(mission: Mission, tasks: Sequence[MissionTask]) -> str:
 
 
 __all__ = [
+    "AgentProvisionerLike",
     "CapabilityGap",
+    "GapStatus",
     "TaskGraphCycleError",
     "TaskGraphError",
     "TaskGraphExecutor",

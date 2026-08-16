@@ -16,6 +16,7 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import structlog
@@ -130,6 +131,19 @@ class FactoryRequest(BaseModel, frozen=True):
     auto_activate: bool = False
     """TESTING dan ACTIVE ga avtomatik o'tish (eval muvaffaqiyatli bo'lsa)."""
 
+    required_tools: list[str] = Field(default_factory=list)
+    """JB-6: CapabilityGap orqali ANIQ so'ralgan tool(lar).
+
+    NEGA kerak: `_understand()`/`_design()` faqat tavsifdagi kalit
+    so'zlardan ROL (researcher/writer/...) va shu rolning STATIK
+    `ROLE_TOOL_MAP` to'plamini tanlaydi — bu xaritada bor-yo'g'i 4 ta
+    tool bor. Agar CapabilityGap "instagram.publish_photo" so'rasa-yu,
+    tavsif matni "instagram" kalit so'zini o'z ichiga olmasa, yaratilgan
+    agent so'ralgan toolni UMUMAN OLMAS EDI — "provisioning" nomigagina
+    bo'lardi. `required_tools` berilsa, bu tool(lar) rol xaritasidan
+    QAT'IY NAZAR har doim `tool_allowlist`ga qo'shiladi. Bo'sh (default)
+    — eski xatti-harakat (faqat rol xaritasi)."""
+
 
 class FactoryResult(BaseModel, frozen=True):
     """Factory natijasi."""
@@ -188,7 +202,7 @@ class AgentFactory:
             steps.append("CHECK_EXISTING: dublikat yo'q")
 
             # 3-6. DESIGN + SELECT TOOLS + PERMISSIONS + PROMPT
-            spec = self._design(analysis)
+            spec = self._design(analysis, required_tools=request.required_tools)
             steps.append(
                 f"DESIGN: tools={spec.tool_allowlist}, permission={spec.permission_level.value}"
             )
@@ -299,13 +313,16 @@ class AgentFactory:
         if self._registry.has(name):
             raise ValueError(f"'{name}' nomli agent allaqachon mavjud")
 
-    def _design(self, analysis: dict[str, Any]) -> AgentSpec:
+    def _design(self, analysis: dict[str, Any], *, required_tools: Sequence[str] = ()) -> AgentSpec:
         """Agent spec loyihalash — toollar, ruxsat, prompt generatsiya."""
         role = analysis["role"]
         division = analysis["division"]
 
-        # Tool tanlash
+        # Tool tanlash — rol xaritasi + ANIQ so'ralgan tool(lar) (JB-6).
         tools = list(ROLE_TOOL_MAP.get(role, ["time.now"]))
+        for tool_name in required_tools:
+            if tool_name and tool_name not in tools:
+                tools.append(tool_name)
 
         # Ruxsat darajasi
         permission = DIVISION_PERMISSION_MAP.get(division, PermissionLevel.READ)
