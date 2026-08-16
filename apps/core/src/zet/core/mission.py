@@ -81,6 +81,21 @@ class MissionTask(BaseModel):
     status: StepStatus = StepStatus.PENDING
     run_id: uuid.UUID | None = None
 
+    # JB-5 (Task Graph): task o'z holicha bajarilishi/qayta urinishi uchun
+    # kerakli maydonlar. Ilgari `MissionTask` faqat rejalashtirish uchun
+    # metadata edi (position/title/depends_on/tool/agent) — hech qanday
+    # kod alohida taskni bajarmasdi, shuning uchun natija/xato/urinish
+    # sonini saqlashga ehtiyoj yo'q edi. `TaskGraphExecutor` endi har
+    # taskni alohida ishga tushiradi va shu maydonlarni to'ldiradi.
+    result: str | None = None
+    """Task muvaffaqiyatli tugasa — agent output'i (qisqartirilgan)."""
+    error: str | None = None
+    """Task muvaffaqiyatsiz/bloklangan bo'lsa — sabab."""
+    retries: int = 0
+    """Nechta marta qayta urinilgan (birinchi urinish hisobga kirmaydi)."""
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
 
 class Mission(BaseModel):
     """Mission — strategiya (nima qilish, qanday tekshirish, nimani eslash).
@@ -136,6 +151,16 @@ class CapabilityBundleLike(Protocol):
     tool_agents: dict[str, str]
     """JB-4: tool nomi → HAQIQIY tanlangan agent (bo'sh dict = eski
     xatti-harakat, `_bundle_to_tasks` barcha `task.agent`ni None qiladi)."""
+    tool_dependencies: dict[str, list[str]]
+    """JB-5: tool nomi → shu tooldan OLDIN bajarilishi kerak bo'lgan tool
+    nomlari (capability-darajasidagi haqiqiy DAG'dan olingan). `_bundle_to_tasks`
+    bu MAYDONNING O'ZI mavjudligini (`hasattr`, qiymati emas) eski
+    zanjirga qaytish belgisi sifatida ishlatadi — chunki bo'sh `{}`
+    IKKI xil holatni anglatishi mumkin: "bu bundle turi buni umuman
+    qo'llab-quvvatlamaydi" (eski test double) VA "qo'llab-quvvatlaydi,
+    lekin haqiqatan ham hech qanday tool o'zaro bog'liq emas" (masalan
+    ikkita mustaqil capability). Faqat BIRINCHISI eski chiziqli zanjirga
+    qaytishi kerak."""
 
 
 class CapabilityRegistryLike(Protocol):
@@ -258,6 +283,20 @@ class MissionRecoveryAdapter:
         return await self._repo.update(mission.id, constraints=new_constraints)
 
 
+class TaskGraphExecutorLike(Protocol):
+    """`core.task_graph.TaskGraphExecutor` uchun minimal interfeys (JB-5).
+
+    NEGA Protocol (boshqa DI komponentlar bilan bir xil naqsh): `mission.py`
+    `task_graph.py`ni to'g'ridan-to'g'ri import qilmaydi (aylanma import
+    xavfi — `task_graph.py` `Mission`/`MissionTask`ni ishlatadi). Test'lar
+    ham haqiqiy `TaskGraphExecutor` qurmasdan, shu shaklga mos soxta
+    obyekt berishi mumkin.
+    """
+
+    async def run(self, mission: Mission) -> Any:  # pragma: no cover — protocol
+        ...
+
+
 class MemoryStoreLike(Protocol):
     """PgMemoryStore uchun minimal `remember` interfeysi."""
 
@@ -298,6 +337,7 @@ class MissionEngine:
         memory_store: MemoryStoreLike | None = None,
         risk_classifier: Callable[[Mission], RiskLevel] | None = None,
         understand_fn: Callable[[Mission], Awaitable[Mission]] | None = None,
+        task_graph_executor: TaskGraphExecutorLike | None = None,
         max_retries: int = 2,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
@@ -311,6 +351,11 @@ class MissionEngine:
         self._memory = memory_store
         self._risk_classifier = risk_classifier
         self._understand_fn = understand_fn
+        # JB-5: berilmasa (default) — xatti-harakat AYNAN eski ("mission =
+        # bitta Command") qoladi, garchi `mission.tasks`da 2+ task bo'lsa
+        # ham. Faqat berilganda va `mission.tasks` haqiqatan ham 2+
+        # bo'lganda `execute()` Task Graph yo'liga o'tadi (`_execute_task_graph`).
+        self._task_graph_executor = task_graph_executor
         self._max_retries = max_retries
         self._clock = clock
 
@@ -466,11 +511,18 @@ class MissionEngine:
     async def execute(self, mission: Mission) -> tuple[Mission, RunRecord | None]:
         """EXECUTING → VERIFYING (yoki WAITING_APPROVAL / FAILED).
 
-        Command tuziladi va Orchestrator.start() chaqiriladi. RunRecord
-        Mission bilan `MissionRunLink` orqali bog'lanadi. Kill switch
-        yoqilgan bo'lsa `KillSwitchEngagedError` propagate qilinadi va
-        Mission FAILED bo'ladi.
+        JB-5: `mission.tasks`da 2+ task bo'lsa VA `task_graph_executor`
+        berilgan bo'lsa — Task Graph yo'liga o'tiladi (`_execute_task_graph`,
+        har task alohida agent/tool bilan, dependency bo'yicha bajariladi).
+        Aks holda (0-1 task yoki executor berilmagan) — eski xatti-harakat:
+        butun mission BITTA Command sifatida Orchestrator.start()'ga
+        uzatiladi. Bu — NOL regressiya kafolati: mavjud single-task
+        missionlar (yoki hali `task_graph_executor` ulanmagan test/deploy
+        muhitlari) aynan eski yo'l bilan ishlaydi.
         """
+        if len(mission.tasks) >= 2 and self._task_graph_executor is not None:
+            return await self._execute_task_graph(mission)
+
         from zet.core.orchestrator import Orchestrator  # noqa: F401 — TYPE_CHECKING
         from zet.domain.command import Command, ConversationTurn
         from zet.domain.enums import MessageRole, RunStatus, TrustLevel
@@ -549,6 +601,58 @@ class MissionEngine:
         # DONE — verify fazasiga
         mission = await self._transition(mission, MissionStatus.VERIFYING)
         return mission, record
+
+    async def _execute_task_graph(self, mission: Mission) -> tuple[Mission, RunRecord | None]:
+        """EXECUTING → VERIFYING → COMPLETED/RECOVERING (JB-5 Task Graph yo'li).
+
+        `RunRecord` yo'q (bitta mission bir nechta agent-run'dan iborat,
+        har biri o'z ichida `run_agent_command()` orqali bajariladi —
+        Orchestrator Run tushunchasi bu yerda ishlatilmaydi), shu sabab
+        har doim `(mission, None)` qaytadi. `run_to_completion()`dagi
+        `if record is not None and status == VERIFYING: verify(...)`
+        sharti shu sabab bu yo'lda ISHGA TUSHMAYDI — COMPLETED/RECOVERING
+        transitioni shu yerning o'zida (verify() bilan bir xil ikki
+        bosqichli EXECUTING→VERIFYING→terminal naqsh, chunki holat
+        mashinasi EXECUTING'dan to'g'ridan-to'g'ri COMPLETED'ga o'tishga
+        ruxsat bermaydi).
+        """
+        assert self._task_graph_executor is not None  # noqa: S101 — faqat shu yo'ldan kelinadi
+
+        try:
+            result = await self._task_graph_executor.run(mission)
+        except Exception as exc:
+            log.exception("mission.task_graph_error", mission_id=str(mission.id))
+            failed = await self._repo.update(mission.id, error=f"task graph execution failed: {exc}")
+            failed = await self._transition(failed, MissionStatus.FAILED, error=str(exc))
+            return failed, None
+
+        mission = await self._repo.update(
+            mission.id, tasks=[t.model_dump(mode="json") for t in result.tasks]
+        )
+        mission = await self._transition(mission, MissionStatus.VERIFYING)
+
+        if result.all_done:
+            mission = await self._transition(mission, MissionStatus.COMPLETED)
+            if not mission.memory_updates:
+                entry = f"Mission yakunlandi (task graph): {mission.objective}"
+                if result.synthesized_text:
+                    entry += f" — natija: {result.synthesized_text[:500]}"
+                mission = await self._repo.update(mission.id, memory_updates=[entry])
+            await self._write_memory_updates(mission)
+            log.info(
+                "mission.task_graph_completed",
+                mission_id=str(mission.id),
+                tasks=len(result.tasks),
+            )
+            return mission, None
+
+        error_parts = [result.synthesized_text or "task graph execution failed"]
+        if result.capability_gaps:
+            gaps = "; ".join(f"{g.tool}: {g.reason}" for g in result.capability_gaps)
+            error_parts.append(f"capability gaps: {gaps}")
+        error_msg = "\n".join(error_parts)[:2000]
+        mission = await self._transition(mission, MissionStatus.RECOVERING, error=error_msg)
+        return mission, None
 
     async def verify(self, mission: Mission, run_record: RunRecord) -> Mission:
         """VERIFYING → COMPLETED yoki RECOVERING.
@@ -703,23 +807,54 @@ def _max_permission(levels: list[PermissionLevel] | list[str]) -> PermissionLeve
 
 
 def _bundle_to_tasks(bundle: CapabilityBundleLike) -> list[MissionTask]:
-    """CapabilityBundle → MissionTask[] (bir tool = bir task, tartibli DAG).
+    """CapabilityBundle → MissionTask[] (bir tool = bir task, HAQIQIY DAG).
 
     JB-4 (audit topilmasi): `task.agent` ilgari HECH QACHON to'ldirilmasdi.
     Endi `bundle.tool_agents` (mavjud bo'lsa — `CapabilityRegistryComposer`
     `AgentSelector` bilan quradi) dan o'qiladi. Mos agent topilmagan
     tool — `agent=None` (halol: hech kim tanlanmadi, o'ylab topilmadi).
+
+    JB-5: `depends_on` ilgari doim CHIZIQLI zanjir edi (`[i-1]`) — ya'ni
+    ikkita mustaqil tool (masalan ikkita alohida `web.search`) ham
+    navbatda kutib turardi, garchi ular bir-biriga bog'liq bo'lmasa ham.
+    Endi `bundle.tool_dependencies` (mavjud bo'lsa — capability-darajasidagi
+    HAQIQIY DAG'dan, `CapabilityRegistryComposer.compose()` quradi)
+    ishlatiladi: bir tool faqat capability grafida undan OLDIN turgan
+    capability'lar tooliga bog'liq bo'ladi, aks holda mustaqil (parallel
+    bosqichda) qoladi.
+
+    NEGA `hasattr` (qiymat emas): bo'sh `{}` ikki xil holatni anglatishi
+    mumkin — "bu bundle turi `tool_dependencies`ni umuman bilmaydi" (eski
+    test double, `CapabilityBundleLike` dan OLDIN yozilgan) va "biladi,
+    lekin bu safar HAQIQATAN hech qanday tool boshqasiga bog'liq emas"
+    (masalan ikkita mustaqil capability). Faqat BIRINCHISI eski chiziqli
+    zanjirga qaytishi kerak — ikkinchisida bo'sh natija TO'G'RI (barcha
+    tool mustaqil, bitta parallel bosqichda).
     """
     tool_agents = getattr(bundle, "tool_agents", None) or {}
+    supports_dag = hasattr(bundle, "tool_dependencies")
+    tool_deps = bundle.tool_dependencies if supports_dag else {}
     tasks: list[MissionTask] = []
+    position_by_tool: dict[str, int] = {name: i for i, name in enumerate(bundle.tools)}
+
     for i, tool_name in enumerate(bundle.tools):
+        if supports_dag:
+            depends_on = sorted(
+                {
+                    position_by_tool[dep]
+                    for dep in tool_deps.get(tool_name, [])
+                    if dep in position_by_tool and position_by_tool[dep] != i
+                }
+            )
+        else:
+            depends_on = [i - 1] if i > 0 else []
         tasks.append(
             MissionTask(
                 position=i,
                 title=tool_name,
                 tool=tool_name,
                 agent=tool_agents.get(tool_name),
-                depends_on=[i - 1] if i > 0 else [],
+                depends_on=depends_on,
             )
         )
     return tasks
@@ -742,4 +877,5 @@ __all__ = [
     "MissionTask",
     "RecoveryEngineLike",
     "RelevantContextLike",
+    "TaskGraphExecutorLike",
 ]

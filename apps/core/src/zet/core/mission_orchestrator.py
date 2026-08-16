@@ -324,6 +324,11 @@ class CapabilityBundle:
     tekshirilgan) agent. `_bundle_to_tasks()` shu yerdan `MissionTask.agent`
     ni to'ldiradi — `agent_registry` berilmasa bo'sh (eski xatti-harakat:
     task.agent har doim None, sinovlar buzilmaydi)."""
+    tool_dependencies: dict[str, list[str]] = field(default_factory=dict)
+    """JB-5: tool nomi → undan OLDIN bajarilishi kerak bo'lgan tool nomlari
+    (capability dependency grafidan olingan). `_bundle_to_tasks()` shu
+    yerdan HAQIQIY `MissionTask.depends_on` DAG'ini quradi — bo'sh bo'lsa
+    eski chiziqli zanjirga qaytadi."""
 
 
 class CapabilityRegistryComposer:
@@ -408,7 +413,46 @@ class CapabilityRegistryComposer:
             permissions_required=[resolution.required_permission],
             risk_level=resolution.max_risk,
             tool_agents=tool_agents,
+            tool_dependencies=_tool_dependencies_from_capabilities(resolution.capabilities),
         )
+
+
+def _tool_dependencies_from_capabilities(capabilities: Sequence[Any]) -> dict[str, list[str]]:
+    """Capability dependency grafidan tool-darajasidagi bog'liqlik xaritasi (JB-5).
+
+    NEGA kerak: `CapabilityRegistry.resolve()` allaqachon capability'larni
+    topologik tartiblaydi va har birining `dependencies`ini biladi (masalan
+    "website" → ["branding", "content"]). Ilgari bu ma'lumot MissionTask
+    darajasiga umuman yetmasdi — `_bundle_to_tasks()` faqat tool RO'YXATI
+    tartibiga qarab CHIZIQLI zanjir qurardi (har tool oldingisiga bog'liq),
+    garchi ikkita tool aslida mustaqil (masalan ikkita "content" capability
+    tooli) bo'lsa ham.
+
+    Qoida: capability `cap` o'zining `dependencies`idagi capability'larning
+    `default_tools`iga bog'liq — ya'ni `cap.default_tools` HAR BIRI, bog'liq
+    capability'larning HAR BIR tooli tugagach boshlanadi. Bitta capability
+    ICHIDAGI tool'lar (masalan uning ikkita default_tool'i) bir-biriga
+    bog'liq deb HISOBLANMAYDI — capability bu tartibni belgilamaydi, ular
+    mustaqil (parallel bosqichda) qoladi.
+    """
+    tools_by_cap: dict[str, list[str]] = {cap.name: list(cap.default_tools) for cap in capabilities}
+    deps: dict[str, list[str]] = {}
+    for cap in capabilities:
+        parent_tools: list[str] = []
+        seen: set[str] = set()
+        for dep_name in cap.dependencies:
+            for tool in tools_by_cap.get(dep_name, ()):
+                if tool not in seen:
+                    seen.add(tool)
+                    parent_tools.append(tool)
+        if not parent_tools:
+            continue
+        for tool in cap.default_tools:
+            existing = deps.setdefault(tool, [])
+            for parent in parent_tools:
+                if parent not in existing and parent != tool:
+                    existing.append(parent)
+    return deps
 
 
 _CONTEXT_KEYWORD_LIMIT = 12

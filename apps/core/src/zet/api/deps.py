@@ -28,6 +28,7 @@ from zet.core.executor import Executor
 from zet.core.orchestrator import Orchestrator, RunStore
 from zet.core.recovery import RecoveryEngine
 from zet.core.state import CoreState
+from zet.core.task_graph import TaskGraphExecutor
 from zet.core.verifier import Verifier
 from zet.db.bootstrap import get_or_create_owner
 from zet.db.session import create_engine, create_session_factory, session_scope
@@ -1007,6 +1008,31 @@ def _build_world_state_provider(settings: Settings) -> Callable[[], Awaitable[st
     return _provider
 
 
+def _build_task_graph_executor(router: ModelRouter) -> TaskGraphExecutor:
+    """JB-5: `MissionEngine`ga ulanadigan Task Graph Executor — har mission-task
+    HAQIQIY LLM (`RoutedLLMProvider`) orqali, o'ziga tayinlangan agent va
+    FAQAT o'ziga ruxsat etilgan tool bilan ishlaydi.
+
+    NEGA global singleton'lar (`get_agent_registry()`, `get_tool_registry()`,
+    `get_permission_policy()`): `MissionEngine`ning qolgan qismlari
+    (Orchestrator, Executor, mission-level `tool_registry.subset()`) ham
+    AYNAN shu singleton'larga tayanadi — Task Graph tasklari boshqa
+    tool/agent "olamida" ishlasa, mission-level tanlov bilan nomuvofiqlik
+    yuzaga kelardi.
+
+    `is_autonomous=True` — `RoutedLLMProvider`ning kost/kvota hisoblash
+    yorlig'i (har task ega kutmasdan ishlaydi), XAVFSIZLIK GATE'I EMAS:
+    V-32 (majburiy tasdiq) baribir `AgentRuntime._execute_tool()` orqali
+    fail-closed enforce qilinadi (`task_graph.py` docstring'iga qarang).
+    """
+    return TaskGraphExecutor(
+        agent_registry=get_agent_registry(),
+        tool_registry=get_tool_registry(),
+        permission_policy=get_permission_policy(),
+        llm_provider=RoutedLLMProvider(router, is_autonomous=True),
+    )
+
+
 def _build_recovery_engine(
     *,
     router: ModelRouter,
@@ -1187,6 +1213,10 @@ async def build_mission_engine_for_session(
             repository=repo,
         ),
         memory_store=memory,
+        # JB-5: 2+ taskli mission Task Graph yo'li orqali (parallel/
+        # dependency-aware, per-task agent) bajariladi; 0-1 taskli mission
+        # eski single-Command yo'lida qoladi (o'zgarishsiz).
+        task_graph_executor=_build_task_graph_executor(orchestrator._router),
         max_retries=2,
     )
 
@@ -1255,6 +1285,10 @@ async def get_mission_orchestrator(
             repository=repo,
         ),
         memory_store=memory,
+        # JB-5: 2+ taskli mission Task Graph yo'li orqali (parallel/
+        # dependency-aware, per-task agent) bajariladi; 0-1 taskli mission
+        # eski single-Command yo'lida qoladi (o'zgarishsiz).
+        task_graph_executor=_build_task_graph_executor(router),
         max_retries=2,
     )
 
