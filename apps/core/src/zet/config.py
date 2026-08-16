@@ -196,14 +196,30 @@ class Settings(BaseSettings):
     """Brain har so'rov uchun `ExecutionMode` (DIRECT_RESPONSE/DIRECT_TOOL/
     MISSION/TASK_GRAPH/WORKFLOW/BACKGROUND_WORKFLOW/WORKFLOW_COMMAND)
     hisoblasinmi. `False` — JB-7'gacha bo'lgan xatti-harakat
-    (`BrainResult.execution_mode` doim bo'sh, marshrutlash o'zgarmaydi).
+    (`BrainResult.execution_mode` doim bo'sh, marshrutlash o'zgarmaydi)."""
 
-    MUHIM: `True` bo'lganda ham WORKFLOW/BACKGROUND_WORKFLOW rejimlari
-    hozircha faqat ANIQLANADI va LOGLANADI — real persistent Workflow/
-    Schedule yaratilmaydi (`core/execution_mode.py`dagi "HALOL DOIRA"ga
-    qarang). Yagona haqiqiy xatti-harakat o'zgarishi: WORKFLOW_COMMAND
-    deb klassifikatsiya qilingan buyruqlar endi hech qachon yangi
-    Mission yaratmaydi."""
+    # ── Workflow/Scheduler integratsiyasi (JB-9) ─────────────────────
+    brain_workflow_integration_enabled: bool = Field(default=True)
+    """JB-9: BACKGROUND_WORKFLOW → HAQIQIY `ScheduleRule` yaratsinmi va
+    WORKFLOW_COMMAND → HAQIQIY Scheduler amali (list/pause/resume/cancel)
+    chaqirsinmi.
+
+    `True` (default):
+        - "Har kuni soat 9 da telegramimni tekshir" — haqiqiy
+          `ScheduleRule` yaratiladi (`automation_state`da saqlanadi,
+          `AutomationDaemon` cron vaqtida ishga tushiradi).
+        - "Workflowlarimni ko'rsat" — Scheduler'dan ro'yxat qaytariladi.
+        - "Workflowni to'xtat" — Scheduler.pause_rule chaqiriladi.
+    `False`:
+        - JB-8 xatti-harakati (rejim aniqlanadi va loglanadi, lekin
+          haqiqiy hech narsa o'zgarmaydi — WORKFLOW_COMMAND Run yo'liga
+          tushadi, BACKGROUND_WORKFLOW — Mission yo'liga).
+
+    MUHIM (halol chegara — JB-9): flag `True` bo'lganda ham `ExecutionMode
+    .WORKFLOW` (bir martalik aniq so'ralgan persistent jarayon) — HALI
+    Mission yo'liga tushadi. Mission allaqachon DB-persistent "ko'p
+    qadamli, saqlanadigan, retryable" ijro qatlami, shuning uchun bu —
+    "fake" emas; lekin alohida `WorkflowChain` obyekti YARATILMAYDI."""
 
     # ── Brain-level Model Routing (JB-7, V-29) ──────────────────────
     brain_model_routing_enabled: bool = Field(default=True)

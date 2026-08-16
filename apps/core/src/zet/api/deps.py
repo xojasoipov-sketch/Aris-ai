@@ -930,8 +930,11 @@ def _build_brain(
     Mission runner sozlama o'chirilganda UMUMAN qurilmaydi: bunda
     Brain triajga LLM ham sarflamaydi.
     """
+    from zet.core.agent_selector import AgentSelector
+    from zet.core.background_workflow import BackgroundWorkflowBridge
     from zet.core.brain import Brain
     from zet.core.execution_mode import ExecutionModeClassifier
+    from zet.core.workflow_command import WorkflowCommandExecutor
 
     mission_runner: MissionRunner | None = None
     if settings.brain_goal_missions:
@@ -962,6 +965,34 @@ def _build_brain(
 
         mission_runner = _run_mission
 
+    # ── JB-9: Scheduler/AutomationEngine integratsiyasi ────────────
+    workflow_command_executor: WorkflowCommandExecutor | None = None
+    background_workflow_bridge: BackgroundWorkflowBridge | None = None
+    schedule_persister: Callable[[], Awaitable[None]] | None = None
+    if settings.brain_workflow_integration_enabled:
+        engine = get_automation_engine()
+        workflow_command_executor = WorkflowCommandExecutor(engine.scheduler)
+        background_workflow_bridge = BackgroundWorkflowBridge(
+            automation_engine=engine,
+            # `AgentSelector` Protocol contravariance (JB-5/JB-6 bilan bir xil
+            # naqsh) — concrete `AgentRegistry.list_agents(status: AgentStatus)`
+            # va Protocol'ning `status: object` orasidagi mypy nomuvofiqligi.
+            agent_selector=AgentSelector(get_agent_registry()),  # type: ignore[arg-type]
+        )
+
+        async def _persist_engine_state() -> None:
+            # Mavjud `automation/persistence.py` naqshi bilan bir xil:
+            # fail-open, owner shu process settings'idan.
+            from zet.automation.persistence import persist_automation
+
+            await persist_automation(
+                engine,
+                get_session_factory(),
+                owner_external_id=settings.owner_id,
+            )
+
+        schedule_persister = _persist_engine_state
+
     return Brain(
         orchestrator=orchestrator,
         # AYNAN orchestrator'ning recognizer'i — bir run doirasidagi
@@ -976,6 +1007,9 @@ def _build_brain(
         execution_mode_classifier=(
             ExecutionModeClassifier() if settings.brain_execution_mode_enabled else None
         ),
+        workflow_command_executor=workflow_command_executor,
+        background_workflow_bridge=background_workflow_bridge,
+        schedule_persister=schedule_persister,
     )
 
 

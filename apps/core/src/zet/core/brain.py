@@ -38,13 +38,28 @@ lekin Mission — "workflow" so'zi bilan chalkashtirilishi mumkin edi.
 `core.execution_mode.ExecutionModeClassifier` (ixtiyoriy, berilmasa
 Brain o'zgarmaydi) buyruq matnidan aniq workflow-signallarni ("workflow
 qilib qo'y", "har kuni...", "workflowni to'xtat") ajratadi va
-`BrainResult.execution_mode`/`execution_reason` orqali TUSHUNTIRADI —
-lekin HOZIRCHA hech qanday yangi Workflow/Schedule OBYEKTI yaratmaydi
-(`core/execution_mode.py` docstring'idagi "HALOL DOIRA"ga qarang).
-Yagona haqiqiy xatti-harakat o'zgarishi: `WORKFLOW_COMMAND` deb
+`BrainResult.execution_mode`/`execution_reason` orqali TUSHUNTIRADI.
+JB-8'da yagona haqiqiy xatti-harakat o'zgarishi: `WORKFLOW_COMMAND` deb
 klassifikatsiya qilingan buyruqlar ("workflowni to'xtat" kabi) HECH
 QACHON yangi Mission yaratmaydi — LLM ularni xato ravishda "goal" deb
 belgilasa ham, xavfsiz Run yo'liga tushadi.
+
+JB-9 QO'SHIMCHASI — haqiqiy WORKFLOW_COMMAND va BACKGROUND_WORKFLOW
+integratsiyasi (`WorkflowCommandExecutor`, `BackgroundWorkflowBridge`):
+    - `WORKFLOW_COMMAND` endi HAQIQIY samara beradi: mavjud
+      `AutomationEngine.Scheduler` (fully persistent) ustida
+      LIST/STATUS/PAUSE/RESUME/CANCEL amallarini bajaradi. Bir nechta
+      mos qoida bo'lsa — HECH QANDAY tanlash qilmaydi, foydalanuvchidan
+      aniqlashtirish so'raydi.
+    - `BACKGROUND_WORKFLOW` endi HAQIQIY `ScheduleRule` yaratadi
+      (`core/schedule_expression.py` deterministik cron parseri +
+      `AgentSelector` orqali mos agent). Fire vaqti kelganda mavjud
+      `AutomationDaemon` (60s tick) ishga tushiradi.
+    - `WORKFLOW` (bir martalik, aniq so'ralgan) — hozircha Mission
+      yo'liga tushadi (bu HALOL: Mission allaqachon DB-persistent
+      "ko'p qadamli, saqlanadigan, retryable" ijro qatlami).
+    Barcha yangi imkoniyatlar ixtiyoriy (constructor parametri) —
+    berilmasa JB-8 xatti-harakati saqlanadi.
 
 Bog'liq qarorlar:
     JB-2 — goal→mission triaj (JARVIS Brain auditi)
@@ -52,6 +67,8 @@ Bog'liq qarorlar:
     V-29 — task_class model marshrutlash (BU BOSHQA narsa: task_class
            modelni tanlaydi, request_kind esa ish YURITISH usulini)
     JB-8 — ijro rejimi (Workflow ixtiyoriy, default emas)
+    JB-9 — WORKFLOW_COMMAND/BACKGROUND_WORKFLOW haqiqiy backend
+           (Scheduler'ga ulanish)
 """
 
 from __future__ import annotations
@@ -65,9 +82,12 @@ from typing import Protocol
 
 import structlog
 
+from zet.core.background_workflow import BackgroundWorkflowBridge
 from zet.core.execution_mode import ExecutionDecision, ExecutionMode, ExecutionModeClassifier
 from zet.core.intent import AmbiguousCommandError, IntentError, IntentRecognizer
 from zet.core.mission import Mission
+from zet.core.schedule_expression import parse_schedule
+from zet.core.workflow_command import WorkflowCommandExecutor
 from zet.domain.command import Command, Intent
 from zet.domain.enums import MissionStatus, RunStatus
 from zet.llm.base import LLMError
@@ -86,6 +106,15 @@ class BrainRoute(StrEnum):
 
     MISSION_FALLBACK = "mission_fallback"
     """Goal deb tanildi, lekin mission boshlanmadi — Run yo'liga qaytdi."""
+
+    WORKFLOW_COMMAND = "workflow_command"
+    """JB-9: mavjud workflow (Scheduler qoidasi) ustida amal —
+    HECH QANDAY yangi Mission/Run yaratilmagan, Scheduler API to'g'ridan
+    javob bergan."""
+
+    BACKGROUND_WORKFLOW_CREATED = "background_workflow_created"
+    """JB-9: haqiqiy `ScheduleRule` yaratildi (persistent) —
+    `AutomationDaemon` cron vaqtida ishga tushiradi."""
 
 
 @dataclass(frozen=True)
@@ -175,6 +204,9 @@ class Brain:
         run_lookup: RunLookup | None = None,
         goal_missions_enabled: bool = True,
         execution_mode_classifier: ExecutionModeClassifier | None = None,
+        workflow_command_executor: WorkflowCommandExecutor | None = None,
+        background_workflow_bridge: BackgroundWorkflowBridge | None = None,
+        schedule_persister: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """
         Args:
@@ -192,6 +224,19 @@ class Brain:
                 xatti-harakat). Berilsa, `WORKFLOW_COMMAND` deb
                 klassifikatsiya qilingan buyruqlar hech qachon yangi
                 Mission yaratmaydi.
+            workflow_command_executor: JB-9 — berilsa `WORKFLOW_COMMAND`
+                buyruqlari HAQIQIY `Scheduler` API (list/pause/resume/
+                cancel) chaqiradi. Berilmasa — JB-8 xatti-harakati (Run
+                yo'liga tushadi, hech narsa o'zgartirmaydi).
+            background_workflow_bridge: JB-9 — berilsa `BACKGROUND_WORKFLOW`
+                qarori HAQIQIY `ScheduleRule` yaratadi. Berilmasa — JB-8
+                xatti-harakati (Mission yo'liga tushadi, bir martalik).
+            schedule_persister: JB-9 — Scheduler holatini
+                (`automation_state` jadvaliga) yozadigan async callback.
+                Berilsa har WORKFLOW_COMMAND yoki BACKGROUND_WORKFLOW
+                yaratilgach chaqiriladi. Berilmasa — persistensiya
+                chaqiruvchi qatlam mas'uliyati (masalan mavjud
+                `api/routes/automation.py` naqshi bilan).
         """
         self._orchestrator = orchestrator
         self._intent = intent_recognizer
@@ -200,6 +245,9 @@ class Brain:
         self._run_lookup = run_lookup
         self._goal_missions_enabled = goal_missions_enabled
         self._execution_classifier = execution_mode_classifier
+        self._workflow_command = workflow_command_executor
+        self._background_workflow = background_workflow_bridge
+        self._schedule_persister = schedule_persister
 
     @property
     def _mission_path_available(self) -> bool:
@@ -245,11 +293,24 @@ class Brain:
         # ("Workflowni to'xtat" kabi) HECH QACHON yangi Mission
         # yaratmasin — LLM ularni xato ravishda "goal" deb belgilagan
         # bo'lsa ham. Mavjud workflow ustida amal — yangi maqsad EMAS.
+        # JB-9: endi HAQIQIY backend (`WorkflowCommandExecutor`) mavjud
+        # bo'lsa — Scheduler API'ni chaqiramiz; aks holda JB-8'dagi
+        # kabi xavfsiz Run yo'liga tushamiz.
         if decision is not None and decision.mode == ExecutionMode.WORKFLOW_COMMAND:
+            handled = await self._try_workflow_command(command, intent, decision)
+            if handled is not None:
+                return handled
             record = await self._orchestrator.start(command, intent=intent)
             return self._attach_decision(
                 _from_run(record, BrainRoute.RUN, request_kind=intent.request_kind), decision
             )
+
+        # JB-9: BACKGROUND_WORKFLOW — bridge mavjud bo'lsa haqiqiy
+        # `ScheduleRule` yaratamiz; aks holda oddiy yo'ldan (JB-8 kabi).
+        if decision is not None and decision.mode == ExecutionMode.BACKGROUND_WORKFLOW:
+            handled = await self._try_background_workflow(command, intent, decision)
+            if handled is not None:
+                return handled
 
         if intent.request_kind != "goal":
             record = await self._orchestrator.start(command, intent=intent)
@@ -259,6 +320,104 @@ class Brain:
 
         result = await self._handle_goal(command, intent)
         return self._attach_decision(result, decision)
+
+    async def _try_workflow_command(
+        self, command: Command, intent: Intent, decision: ExecutionDecision
+    ) -> BrainResult | None:
+        """JB-9: `WORKFLOW_COMMAND` uchun HAQIQIY Scheduler amali.
+
+        Bridge berilmasa yoki xatolik bo'lsa — `None` qaytaradi (chaqiruvchi
+        eski xavfsiz Run yo'liga tushadi). Bu — "fail-open" tamoyili:
+        yangi funksiya ISHLAMAY qolsa, tizim ISHLAB TURSIN.
+        """
+        if self._workflow_command is None:
+            return None
+        try:
+            outcome = self._workflow_command.execute(command.text)
+        except Exception:
+            log.exception("brain.workflow_command_failed", channel=command.channel)
+            return None
+
+        if outcome.affected_rule_ids and self._schedule_persister is not None:
+            # Faqat holat o'zgargan bo'lsa persist qilamiz — LIST/STATUS
+            # kabi read-only amallar uchun DB yozish keraksiz.
+            try:
+                await self._schedule_persister()
+            except Exception:
+                # Persist xatoligi so'rovni yiqitmasin — foydalanuvchi
+                # javobni oldi, restart'da tikanmaslik ehtimoli kichik
+                # muammo (mavjud persist naqshiga mos).
+                log.warning("brain.schedule_persist_failed")
+
+        log.info(
+            "brain.workflow_command_result",
+            action=outcome.action.value,
+            ok=outcome.ok,
+            needs_disambiguation=outcome.needs_disambiguation,
+            affected=len(outcome.affected_rule_ids),
+        )
+        return self._attach_decision(
+            BrainResult(
+                text=outcome.message,
+                ok=outcome.ok,
+                route=BrainRoute.WORKFLOW_COMMAND,
+                request_kind=intent.request_kind,
+            ),
+            decision,
+        )
+
+    async def _try_background_workflow(
+        self, command: Command, intent: Intent, decision: ExecutionDecision
+    ) -> BrainResult | None:
+        """JB-9: `BACKGROUND_WORKFLOW` uchun HAQIQIY `ScheduleRule` yaratish.
+
+        `None` qaytarilsa — chaqiruvchi mavjud yo'l bilan davom etadi
+        (Mission/Run — ya'ni buyruq BIR MARTA baribir bajariladi, faqat
+        takrorlanmaydi). Bu HALOL: parser cron ajratib olmasa, foydalanuvchi
+        so'rovi baribir bir martalik javob oladi.
+        """
+        if self._background_workflow is None:
+            return None
+        expression = parse_schedule(command.text)
+        if expression is None:
+            log.info(
+                "brain.background_workflow_no_cron",
+                text_preview=command.text[:60],
+            )
+            return None
+        try:
+            outcome = self._background_workflow.create_schedule(
+                intent=intent,
+                expression=expression,
+                command_text=command.text,
+            )
+        except Exception:
+            log.exception("brain.background_workflow_failed")
+            return None
+
+        if outcome.ok and self._schedule_persister is not None:
+            try:
+                await self._schedule_persister()
+            except Exception:
+                log.warning("brain.schedule_persist_failed")
+
+        # `ok=False` bo'lsa — bridge o'zi tushuntirdi (agent yo'q va h.k.);
+        # foydalanuvchi HALOL javob oladi, tanlash uning qo'lida.
+        log.info(
+            "brain.background_workflow_result",
+            ok=outcome.ok,
+            rule_id=outcome.rule_id,
+            cron=outcome.cron_expr,
+        )
+        return self._attach_decision(
+            BrainResult(
+                text=outcome.message,
+                ok=outcome.ok,
+                route=BrainRoute.BACKGROUND_WORKFLOW_CREATED,
+                request_kind=intent.request_kind,
+            ),
+            decision,
+        )
 
     def _classify_execution(self, intent: Intent, command: Command) -> ExecutionDecision | None:
         """JB-8: ijro rejimini aniqlaydi (`execution_mode_classifier` berilgan bo'lsa).
