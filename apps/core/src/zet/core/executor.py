@@ -215,6 +215,7 @@ class Executor:
         recall: RecallFn | None = None,
         audit_fn: AuditFn | None = None,
         run_id: uuid.UUID | None = None,
+        world_state: str = "",
     ) -> None:
         self._registry = registry
         self._policy = policy
@@ -238,6 +239,12 @@ class Executor:
         # NULL (jamlanma summasi bo'yicha o'sha-o'sha to'g'ri qoladi,
         # faqat per-run xarajat izi yo'q bo'ladi).
         self._run_id = run_id
+        # JB-3: muhitning joriy holati (ochiq vazifalar, faol loyihalar,
+        # kutilayotgan tasdiqlar, budjet). Javob yozish qadamiga
+        # qo'shiladi — ilgari model bu ma'lumotlarni umuman ko'rmasdi
+        # va "bugun nimaga e'tibor beray?" degan savolga tool'larni
+        # birma-bir chaqirib topishga urinardi yoki o'ylab topardi.
+        self._world_state = world_state
 
     @property
     def spent_usd(self) -> float:
@@ -499,6 +506,7 @@ class Executor:
                     step_description=step.description,
                     prior_outputs=prior,
                     recalled=recalled,
+                    world_state=self._world_state,
                 ),
             ),
         ]

@@ -66,6 +66,7 @@ def build_answer_prompt(
     step_description: str,
     prior_outputs: list[str] | None = None,
     recalled: list[str] | None = None,
+    world_state: str = "",
 ) -> str:
     """Fikrlash qadami uchun foydalanuvchi xabarini yasaydi.
 
@@ -74,11 +75,20 @@ def build_answer_prompt(
         step_description: rejadagi shu qadam nima qilishi kerakligi
         prior_outputs: oldingi qadamlar natijalari (tool chiqishlari ham)
         recalled: uzoq muddatli xotiradan topilgan tegishli yozuvlar
+        world_state: muhitning joriy holati (JB-3) — ochiq vazifalar,
+            faol loyihalar, kutilayotgan tasdiqlar, budjet
 
     Returns:
         LLM'ga yuboriladigan matn
     """
     parts = [f"EGANING SAVOLI/BUYRUG'I:\n{command_text}"]
+
+    # JB-3: holat bloki xotiradan OLDIN — u tizim bergan HAQIQIY
+    # ma'lumot (o'lchangan raqamlar), xotira esa eskirgan bo'lishi
+    # mumkin bo'lgan yozuvlar. Ziddiyat bo'lsa model qaysi biri
+    # ustunligini ko'rib tursin.
+    if world_state.strip():
+        parts.append(world_state.strip())
 
     remembered = [r.strip() for r in (recalled or []) if r and r.strip()]
     if remembered:

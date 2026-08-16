@@ -59,6 +59,13 @@ from zet.tools.registry import ToolRegistry
 
 log = structlog.get_logger(__name__)
 
+WorldStateProvider = Callable[[], Awaitable[str]]
+"""Muhit holatini prompt bloki sifatida qaytaruvchi (JB-3).
+
+Aniq tip (`WorldStateBuilder`) emas, funksiya: `Orchestrator` holat
+qanday yig'ilishini bilishi shart emas va testda oddiy lambda bilan
+almashtiriladi (`recall` bilan bir xil naqsh)."""
+
 
 def _build_answer(ctx: ExecutionContext, *, plan_summary: str) -> str:
     """Bajarilgan qadamlardan EGA UCHUN javob yig'adi.
@@ -229,6 +236,7 @@ class Orchestrator:
         verifier_judge_provider: object | None = None,
         recovery_engine: RecoveryEngine | None = None,
         notifier: Notifier | None = None,
+        world_state_provider: WorldStateProvider | None = None,
     ) -> None:
         self._router = router
         # Uzoq muddatli xotira — ega profili va oldingi bilimlar javobga
@@ -267,6 +275,27 @@ class Orchestrator:
         # run_id bo'yicha ishlaydi — bu shu zanjirning YETISHMAYOTGAN
         # outbound yarmi.
         self._notifier = notifier
+        # JB-3: muhitning joriy holatini yig'uvchi. Run BOSHIDA bir
+        # marta chaqiriladi va natija Planner + javob qadamiga uzatiladi.
+        # NEGA bir marta: holat run davomida deyarli o'zgarmaydi, har
+        # qadamda qayta o'qish esa bir necha ortiqcha DB so'rovi bo'lardi.
+        # Berilmasa — eski xatti-harakat (kontekst bloki yo'q).
+        self._world_state_provider = world_state_provider
+        self._world_state_text = ""
+
+    async def _collect_world_state(self) -> str:
+        """Muhit holati bloki — to'liq fail-open (JB-3).
+
+        Provider yiqilsa BO'SH matn qaytadi: kontekst yo'qligi javobni
+        kambag'alroq qiladi, lekin run'ni to'xtatmasligi kerak.
+        """
+        if self._world_state_provider is None:
+            return ""
+        try:
+            return await self._world_state_provider()
+        except Exception:
+            log.warning("orchestrator.world_state_failed")
+            return ""
 
     @property
     def approvals(self) -> ApprovalService:
@@ -348,6 +377,11 @@ class Orchestrator:
         record = self._run_store.create(command)
         record.status = RunStatus.PLANNING
 
+        # JB-3: muhit holatini run boshida bir marta o'qiymiz. To'liq
+        # fail-open — bu qo'shimcha kontekst, majburiy bosqich emas:
+        # o'qib bo'lmasa blok bo'sh qoladi va run odatdagidek davom etadi.
+        self._world_state_text = await self._collect_world_state()
+
         # JB-2: `Brain` triaj uchun intent'ni allaqachon hisoblagan
         # bo'lishi mumkin — uni qayta hisoblash bir xil LLM chaqiruvini
         # ikki marta to'lash demakdir.
@@ -399,6 +433,9 @@ class Orchestrator:
                 # qadam qo'sh" kabi ergash buyruqlar uchun Intent allaqachon
                 # context'siz bo'lgani, reja ham noaniq chiqadi.
                 history=command.history,
+                # JB-3: reja tuzayotganda ZET "dunyoni ko'rsin" — qanday
+                # loyiha/vazifa bor, nima tasdiq kutmoqda, budjet holati.
+                world_state=self._world_state_text,
             )
         except (PlannerError, LLMError) as exc:
             record.status = RunStatus.FAILED
@@ -444,6 +481,8 @@ class Orchestrator:
             audit_fn=self._audit_fn,
             # A-04: Router.complete() → CostLedger.run_id yozilsin
             run_id=record.run_id,
+            # JB-3: muhitning joriy holati — javob yozish qadamiga.
+            world_state=self._world_state_text,
         )
         record.status = RunStatus.EXECUTING
         record.pending_approval_id = None

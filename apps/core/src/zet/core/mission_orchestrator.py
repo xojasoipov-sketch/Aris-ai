@@ -335,8 +335,15 @@ class CapabilityRegistryComposer:
         self._top_k = top_k
 
     def compose(self, objective: str, context: dict[str, Any]) -> CapabilityBundle:
-        del context  # kelajakda contextdan qo'shimcha tanlash uchun
+        # JB-3 (audit topilmasi): ilgari bu yerda `del context` turardi —
+        # `ContextEngine` topgan kontekst (`Mission.context`ga yozilgan
+        # loyiha nomlari, tegishli vazifalar, xotira parchalari) TASHLAB
+        # yuborilardi va capability tanlashga umuman ta'sir qilmasdi.
+        # Endi kontekst kalit so'zlari qidiruvga qo'shiladi: "o'sha
+        # loyihani yakunla" kabi maqsad uchun mos capability topilish
+        # ehtimoli oshadi.
         keywords = [w for w in objective.lower().split() if len(w) >= 3]
+        keywords.extend(_context_keywords(context))
         if not keywords:
             return CapabilityBundle()
         matches = self._registry.search(keywords)
@@ -351,6 +358,43 @@ class CapabilityRegistryComposer:
             permissions_required=[resolution.required_permission],
             risk_level=resolution.max_risk,
         )
+
+
+_CONTEXT_KEYWORD_LIMIT = 12
+"""Kontekstdan olinadigan maksimal kalit so'z.
+
+Cheklov MUHIM: kontekst fragmentlari uzun bo'lishi mumkin, ularni
+to'liq qidiruvga tiqish har bir capability'ni "mos" qilib ko'rsatib,
+tanlovni ma'nosizlantirardi."""
+
+
+def _context_keywords(context: dict[str, Any]) -> list[str]:
+    """Kontekst fragmentlaridan qidiruv uchun kalit so'zlar (JB-3).
+
+    `_RelevantContextView.to_dict()` shakli kutiladi:
+    `{"fragments": [{"source": ..., "content": ...}, ...]}`.
+    Boshqa shakl kelsa — bo'sh ro'yxat (fail-open: kontekst
+    yordamchi ma'lumot, uning buzuqligi mission'ni yiqitmasin).
+    """
+    fragments = context.get("fragments") if isinstance(context, dict) else None
+    if not isinstance(fragments, list):
+        return []
+
+    words: list[str] = []
+    seen: set[str] = set()
+    for fragment in fragments:
+        content = fragment.get("content") if isinstance(fragment, dict) else None
+        if not isinstance(content, str):
+            continue
+        for raw in content.lower().split():
+            word = raw.strip(".,:;!?\"'()[]{}")
+            if len(word) < 4 or word in seen:
+                continue
+            seen.add(word)
+            words.append(word)
+            if len(words) >= _CONTEXT_KEYWORD_LIMIT:
+                return words
+    return words
 
 
 class _RelevantContextView:

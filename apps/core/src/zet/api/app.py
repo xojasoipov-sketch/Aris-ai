@@ -69,6 +69,7 @@ from zet.api.routes import (
     vault,
     voice,
     workspace,
+    world,
 )
 from zet.automation.builtin_metrics import register_builtin_metrics
 from zet.config import get_settings
@@ -392,6 +393,7 @@ def create_app() -> FastAPI:
     app.include_router(approvals.router, prefix="/api/v1")
     app.include_router(killswitch.router, prefix="/api/v1", tags=["killswitch"])
     app.include_router(state.router, prefix="/api/v1", tags=["state"])
+    app.include_router(world.router, prefix="/api/v1")
     app.include_router(alerts.router, prefix="/api/v1")
     app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
     app.include_router(agent.router, prefix="/api/v1", tags=["agents"])

@@ -972,6 +972,41 @@ def _build_brain(
     )
 
 
+def _build_world_state_provider(settings: Settings) -> Callable[[], Awaitable[str]]:
+    """Muhit holatini yig'uvchi (JB-3) — Orchestrator'ga uzatiladi.
+
+    Har chaqiruvda O'Z sessiyasini ochadi: `Orchestrator` so'rov
+    chegarasidagi sessiyaga bog'lanib qolmasligi kerak (Telegram
+    daemon oqimlarida u umuman bo'lmasligi mumkin). Sessiya faqat
+    run boshida, bir marta ochiladi.
+
+    To'liq fail-open: manba o'qilmasa `WorldStateBuilder` uni
+    `unavailable`ga yozadi, butun blok yiqilsa bo'sh matn qaytadi.
+    """
+
+    async def _provider() -> str:
+        from zet.core.mission_repository import MissionRepository
+        from zet.core.world_state import WorldStateBuilder, build_world_state_text
+        from zet.db.session import session_scope
+        from zet.llm.budget import BudgetGuard
+
+        async with session_scope(get_session_factory()) as session:
+            owner = await get_or_create_owner(session, external_id=settings.owner_id)
+            ledger = BudgetGuard(session, settings)
+            builder = WorldStateBuilder(
+                core_state=get_core_state(),
+                killswitch=get_killswitch(),
+                agent_registry=get_agent_registry(),
+                approvals=get_approval_service(),
+                workspace=WorkspaceRepository(session, owner_id=owner.id),
+                mission_repo=MissionRepository(session, owner_id=owner.id),
+                budget_snapshot=ledger.snapshot,
+            )
+            return await build_world_state_text(builder)
+
+    return _provider
+
+
 def _build_recovery_engine(
     *,
     router: ModelRouter,
@@ -1089,6 +1124,10 @@ def get_orchestrator(
         # F1 (BLOCK-3 audit): AWAITING_APPROVAL'ga o'tganda Telegram inline
         # tugmali xabar. Token/owner sozlanmasa get_notifier() StubNotifier
         # qaytaradi — hech qanday tarmoq chaqiruvi bo'lmaydi (fail-open).
+        # JB-3: muhit holati (ochiq vazifalar, loyihalar, kutilayotgan
+        # tasdiqlar, budjet) reja va javob promptlariga qo'shiladi —
+        # ilgari model bularning hech birini ko'rmasdi.
+        world_state_provider=_build_world_state_provider(settings),
         notifier=get_notifier(),
     )
 
@@ -1379,6 +1418,9 @@ def get_telegram_bot() -> object:
                 # chiqib ketib, ega "(bo'sh natija)" ko'rardi.
                 # `get_orchestrator()` bilan bir xil wiring.
                 notifier=get_notifier(),
+                # JB-3: Telegram oqimi ham muhit holatini ko'rsin —
+                # API bilan bir xil wiring.
+                world_state_provider=_build_world_state_provider(settings),
             )
 
             command = Command(text=text, channel="telegram", history=history)
@@ -1463,6 +1505,9 @@ def get_telegram_bot() -> object:
                 # — u ham Telegram inline xabarini olishi shart.
                 # `get_orchestrator()`/`_runner` bilan bir xil wiring.
                 notifier=get_notifier(),
+                # JB-3: Telegram oqimi ham muhit holatini ko'rsin —
+                # API bilan bir xil wiring.
+                world_state_provider=_build_world_state_provider(settings),
             )
 
             try:

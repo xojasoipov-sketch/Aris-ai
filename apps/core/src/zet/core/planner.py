@@ -112,6 +112,7 @@ class Planner:
         task_class: TaskClass | None = None,
         run_id: uuid.UUID | None = None,
         history: Sequence[ConversationTurn] = (),
+        world_state: str = "",
     ) -> Plan:
         """Intent'dan Plan yaratadi.
 
@@ -127,6 +128,10 @@ class Planner:
                 almashuv MATNINI ko'rmasa, `intent.original_text` allaqachon
                 context'siz bo'lgani uchun reja ham noaniq/xato chiqadi.
                 Berilmasa (default bo'sh) — eski xatti-harakat.
+            world_state: muhitning joriy holati (JB-3) — ochiq vazifalar,
+                faol loyihalar, kutilayotgan tasdiqlar, budjet. Tizim
+                prompt'iga qo'shiladi. Bo'sh bo'lsa hech narsa
+                qo'shilmaydi (eski xatti-harakat).
 
         Returns:
             Validatsiya qilingan Plan
@@ -152,6 +157,12 @@ class Planner:
             max_steps=self._max_steps,
             available_tools=tools_str,
         )
+        # JB-3: muhitning joriy holati. Ilgari Planner faqat intent va
+        # tool imzolarini ko'rardi — qanday loyiha/vazifa bor, nima
+        # tasdiq kutmoqda, budjetdan qancha qolgan, bularning hech biri
+        # modelga yetmasdi va reja "dunyoni ko'rmasdan" tuzilardi.
+        if world_state.strip():
+            system = f"{system}\n\n{world_state.strip()}"
 
         user_prompt = self._build_user_prompt(intent)
         # B3 audit fix: tarix + joriy prompt — bir marta prepend qilinadi,
