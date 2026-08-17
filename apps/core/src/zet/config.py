@@ -437,6 +437,35 @@ class Settings(BaseSettings):
     qaytaradi. Boshqasini tanlash uchun elevenlabs.io → Voice Library'dan
     ovoz ID'sini nusxa oling."""
 
+    whisper_model_path: str | None = "/data/voice-models/whisper-uz-ct2"
+    """LOKAL, self-hosted STT (`zet.voice.whisper_stt.WhisperSTT`) uchun
+    CTranslate2-konvertatsiya qilingan model katalogi yo'li.
+
+    `/data/voice-models` — `Dockerfile`dagi doimiy hajm (`/data/vault`
+    naqshiga o'xshab), `scripts/prepare_voice_models.py` bir martalik
+    ishga tushirilib to'ldiriladi. Katalog HALI mavjud bo'lmasa
+    (birinchi deploy, skript ishga tushirilmagan) — `WhisperSTT.
+    is_configured` `False` qaytaradi va `get_stt()` ElevenLabs/Stub'ga
+    tushadi (fail-open, boshqa provayderlar bilan bir xil naqsh).
+
+    `None` qilib qo'ysangiz — lokal STT butunlay o'chiriladi.
+    """
+
+    mms_tts_model_path: str | None = "/data/voice-models/mms-tts-uz"
+    """LOKAL, self-hosted TTS (`zet.voice.mms_tts.MmsTTS`) uchun
+    HuggingFace `facebook/mms-tts-uzb-script_cyrillic` og'irligi saqlangan
+    katalog yo'li — `whisper_model_path` bilan bir xil naqsh (doimiy hajm,
+    `prepare_voice_models.py`, fail-open).
+
+    OGOHLANTIRISH: `facebook/mms-tts-uzb-*` **CC-BY-NC-4.0** (FAQAT
+    NOTIJORAT) litsenziyali — `zet/voice/mms_tts.py` modul docstring'iga
+    qarang. ZET tijorat mahsulotiga aylansa, bu yo'l ALMASHTIRILISHI yoki
+    yuridik tekshirilishi kerak.
+
+    `None` qilib qo'ysangiz — lokal TTS butunlay o'chiriladi (Azure/
+    ElevenLabs/Stub'ga tushadi).
+    """
+
     # ── Xavfsizlik ─────────────────────────────────────────────────
     owner_id: str = "owner"
     api_token: SecretStr | None = None

@@ -40,6 +40,14 @@ dependencies = [
     "rich>=13.9",
     "defusedxml>=0.7.1",
     "python-multipart>=0.0.32",
+    # Lokal ovoz (STT/TTS) — ADR-0007 lokal birinchi. `torch` faqat CPU
+    # wheel'dan olinadi ([tool.uv.sources]/[tool.uv.index]ga qarang) —
+    # aks holda PyPI'ning standart Linux wheel'i CUDA'ni ham tortadi va
+    # image hajmini keraksiz ~1-2GB shishiradi (Railway'da GPU yo'q).
+    "faster-whisper>=1.0",
+    "transformers>=4.40",
+    "torch>=2.2",
+    "av>=12.0",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +69,15 @@ z = "zet.cli:app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# ── uv: torch faqat CPU wheel'dan (Railway'da GPU yo'q) ──────────────
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/zet"]
@@ -101,7 +118,14 @@ ignore = [
 # RUF001: o'zbekcha (gʻ, oʻ) va kirill nomlar shu testlarning MAQSADI —
 # vault Unicode fayl nomlarini qabul qilishini tekshiradi (Obsidian kabi)
 "tests/test_vault.py" = ["S101", "S105", "S106", "ARG001", "ARG002", "RUF001", "RUF002"]
+# RUF001/002/003: transliteratsiya testlari kirill kutilgan natijalarni
+# ATAYLAB o'z ichiga oladi (modul docstring'idagi izohga qarang).
+"tests/test_transliterate.py" = ["RUF001", "RUF002", "RUF003"]
 "alembic/**" = ["ARG001", "N999"]
+# RUF001/002/003: bu modulning BUTUN vazifasi lotin↔kirill xaritalash —
+# kirill harflari docstring/kod/kommentariyda ATAYLAB, "aniqlik" emas
+# "chalkashtiruvchi belgi" (xuddi `test_vault.py`dagi kabi).
+"src/zet/voice/transliterate.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
@@ -118,6 +142,15 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = ["pgvector.*", "alembic.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Lokal ovoz (STT/TTS) — faster-whisper/transformers/torch/av'da to'liq
+# stub yo'q (yoki juda keng/noaniq). Import `voice/whisper_stt.py` va
+# `voice/mms_tts.py` ICHIDA, funksiya darajasida — chaqiruvchi kod
+# (`api/deps.py`) bu modullarni faqat Protocol interfeyslar orqali
+# ko'radi, shuning uchun bu ignore ISH MANTIG'iga ta'sir qilmaydi.
+module = ["faster_whisper.*", "transformers.*", "torch.*", "av.*"]
 ignore_missing_imports = true
 
 # ── pytest ─────────────────────────────────────────────────────────

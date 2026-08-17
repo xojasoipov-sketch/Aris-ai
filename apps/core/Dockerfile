@@ -39,6 +39,18 @@ COPY --chown=zet:zet alembic ./alembic
 # konteyner note.write'da "Permission denied" bilan yiqilardi).
 RUN mkdir -p /data/vault && chown -R zet:zet /data/vault
 
+# Lokal ovoz (STT/TTS, ADR-0007) model og'irliklari uchun doimiy hajm —
+# xuddi /data/vault naqshiga o'xshab. IMAGE'GA BAKE QILINMAYDI (build
+# vaqtida internet + GB'larcha yuklab olish talab qilardi, build'ni
+# sekinlashtiradi va image hajmini keskin oshiradi) — buning o'rniga
+# `scripts/prepare_voice_models.py` operator tomonidan Railway volume
+# ulangandan keyin BIR MARTA ishga tushiriladi, keyin har redeploy'da
+# saqlanadi (Postgres/vault volume'lari bilan bir xil naqsh). Skript
+# ishga tushirilmaguncha `WhisperSTT`/`MmsTTS` `is_configured=False`
+# qaytaradi va `get_stt()`/`get_tts()` fail-open bilan ElevenLabs/Azure/
+# Stub'ga tushadi — hech narsa qulamaydi.
+RUN mkdir -p /data/voice-models && chown -R zet:zet /data/voice-models
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

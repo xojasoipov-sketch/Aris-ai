@@ -239,6 +239,11 @@ class TestVoiceDeps:
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("ZET_ELEVENLABS_API_KEY", _API_KEY)
+        # Lokal model yo'llari default'da /data/voice-models/... ga
+        # ishora qiladi — bu test mashinasida mavjud bo'lmasligi kerak,
+        # lekin ANIQ bo'shatib qo'yamiz (boshqa testdan sizib chiqmasin).
+        monkeypatch.setenv("ZET_WHISPER_MODEL_PATH", "")
+        monkeypatch.setenv("ZET_MMS_TTS_MODEL_PATH", "")
         get_settings.cache_clear()
         api_deps.get_stt.cache_clear()
         api_deps.get_tts.cache_clear()
@@ -250,3 +255,70 @@ class TestVoiceDeps:
             get_settings.cache_clear()
             api_deps.get_stt.cache_clear()
             api_deps.get_tts.cache_clear()
+
+    def test_whisper_stt_preferred_over_elevenlabs_when_local_model_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-0007 (lokal birinchi): model diskda bo'lsa, ElevenLabs kaliti bor bo'lsa ham WhisperSTT tanlanadi."""
+        from zet.api import deps as api_deps
+        from zet.config import get_settings
+        from zet.voice.whisper_stt import WhisperSTT
+
+        model_dir = tmp_path / "whisper-uz-ct2"
+        model_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ZET_ELEVENLABS_API_KEY", _API_KEY)  # bor, lekin ustuvor emas
+        monkeypatch.setenv("ZET_WHISPER_MODEL_PATH", str(model_dir))
+        get_settings.cache_clear()
+        api_deps.get_stt.cache_clear()
+
+        try:
+            stt = api_deps.get_stt()
+            assert isinstance(stt, WhisperSTT)
+        finally:
+            get_settings.cache_clear()
+            api_deps.get_stt.cache_clear()
+
+    def test_mms_tts_preferred_over_azure_and_elevenlabs_when_local_model_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-0007 (lokal birinchi): model diskda bo'lsa, Azure/ElevenLabs bor bo'lsa ham MmsTTS tanlanadi."""
+        from zet.api import deps as api_deps
+        from zet.config import get_settings
+        from zet.voice.mms_tts import MmsTTS
+
+        model_dir = tmp_path / "mms-tts-uz"
+        model_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ZET_AZURE_SPEECH_KEY", "azure-key")
+        monkeypatch.setenv("ZET_AZURE_SPEECH_REGION", "westeurope")
+        monkeypatch.setenv("ZET_ELEVENLABS_API_KEY", _API_KEY)
+        monkeypatch.setenv("ZET_MMS_TTS_MODEL_PATH", str(model_dir))
+        get_settings.cache_clear()
+        api_deps.get_tts.cache_clear()
+
+        try:
+            tts = api_deps.get_tts()
+            assert isinstance(tts, MmsTTS)
+        finally:
+            get_settings.cache_clear()
+            api_deps.get_tts.cache_clear()
+
+    def test_stt_falls_back_to_elevenlabs_when_local_model_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail-open: model YO'Q bo'lsa (birinchi deploy, prepare skript ishlamagan) — ElevenLabs'ga tushadi."""
+        from zet.api import deps as api_deps
+        from zet.config import get_settings
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ZET_ELEVENLABS_API_KEY", _API_KEY)
+        monkeypatch.setenv("ZET_WHISPER_MODEL_PATH", str(tmp_path / "does-not-exist"))
+        get_settings.cache_clear()
+        api_deps.get_stt.cache_clear()
+
+        try:
+            assert isinstance(api_deps.get_stt(), ElevenLabsSTT)
+        finally:
+            get_settings.cache_clear()
+            api_deps.get_stt.cache_clear()

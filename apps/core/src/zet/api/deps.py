@@ -64,8 +64,10 @@ from zet.tools.builtin import build_default_registry
 from zet.tools.registry import ToolRegistry
 from zet.voice.azure_tts import AzureTTS
 from zet.voice.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
+from zet.voice.mms_tts import MmsTTS
 from zet.voice.stt import STTProvider, StubSTT
 from zet.voice.tts import StubTTS, TTSProvider
+from zet.voice.whisper_stt import WhisperSTT
 from zet.workspace.repository import WorkspaceRepository
 
 if TYPE_CHECKING:
@@ -1560,16 +1562,28 @@ def get_brain(
 
 @lru_cache(maxsize=1)
 def get_stt() -> STTProvider:
-    """Global STT provayder (singleton).
+    """Global STT provayder (singleton). Tartib: Whisper (lokal) → ElevenLabs → Stub.
 
-    ElevenLabs API kaliti bo'lsa — Scribe orqali haqiqiy transkripsiya.
-    Bo'lmasa — `StubSTT` (Telegram ovozli xabar qotgan matn qaytadi).
+    ADR-0007 (lokal birinchi): `WhisperSTT` BIRINCHI tekshiriladi — u
+    tashqi API'ga bog'liq emas, $0, GPU'siz CPU'da ishlaydi
+    (`voice/whisper_stt.py`). Lekin faqat model haqiqatan diskda bo'lsa
+    (`is_configured`) — birinchi deploy'da yoki `scripts/
+    prepare_voice_models.py` ishga tushirilmagan bo'lsa, model yo'q,
+    fail-open bilan keyingi qatlamga o'tiladi.
 
+    ElevenLabs Scribe ZAXIRA — kalit bor-u lokal model yo'q holatda ovoz
+    butunlay yo'qolgandan ko'ra tashqi API orqali ishlagani ma'qul.
     Til `settings.stt_language` dan olinadi (default `uzb`) va Scribe'ga
     MAJBURAN uzatiladi — avtomatik aniqlash o'zbekni ozarbayjoncha deb
     o'qib matnni buzadi (`voice/elevenlabs.py` dagi izohga qarang).
     """
     settings = get_settings()
+    local_stt = WhisperSTT(
+        model_path=settings.whisper_model_path,
+        default_language=settings.stt_language[:2] if settings.stt_language else "uz",
+    )
+    if local_stt.is_configured:
+        return local_stt
     if settings.elevenlabs_api_key is not None:
         return ElevenLabsSTT(
             api_key=settings.elevenlabs_api_key.get_secret_value(),
@@ -1580,17 +1594,24 @@ def get_stt() -> STTProvider:
 
 @lru_cache(maxsize=1)
 def get_tts() -> TTSProvider:
-    """Global TTS provayder (singleton). Tartib: Azure → ElevenLabs → Stub.
+    """Global TTS provayder (singleton). Tartib: MMS (lokal) → Azure → ElevenLabs → Stub.
 
-    Azure BIRINCHI, chunki faqat unda HAQIQIY o'zbek neyron ovozi bor
+    ADR-0007 (lokal birinchi): `MmsTTS` BIRINCHI tekshiriladi — tashqi
+    API'ga bog'liq emas, $0, GPU'siz CPU'da ishlaydi (`voice/mms_tts.py`).
+    LITSENZIYA OGOHLANTIRISHI: `facebook/mms-tts-uzb-*` CC-BY-NC-4.0
+    (faqat notijorat) — modul docstring'iga qarang. Model diskda yo'q
+    bo'lsa (`is_configured=False`) — fail-open bilan Azure'ga tushadi.
+
+    Azure ZAXIRA — faqat unda HAQIQIY tashqi-API o'zbek neyron ovozi bor
     (`uz-UZ-SardorNeural`). ElevenLabs'da o'zbek TTS umuman yo'q — u
     o'zbek matnini chet el aksenti bilan o'qiydi (2026-08-12 jonli
-    tekshiruvi: `eleven_v3` 74 tilida ham o'zbek yo'q).
-
-    ElevenLabs zaxira sifatida qoladi: Azure sozlanmagan bo'lsa ovoz
-    butunlay yo'qolgandan ko'ra aksentli bo'lgani ma'qul.
+    tekshiruvi: `eleven_v3` 74 tilida ham o'zbek yo'q). ElevenLabs eng
+    oxirgi zaxira: ovoz butunlay yo'qolgandan ko'ra aksentli bo'lgani ma'qul.
     """
     settings = get_settings()
+    local_tts = MmsTTS(model_path=settings.mms_tts_model_path)
+    if local_tts.is_configured:
+        return local_tts
     if settings.azure_speech_key is not None and settings.azure_speech_region:
         return AzureTTS(
             api_key=settings.azure_speech_key.get_secret_value(),
