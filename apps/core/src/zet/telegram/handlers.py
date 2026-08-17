@@ -34,6 +34,20 @@ from zet.voice.tts import TTSProvider
 
 log = structlog.get_logger(__name__)
 
+_VOICE_NOT_UNDERSTOOD = "🎤 Ovozingizni to'liq tushunmadim, matn bilan yozib yuborasizmi?"
+"""STT xato/bo'sh/past ishonchli natija berganda — INSONGA TUSHUNARLI
+fallback (xom exception matni yoki quruq "❌ xato" o'rniga)."""
+
+_LOW_CONFIDENCE_THRESHOLD = 0.15
+"""Bu qiymatdan past `STTResult.confidence` — "tushunmadim" deb hisoblanadi.
+
+Ehtiyotkorlik bilan PAST tanlangan (0.15, 0.4-0.5 emas): `WhisperSTT`ning
+`confidence` hisoblash usuli (`avg_logprob` orqali, `whisper_stt.py`ga
+qarang) to'g'ri transkripsiyalar uchun ham nisbatan past qiymat berishi
+mumkin — baland chegara TO'G'RI natijalarni ham noto'g'ri rad etardi.
+Bu chegara asosan HAQIQIY jimlik/shovqin/bo'sh audio holatlarini
+ushlash uchun, umumiy "past aniqlik" filtri sifatida emas."""
+
 # Orchestrator har bir so'rov uchun yangi DB sessiyada quriladi — shu tufayli
 # HandlerContext'ga tayyor Orchestrator emas, uni yaratuvchi factory beriladi.
 # Bu ZetBot va boshqa chaqiruvchilar Orchestrator hayotini kuzatishi kerakligini
@@ -284,7 +298,16 @@ class MessageHandler:
         return await self._run_and_reply(text, voice_reply=self._ctx.reply_with_voice)
 
     async def _handle_voice(self, input_: TelegramInput) -> TelegramOutput:
-        """Ovozli xabarni qayta ishlash — STT → Orchestrator → TTS (agar mavjud bo'lsa)."""
+        """Ovozli xabarni qayta ishlash — STT → Orchestrator → TTS (agar mavjud bo'lsa).
+
+        Uch xil "tushunmadim" holati BOR — barchasi bir xil, INSONGA
+        TUSHUNARLI xabar bilan tugaydi (xom exception matni EMAS):
+        transkripsiya xatosi, bo'sh matn, past ishonch (`confidence`).
+        Sabab: past WER'li lokal STT (`WhisperSTT`, WER~17%) ba'zan
+        chalkash/bo'sh natija berishi mumkin — foydalanuvchi tizim
+        "ishlamay qolgan" deb o'ylashi EMAS, balki qayta urinib
+        ko'rishga taklif qilinishi kerak.
+        """
         if input_.voice_data is None:
             return TelegramOutput(text="❌ Ovoz ma'lumoti topilmadi.")
 
@@ -297,12 +320,15 @@ class MessageHandler:
             stt_result = await self._ctx.stt.transcribe(input_.voice_data, audio_format="ogg")
         except Exception as exc:
             log.warning("handler.voice_stt_failed", error=str(exc))
-            return TelegramOutput(text=f"❌ Ovozni transkripsiya qilib bo'lmadi: {exc}")
+            return TelegramOutput(text=_VOICE_NOT_UNDERSTOOD)
 
-        if not stt_result.text.strip():
-            return TelegramOutput(
-                text=f"❌ Ovozdan matn ajratib bo'lmadi (til={stt_result.language})."
+        if not stt_result.text.strip() or stt_result.confidence < _LOW_CONFIDENCE_THRESHOLD:
+            log.info(
+                "handler.voice_low_confidence",
+                text_empty=not stt_result.text.strip(),
+                confidence=round(stt_result.confidence, 3),
             )
+            return TelegramOutput(text=_VOICE_NOT_UNDERSTOOD)
 
         # Voice kirish → default javob ham voice (agent gapiradi, ega gapirdi-ku)
         return await self._run_and_reply(stt_result.text, voice_reply=True)

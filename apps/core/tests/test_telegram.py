@@ -853,6 +853,13 @@ class TestOrchestratorRunnerWiring:
 
     @pytest.mark.asyncio()
     async def test_stt_error_returns_friendly_message(self) -> None:
+        """STT xato bo'lsa — inson tushunadigan xabar, XOM exception matni EMAS.
+
+        Ilgari xato matni foydalanuvchiga to'g'ridan-to'g'ri
+        ko'rsatilardi ("kalit yo'q" kabi ichki tafsilot sizib chiqardi)
+        — endi bitta barqaror, tushunarli fallback (`_VOICE_NOT_UNDERSTOOD`)
+        ishlatiladi, xato faqat loglanadi (`log.warning`)."""
+
         class _BrokenSTT(StubSTT):
             async def transcribe(self, *args, **kwargs):  # type: ignore[override, no-untyped-def]
                 raise RuntimeError("kalit yo'q")
@@ -862,8 +869,8 @@ class TestOrchestratorRunnerWiring:
             input_type=InputType.VOICE, user_id=123, chat_id=123, voice_data=b"data"
         )
         result = await handler.handle(input_)
-        assert "transkripsiya" in result.text.lower()
-        assert "kalit" in result.text
+        assert "tushunmadim" in result.text.lower()
+        assert "kalit" not in result.text  # ichki xato tafsiloti sizib chiqmaydi
 
     @pytest.mark.asyncio()
     async def test_tts_error_does_not_block_text_reply(self) -> None:

@@ -65,6 +65,7 @@ from zet.tools.registry import ToolRegistry
 from zet.voice.azure_tts import AzureTTS
 from zet.voice.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from zet.voice.mms_tts import MmsTTS
+from zet.voice.navoiy_tts import NavoiyTTS
 from zet.voice.stt import STTProvider, StubSTT
 from zet.voice.tts import StubTTS, TTSProvider
 from zet.voice.whisper_stt import WhisperSTT
@@ -1594,21 +1595,32 @@ def get_stt() -> STTProvider:
 
 @lru_cache(maxsize=1)
 def get_tts() -> TTSProvider:
-    """Global TTS provayder (singleton). Tartib: MMS (lokal) → Azure → ElevenLabs → Stub.
+    """Global TTS provayder (singleton). Tartib: Navoiy (GPU) → MMS (CPU) → Azure → ElevenLabs → Stub.
 
-    ADR-0007 (lokal birinchi): `MmsTTS` BIRINCHI tekshiriladi — tashqi
-    API'ga bog'liq emas, $0, GPU'siz CPU'da ishlaydi (`voice/mms_tts.py`).
-    LITSENZIYA OGOHLANTIRISHI: `facebook/mms-tts-uzb-*` CC-BY-NC-4.0
-    (faqat notijorat) — modul docstring'iga qarang. Model diskda yo'q
-    bo'lsa (`is_configured=False`) — fail-open bilan Azure'ga tushadi.
+    ADR-0007 (lokal birinchi), uchta "o'zimiznikida" qatlam + ikkita
+    tashqi zaxira:
 
-    Azure ZAXIRA — faqat unda HAQIQIY tashqi-API o'zbek neyron ovozi bor
-    (`uz-UZ-SardorNeural`). ElevenLabs'da o'zbek TTS umuman yo'q — u
-    o'zbek matnini chet el aksenti bilan o'qiydi (2026-08-12 jonli
-    tekshiruvi: `eleven_v3` 74 tilida ham o'zbek yo'q). ElevenLabs eng
-    oxirgi zaxira: ovoz butunlay yo'qolgandan ko'ra aksentli bo'lgani ma'qul.
+    1. `NavoiyTTS` — agar `ZET_NAVOIY_TTS_BASE_URL` sozlangan bo'lsa
+       (operator Hetzner GPU serverini qo'lda joylashtirgan bo'lsa),
+       ENG BIRINCHI tekshiriladi: litsenziyasi Apache-2.0 (MmsTTS'ning
+       CC-BY-NC-4.0'idan farqli, tijoratga to'liq ochiq), CosyVoice2
+       asosida o'zbekcha fine-tune, kutilgan sifati yuqoriroq.
+       `infra/hetzner/navoiy-tts-service/README.md`ga qarang.
+    2. `MmsTTS` — GPU serveri sozlanmagan bo'lsa (default holat) yoki
+       Navoiy TTS xizmati o'chiq/erishib bo'lmasa — CPU'da $0 ishlaydi.
+       LITSENZIYA OGOHLANTIRISHI: CC-BY-NC-4.0 (faqat notijorat) — modul
+       docstring'iga qarang.
+    3. Azure — faqat unda HAQIQIY tashqi-API o'zbek neyron ovozi bor
+       (`uz-UZ-SardorNeural`).
+    4. ElevenLabs — o'zbek matnini chet el aksenti bilan o'qiydi
+       (2026-08-12 jonli tekshiruvi: o'zbek tili umuman yo'q), eng
+       oxirgi zaxira sifatida qoladi.
+    5. `StubTTS` — hech biri sozlanmagan bo'lsa.
     """
     settings = get_settings()
+    navoiy_tts = NavoiyTTS(base_url=settings.navoiy_tts_base_url)
+    if navoiy_tts.is_configured:
+        return navoiy_tts
     local_tts = MmsTTS(model_path=settings.mms_tts_model_path)
     if local_tts.is_configured:
         return local_tts

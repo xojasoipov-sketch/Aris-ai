@@ -195,6 +195,32 @@ ssh -i ~/.ssh/hetzner_zet root@<SERVER_IP>
 docker cp /tmp/vault-eski/. zet-backend:/data/vault/
 ```
 
+## Lokal ovoz (STT/TTS) — ADR-0007
+
+Bu server o'zi hech qanday ovoz modelini AVTOMATIK yuklamaydi
+(operator qadam kerak, fail-open — sozlanmaguncha `StubSTT`/Azure/
+ElevenLabs zanjiriga tushadi):
+
+```bash
+cd /opt/zet/apps/core
+uv run python scripts/prepare_voice_models.py
+```
+
+Bu ikkitasini `/data/voice-models/...`ga (Docker volume, redeploy'da
+saqlanadi) tayyorlaydi:
+
+- **STT**: `islomov/rubaistt_v2_medium` → CTranslate2 (GPU'siz, $0,
+  WER~17% — haqiqiy o'lchov uchun `scripts/benchmark_stt.py`ga qarang).
+- **TTS**: `facebook/mms-tts-uzb-script_cyrillic` (GPU'siz, $0, litsenziya
+  **CC-BY-NC-4.0 — faqat notijorat**, `zet/voice/mms_tts.py`ga qarang).
+
+**Yuqoriroq sifatli, GPU talab qiladigan muqobil** — Navoiy TTS
+(CosyVoice2, litsenziyasi Apache-2.0 — tijoratga ham ochiq) — bu
+serverdan MUSTAQIL, ALOHIDA GPU serverida joylashtiriladi:
+`infra/hetzner/navoiy-tts-service/README.md`ga qarang. Sozlangandan
+keyin `.env`ga `ZET_NAVOIY_TTS_BASE_URL=http://<GPU_IP>:8100` qo'shing
+— `get_tts()` uni MmsTTS'dan ham OLDIN avtomatik tanlaydi.
+
 ## Ikkalasini parallel ishlatish
 
 Hetzner sinovdan o'tguncha Railway'ni **o'chirish shart emas** —

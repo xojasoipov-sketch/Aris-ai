@@ -451,6 +451,23 @@ class Settings(BaseSettings):
     `None` qilib qo'ysangiz — lokal STT butunlay o'chiriladi.
     """
 
+    navoiy_tts_base_url: str | None = None
+    """Hetzner GPU serveridagi Navoiy TTS (CosyVoice2) mikroservisi manzili
+    (masalan `http://203.0.113.10:8100`) — `zet.voice.navoiy_tts.NavoiyTTS`.
+
+    Default `None` — GPU serveri ATAYLAB avtomatik yoqilmaydi (operator
+    uni qo'lda joylashtirishi va manzilini shu yerga yozishi kerak,
+    `infra/hetzner/navoiy-tts-service/README.md`ga qarang). Bo'lsa —
+    `get_tts()`da ENG BIRINCHI tekshiriladi (MmsTTS'dan ham oldin):
+    litsenziyasi Apache-2.0 (MmsTTS'ning CC-BY-NC-4.0'idan farqli,
+    tijoratga to'liq ochiq) va CosyVoice2 asosida sifat yuqoriroq deb
+    kutiladi (GPU'da maxsus o'zbekcha fine-tune).
+
+    Ismlar/o'zlashma so'zlar/kam uchraydigan raqam formatlarini noto'g'ri
+    talaffuz qilishi mumkin — `zet/voice/navoiy_tts.py` docstring'iga
+    qarang. Xizmat o'chiq/erishib bo'lmasa — fail-open bilan MmsTTS'ga
+    tushadi, hech narsa qulamaydi."""
+
     mms_tts_model_path: str | None = "/data/voice-models/mms-tts-uz"
     """LOKAL, self-hosted TTS (`zet.voice.mms_tts.MmsTTS`) uchun
     HuggingFace `facebook/mms-tts-uzb-script_cyrillic` og'irligi saqlangan

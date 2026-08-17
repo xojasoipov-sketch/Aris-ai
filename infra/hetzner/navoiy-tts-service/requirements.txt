@@ -1,0 +1,12 @@
+# Navoiy TTS inference mikroservisi bog'liqliklari.
+#
+# CosyVoice/torch/CUDA bog'liqliklari BU YERDA YO'Q — ular
+# `Dockerfile`da CosyVoice repo'sining o'z requirements.txt'idan
+# o'rnatiladi (README.md'dagi setup qadamlariga qarang). Bu fayl faqat
+# BU serverning o'z HTTP qatlami uchun kerak.
+
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+av>=12.0
+numpy>=1.26

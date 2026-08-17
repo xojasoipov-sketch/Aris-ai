@@ -126,6 +126,10 @@ ignore = [
 # kirill harflari docstring/kod/kommentariyda ATAYLAB, "aniqlik" emas
 # "chalkashtiruvchi belgi" (xuddi `test_vault.py`dagi kabi).
 "src/zet/voice/transliterate.py" = ["RUF001", "RUF002", "RUF003"]
+# RUF001/002: kirill→lotin xaritalash va uning testi — kirill harflari
+# ATAYLAB (transliterate.py bilan bir xil sabab).
+"src/zet/voice/text_normalize.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_text_normalize.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
