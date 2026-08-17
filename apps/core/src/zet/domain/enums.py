@@ -420,6 +420,14 @@ MISSION_TRANSITIONS: Final[dict[MissionStatus, frozenset[MissionStatus]]] = {
         {
             MissionStatus.EXECUTING,
             MissionStatus.PLANNING,
+            # JB-15 PART II (Authorization Recovery): AUTHORIZATION-sinf
+            # muvaffaqiyatsizlik endi darhol FAILED emas — mavjud
+            # approval oqimiga (`MissionEngine.request_approval()`)
+            # yo'naltiriladi. Bu YANGI, qo'shimcha qirra — mavjud
+            # PLANNING→WAITING_APPROVAL qirrasi bilan BIR XIL maqsadli
+            # holatga olib boradi, hech qanday eski o'tish OLIB
+            # TASHLANMAGAN.
+            MissionStatus.WAITING_APPROVAL,
             MissionStatus.FAILED,
             MissionStatus.CANCELLED,
         }

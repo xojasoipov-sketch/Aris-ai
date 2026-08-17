@@ -168,7 +168,24 @@ def is_retry_futile(failure_class: FailureClass) -> bool:
 _TEXT_RULES: tuple[tuple[FailureClass, tuple[str, ...]], ...] = (
     (FailureClass.RATE_LIMIT, ("429", "rate limit", "rate-limit", "too many requests", "kvota tugagan")),
     (FailureClass.AUTHENTICATION, ("401", "unauthorized", "invalid credential", "invalid api key", "authentication failed", "kredensial")),
-    (FailureClass.AUTHORIZATION, ("403", "forbidden", "permission denied", "ruxsat yo'q", "ruxsat berilmadi")),
+    (
+        FailureClass.AUTHORIZATION,
+        (
+            "403",
+            "forbidden",
+            "permission denied",
+            "ruxsat yo'q",
+            "ruxsat berilmadi",
+            # JB-15 AUDIT FIX: `AgentRuntime._execute_tool()`ning
+            # approval-required fail-closed xabari (`agents/runtime.py`)
+            # ILGARI hech qanday qoidaga mos kelmasdi → UNKNOWN bo'lardi.
+            # Bu — AYNAN "amal ega tasdig'ini talab qiladi" holati (spec
+            # §5) — AUTHORIZATION sifatida to'g'ri tanilishi SHART, aks
+            # holda Mission-darajasidagi yangi approval-recovery yo'li
+            # (`mission.py::recover()`) hech qachon faollashmas edi.
+            "tasdiq talab qiladi",
+        ),
+    ),
     (FailureClass.NETWORK, ("connection", "dns", "unreachable", "econnrefused", "ulanib bo'lmadi")),
     (FailureClass.TRANSIENT, ("timeout", "timed out", "vaqt tugadi", "temporarily unavailable")),
     (FailureClass.VALIDATION, ("validation", "invalid input", "schema", "yaroqsiz")),

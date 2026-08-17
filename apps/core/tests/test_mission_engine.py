@@ -415,6 +415,183 @@ class TestVerificationAndRecovery:
         assert recovery.calls == 1, "INVALID_PLAN REPLAN yo'liga tushishi (diagnose chaqirilishi) kerak edi"
 
 
+class TestAuthorizationRecovery:
+    """JB-15 PART II — Authorization Recovery (spec Phase 5).
+
+    AUDIT TOPILMASI (JB-14'da ATAYLAB "kelajakdagi ish" deb qoldirilgan,
+    JB-15 endi yopadi): `MissionEngine.recover()` AUTHORIZATION-sinf
+    xatoni boshqa "futile" sinflar bilan BIR XIL — darhol FAILED —
+    yo'liga soluvchi edi. Endi u MAVJUD approval infratuzilmasiga
+    (`request_approval()`/`approve()`/`cancel()`/TTL sweep — barchasi
+    PLANNING bosqichidagi risk-approval uchun ALLAQACHON qurilgan va
+    sinovdan o'tgan) yo'naltiriladi — YANGI approval tizimi QURILMAGAN.
+    """
+
+    async def test_authorization_failure_enters_waiting_approval(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, max_retries=2
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(),
+                status=RunStatus.DONE,
+                verified_ok=False,
+                error=(
+                    "Tool 'deploy.push' tasdiq talab qiladi (HIGH risk: deploy.push — "
+                    "har doim ega tasdig'i kerak) — avtonom agent runtime hozircha "
+                    "tasdiqni qo'llab-quvvatlamaydi"
+                ),
+            ),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="deploy qil")
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.WAITING_APPROVAL
+        assert m.pending_approval_id is not None
+        pending = approvals.get(m.pending_approval_id)
+        assert pending.mission_id == m.id
+        assert "deploy.push" in pending.reason, "Aniq sabab ko'rsatilishi kerak edi (spec: 'explain exactly what')"
+
+    async def test_approval_granted_resumes_same_mission(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, max_retries=2
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(),
+                status=RunStatus.DONE,
+                verified_ok=False,
+                error="tasdiq talab qiladi: telegram.channel_post",
+            ),
+            FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=True),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="postla")
+        m = await engine.run_to_completion(m.id)
+        assert m.status is MissionStatus.WAITING_APPROVAL
+        mission_id = m.id  # HAQIQIY DALIL: keyingi bosqichlarda BIR XIL mission
+
+        m = await engine.approve(m.id, m.pending_approval_id)
+        assert m.status is MissionStatus.EXECUTING
+        assert m.id == mission_id
+
+        m = await engine.run_to_completion(m.id)
+        assert m.status is MissionStatus.COMPLETED
+        assert m.id == mission_id, "Approve YANGI mission emas, XUDDI SHU missionni davom ettirishi kerak edi"
+
+    async def test_approval_rejected_terminates_mission_safely(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        engine, orch, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, max_retries=2
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(),
+                status=RunStatus.DONE,
+                verified_ok=False,
+                error="tasdiq talab qiladi: shell.exec",
+            ),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="skript ishga tushir")
+        m = await engine.run_to_completion(m.id)
+        assert m.status is MissionStatus.WAITING_APPROVAL
+
+        approvals.reject(m.pending_approval_id, note="xavfli")
+        m = await engine.cancel(m.id, "Ega tomonidan rad etildi")
+
+        assert m.status is MissionStatus.CANCELLED
+        assert approvals.get(m.pending_approval_id).status.value == "rejected"
+
+    async def test_approval_expiry_terminates_mission_via_existing_sweep(
+        self,
+        repo: MissionRepository,
+        approvals: ApprovalService,
+        session: AsyncSession,
+        owner: Owner,
+        session_factory: Any,
+    ) -> None:
+        """Spec item I: "use existing approval TTL mechanism" — YANGI
+        muddat mexanizmi QURILMAGAN, `core.approval_expiry.
+        sweep_expired_approvals()` (JB-12, `test_approval_expiry.py`da
+        mustaqil sinovdan o'tgan) qayta ishlatilgan."""
+        from datetime import UTC, datetime, timedelta
+
+        from zet.core.approval_expiry import sweep_expired_approvals
+
+        engine, orch, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, max_retries=2
+        )
+        orch.queue(
+            FakeRunRecord(
+                run_id=uuid.uuid4(),
+                status=RunStatus.DONE,
+                verified_ok=False,
+                error="tasdiq talab qiladi: github.write",
+            ),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="PR och")
+        m = await engine.run_to_completion(m.id)
+        assert m.status is MissionStatus.WAITING_APPROVAL
+
+        # TTL'ni orqaga suramiz (`test_approval_expiry.py`dagi bilan bir
+        # xil naqsh — real production'da bu shunchaki vaqt o'tishi bilan
+        # sodir bo'ladi).
+        pending = approvals.get(m.pending_approval_id)
+        pending.expires_at = datetime.now(UTC) - timedelta(hours=1)
+
+        async def _mission_engine_factory(sess: AsyncSession) -> MissionEngine:
+            return MissionEngine(
+                repository=MissionRepository(sess, owner_id=owner.id),
+                capability_registry=object(),  # type: ignore[arg-type]
+                context_engine=object(),  # type: ignore[arg-type]
+                planner=object(),  # type: ignore[arg-type]
+                orchestrator=object(),  # type: ignore[arg-type]
+                approvals=approvals,
+            )
+
+        count = await sweep_expired_approvals(
+            approvals,
+            mission_engine_factory=_mission_engine_factory,
+            session_factory=session_factory,
+        )
+
+        assert count == 1
+        fresh = await repo.get(m.id)
+        assert fresh.status == MissionStatus.CANCELLED
+
+    async def test_repeated_authorization_failure_does_not_loop_forever(
+        self, repo: MissionRepository, approvals: ApprovalService, session, owner
+    ) -> None:
+        """Cheksiz tsikl himoyasi: approval so'ralgan, LEKIN xuddi shu
+        AUTHORIZATION xatosi YANA takrorlansa (masalan HIGH-risk tool —
+        V-32 bo'yicha HAR DOIM tasdiq talab qiladi, avvalgi approval
+        aynan shu keyingi chaqiruvga AVTOMATIK ko'chib o'tmaydi — bu
+        ATAYLAB, xavfsizlik uchun) — mavjud `retry_count`/`max_retries`
+        chegarasi ERTA, HALOL FAILED bilan to'xtaydi (yana va yana
+        so'ramaydi)."""
+        engine, orch, _, _ = _engine(
+            repo=repo, approvals=approvals, session=session, owner=owner, max_retries=1
+        )
+        err = "tasdiq talab qiladi: deploy.push"
+        orch.queue(
+            FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=False, error=err),
+            FakeRunRecord(run_id=uuid.uuid4(), status=RunStatus.DONE, verified_ok=False, error=err),
+        )
+        m = await engine.submit(owner_id=owner.id, objective="deploy qil")
+        m = await engine.run_to_completion(m.id)
+        assert m.status is MissionStatus.WAITING_APPROVAL
+
+        m = await engine.approve(m.id, m.pending_approval_id)
+        m = await engine.run_to_completion(m.id)
+
+        assert m.status is MissionStatus.FAILED, "Ikkinchi marta bir xil AUTHORIZATION xatosida FAILED bo'lishi kerak edi"
+        assert "approval so'ralgan edi" in (m.error or "")
+
+
 class TestCancel:
     async def test_cancel_from_planning(
         self, repo: MissionRepository, approvals: ApprovalService, session, owner

@@ -53,7 +53,13 @@ import structlog
 
 from zet.automation.executor import AgentUnavailableError, run_agent_command
 from zet.core.evidence import EvidenceProviderRegistry, EvidenceState
-from zet.core.failure_classification import FailureClass, classify_failure, is_retry_futile
+from zet.core.failure_classification import (
+    FailureClass,
+    RecoveryAction,
+    classify_failure,
+    is_retry_futile,
+    recovery_action_for,
+)
 from zet.core.model_routing import BrainModelRouter, CognitiveStage, RoutingSignal
 from zet.core.verifier import (
     UNCERTAIN_CONFIDENCE_THRESHOLD,
@@ -619,6 +625,7 @@ class TaskGraphExecutor:
                         # deb aytdi-yu, biz buni tasdiqlay olmadik" —
                         # qayta urinish ma'nosiz, faqat holatni yashiradi).
                         task.failure_class = FailureClass.EXTERNAL_UNCERTAIN.value
+                        task.recovery_action = RecoveryAction.VERIFY_BEFORE_RETRY.value
                         break
                     failure_class = FailureClass.VALIDATION
                 else:
@@ -627,12 +634,14 @@ class TaskGraphExecutor:
 
             if failure_class is not None:
                 task.failure_class = failure_class.value
+                task.recovery_action = recovery_action_for(failure_class).value
                 if is_retry_futile(failure_class):
                     log.info(
                         "task_graph.retry_futile",
                         mission_id=str(mission.id),
                         task=task.title,
                         failure_class=failure_class.value,
+                        recovery_action=task.recovery_action,
                     )
                     break
 
@@ -664,12 +673,14 @@ class TaskGraphExecutor:
                         task.tool, caller_permission=caller_permission
                     )
                     if alt_tool is not None:
+                        task.recovery_action = RecoveryAction.ALTERNATE_TOOL_OR_AGENT.value
                         log.info(
                             "task_graph.alternate_tool",
                             mission_id=str(mission.id),
                             task=task.title,
                             old_tool=task.tool,
                             new_tool=alt_tool.name,
+                            recovery_action=task.recovery_action,
                         )
                         task.tool = alt_tool.name
                         scoped_tools = self._tools.subset([task.tool])
@@ -691,18 +702,21 @@ class TaskGraphExecutor:
                     selection = self._agent_selector.assign_tool_agents([task.tool])
                     alt_agent = getattr(selection, "tool_agents", {}).get(task.tool)
                     if alt_agent and alt_agent != task.agent:
+                        task.recovery_action = RecoveryAction.ALTERNATE_TOOL_OR_AGENT.value
                         log.info(
                             "task_graph.alternate_agent",
                             mission_id=str(mission.id),
                             task=task.title,
                             old_agent=task.agent,
                             new_agent=alt_agent,
+                            recovery_action=task.recovery_action,
                         )
                         task.agent = alt_agent
                         scoped_tools = self._tools.subset([task.tool]) if task.tool else self._tools
                         continue
                 break
             task.retries = attempt
+            task.recovery_action = RecoveryAction.BOUNDED_RETRY.value
             log.info(
                 "task_graph.retry",
                 mission_id=str(mission.id),
@@ -710,11 +724,31 @@ class TaskGraphExecutor:
                 attempt=attempt,
                 error=last_error,
                 failure_class=failure_class.value if failure_class else None,
+                recovery_action=task.recovery_action,
             )
 
         task.status = StepStatus.FAILED
         task.error = last_error or "nomalum xato"
         task.completed_at = utcnow()
+        # JB-15 PART II — "Cognitive Decision Record" (spec §7): bitta
+        # konsolidatsiyalangan strukturaviy yozuv — faqat operatsion
+        # faktlar (fikrlash zanjiri YO'Q), audit/debugging/xotira uchun
+        # mos. Yangi saqlash tizimi QURILMAGAN — mavjud structlog
+        # observability qatlami qayta ishlatilgan (yuqoridagi individual
+        # `task_graph.*` hodisalari bilan BIRGA, ularning o'rniga EMAS).
+        log.info(
+            "task_graph.recovery_decision",
+            mission_id=str(mission.id),
+            task_id=task.position,
+            task=task.title,
+            failure_class=task.failure_class,
+            verification_status=task.verification_status,
+            recovery_action=task.recovery_action,
+            selected_agent=task.agent,
+            selected_tool=task.tool,
+            evidence_status=task.verification_status,
+            reason=(task.error or "")[:500],
+        )
         return gap
 
     async def _verify_task_result(self, task: MissionTask, result: Any) -> bool:

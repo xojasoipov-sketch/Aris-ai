@@ -757,3 +757,95 @@ class TestFullLoopWithEvidenceAndSubstitution:
         assert result.tasks[0].verification_status == "verified"
         written = await asyncio.to_thread(lambda: list(tmp_path.glob("*.md")))
         assert len(written) == 1
+
+
+# ── R/S. Ko'p bosqichli GitHub audit missiyasi (spec Phase 12 R/S) ───
+
+
+class TestMultiStepGitHubAuditMission:
+    async def test_inspect_then_write_then_externally_verify(self) -> None:
+        """1-vazifa: repo'ni TEKSHIRISH (`github.read`, faqat o'qish —
+        evidence NOT_REQUIRED, tashqi yon-samar yo'q). 2-vazifa (1-ga
+        bog'liq): SO'ROV QILINGAN amalni bajarish (`github.write` —
+        issue yaratish) VA HAQIQIY GitHub holatini (`GitHubEvidenceProvider`
+        orqali, stub rejimda — tarmoqsiz, lekin HAQIQIY kod yo'li) tasdiqlash.
+        Ikkalasi ham BITTA TaskGraphExecutor.run() orqali, real DAG
+        bog'liqligi bilan."""
+        registry = AgentRegistry()
+        registry.register(
+            _agent_spec("auditor", tools=["github.read", "github.write"]),
+            status=AgentStatus.ACTIVE,
+        )
+        tools = ToolRegistry()
+        read_tool = GitHubReadTool(token=None)
+
+        # `github.write`ning HAQIQIY xavf darajasi (`risk_for()`) — HIGH,
+        # V-32 bo'yicha HECH QANDAY siyosat bilan chetlab o'tilmaydi
+        # (approval gate ATAYLAB, alohida testda — `TestApprovalGateNot
+        # BypassedBySubstitution` — tekshiriladi). Bu testning maqsadi —
+        # EVIDENCE tekshiruvi (approval EMAS), shu sabab shu yerda LOW'ga
+        # tushiriladi (haqiqiy `_execute()` mantiq O'ZGARMAGAN, faqat
+        # metadata).
+        class _LowRiskGitHubWriteTool(GitHubWriteTool):
+            @property
+            def risk_level(self) -> RiskLevel:
+                return RiskLevel.LOW
+
+        write_tool = _LowRiskGitHubWriteTool(token=None)
+        tools.register(read_tool)
+        tools.register(write_tool)
+
+        provider = FakeProvider(
+            scripted=[
+                # 1-vazifa: repo tekshiruvi (READ — tashqi yon-samar yo'q).
+                fake_response(
+                    tool_uses=(
+                        _tool_use("github.read", {"action": "list_issues", "repo": "acme/demo"}),
+                    )
+                ),
+                fake_response(text="Repo tekshirildi — 2 ta ochiq issue bor."),
+                # 2-vazifa: so'ralgan amal (WRITE) + yakuniy javob.
+                fake_response(
+                    tool_uses=(
+                        _tool_use(
+                            "github.write",
+                            {"action": "create_issue", "repo": "acme/demo", "title": "audit topilmasi"},
+                        ),
+                    )
+                ),
+                fake_response(text="Issue yaratildi."),
+            ]
+        )
+        evidence_registry = EvidenceProviderRegistry([GitHubEvidenceProvider(read_tool)])
+        mission = _mission(
+            tasks=[
+                MissionTask(
+                    position=0, title="repo tekshir", tool="github.read", agent="auditor"
+                ),
+                MissionTask(
+                    position=1,
+                    title="issue yarat",
+                    tool="github.write",
+                    agent="auditor",
+                    depends_on=[0],
+                ),
+            ]
+        )
+        executor = TaskGraphExecutor(
+            agent_registry=registry,
+            tool_registry=tools,
+            permission_policy=PermissionPolicy(auto_approve_write=True, auto_approve_medium=True),
+            llm_provider=provider,
+            evidence_registry=evidence_registry,
+            task_timeout_s=5,
+        )
+
+        result = await executor.run(mission)
+
+        assert result.all_done is True
+        # 1-vazifa (READ) — evidence provider'i yo'q (faqat github.write
+        # uchun ro'yxatdan o'tgan) → eski (Verifier-yo'q) yo'l, DONE.
+        assert result.tasks[0].status == StepStatus.DONE
+        # 2-vazifa (WRITE) — HAQIQIY GitHub (stub) holati bilan tasdiqlangan.
+        assert result.tasks[1].status == StepStatus.DONE
+        assert result.tasks[1].verification_status == "verified"

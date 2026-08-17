@@ -118,6 +118,17 @@ class MissionTask(BaseModel):
     """`core.failure_classification.FailureClass` qiymati — task FAILED
     bo'lganda to'ldiriladi (JB-14 PART II). `None` — muvaffaqiyatli yoki
     hali klassifikatsiya qilinmagan."""
+    recovery_action: str | None = None
+    """`core.failure_classification.RecoveryAction` qiymati — tanlangan
+    tiklanish chorasi (JB-15 PART II — "Cognitive Decision Record").
+    Operatsion FAKT, fikrlash zanjiri EMAS: nima tanlandi (masalan
+    `alternate_tool_or_agent`), NEGA emas. To'liq yozuv (mission_id,
+    task_id, failure_class, verification_status, recovery_action,
+    tanlangan agent/tool, evidence holati, sabab) strukturaviy `log.info(
+    "task_graph.recovery_decision", ...)` orqali audit uchun yoziladi —
+    yangi saqlash tizimi QURILMAGAN, mavjud structlog observability
+    qatlami (`task_graph.py`da allaqachon har bir qarorda ishlatiladi)
+    qayta ishlatilgan."""
 
 
 class Mission(BaseModel):
@@ -551,10 +562,17 @@ class MissionEngine:
             return await self.request_approval(mission)
         return await self._transition(mission, MissionStatus.EXECUTING)
 
-    async def request_approval(self, mission: Mission) -> Mission:
-        """PLANNING → WAITING_APPROVAL (yoki EXECUTING → WAITING_APPROVAL)."""
+    async def request_approval(self, mission: Mission, *, reason: str | None = None) -> Mission:
+        """PLANNING → WAITING_APPROVAL (yoki EXECUTING/RECOVERING → WAITING_APPROVAL).
+
+        `reason` ixtiyoriy (JB-15 PART II): berilmasa — eski xatti-harakat
+        (umumiy xavf-darajasi matni, PLANNING bosqichidagi original
+        chaqiruv). `recover()` AUTHORIZATION-sinf muvaffaqiyatsizlikdan
+        keyin ANIQ sababni ("aynan qaysi amal tasdiq talab qildi")
+        uzatadi — spec: "Explain exactly what action requires approval."
+        """
         max_perm = _max_permission(mission.permissions_required)
-        reason = "Mission risk level requires owner approval"
+        reason = reason or "Mission risk level requires owner approval"
         req = self._approvals.request_approval(
             run_id=mission.id,  # mission-level so'rov: run_id yo'q, mission.id ni index sifatida
             mission_id=mission.id,
@@ -1074,15 +1092,55 @@ class MissionEngine:
         pastdagi oddiy (chegaralangan — `_max_retries` bilan) diagnose+
         retry yo'liga TUSHADI.
 
-        MA'LUM CHEKLOV (ochiq e'lon qilingan): spec §11 AUTHORIZATION
-        uchun "approval flow" (WAITING_APPROVAL, yangi urinish emas)ni
-        tavsiya qiladi — bu yerda soddalashtirilgan: AUTHORIZATION ham
-        boshqa "futile" sinflar bilan bir xil FAILED yo'liga tushadi,
-        alohida approval-so'rov OQIMIGA ULANMAGAN (bu — kelajakdagi ish,
-        JB-14'da ATAYLAB qilinmagan)."""
+        JB-15 PART II (AUDIT FIX — avvalgi "ma'lum cheklov" endi
+        YOPILDI): `AUTHORIZATION` HAM `INVALID_PLAN`ga o'xshash ISTISNO —
+        lekin BOSHQA yo'lga (darhol FAILED/diagnose-retry EMAS, balki
+        MAVJUD approval oqimi — `request_approval()`, xuddi
+        `plan()`dagi PLANNING→WAITING_APPROVAL bilan BIR XIL mexanizm,
+        YANGISI QURILMAGAN) tushadi. Sabab: "AUTHORIZATION" — "bu amal
+        ega tasdig'ini talab qiladi" degani, "bu ISHLAMAYDI" degani
+        EMAS. Cheksiz tsiklni oldini olish uchun `mission.retry_count`
+        (mavjud, boshqa yo'l bilan BIR XIL hisoblagich) chegaraga
+        qaraladi — allaqachon bir marta (yoki ko'proq) approval
+        so'ralgan bo'lsa-yu YANA xuddi shu sinf xato qaytsa (masalan
+        HIGH-risk tool — V-32 bo'yicha HAR DOIM tasdiq talab qiladi,
+        avvalgi approval BU ANIQ chaqiruvga AVTOMATIK ko'chib
+        o'tmaydi — quyidagi "MA'LUM CHEKLOV"ga qarang) — DARHOL, HALOL
+        FAILED (yana bir marta so'ramaymiz, foydalanuvchini charchatib
+        yubormaslik uchun).
+
+        MA'LUM CHEKLOV (ochiq e'lon qilingan, ATAYLAB "tuzatilmagan" —
+        V-32'ni ZAIFLASHTIRMASLIK uchun): approval berilgach Mission
+        EXECUTING'ga qaytadi va muvaffaqiyatsiz task PENDING'ga
+        tiklanib QAYTA sinaladi (mavjud JB-11 mexanizmi, o'zgarmagan).
+        LEKIN bu approval `AgentRuntime._execute_tool()`ning O'Z,
+        MUSTAQIL fail-closed tekshiruviga (`PermissionPolicy`, V-31/32)
+        AVTOMATIK "ko'chib o'tmaydi" — ular ATAYLAB ALOHIDA qatlamlar.
+        Demak: agent permission_level yetarsizligi (`ToolPermissionDeniedError`)
+        kabi holatlar uchun qayta urinish odatda YANA bir xil xato
+        bilan tugaydi (yuqoridagi retry_count chegarasi buni tezda
+        to'xtatadi) — HAQIQIY tuzatish ega TOMONIDAN tashqi chora
+        (masalan agentga ko'proq ruxsat berish) qabul qilinishini talab
+        qiladi. Bu — YANGI xavfsizlik teshigi EMAS, aksincha: approval
+        avtomatik eskalatsiyaga AYLANMASLIGINING isboti."""
         from zet.core.failure_classification import FailureClass, classify_failure, is_retry_futile
 
         failure_class = classify_failure(text=last_failure)
+        if failure_class is FailureClass.AUTHORIZATION:
+            if mission.retry_count >= self._max_retries:
+                return await self._transition(
+                    mission,
+                    MissionStatus.FAILED,
+                    error=(
+                        f"[authorization] approval so'ralgan edi, lekin xato takrorlandi: "
+                        f"{last_failure}"
+                    )[:2000],
+                )
+            mission = await self._repo.update(mission.id, retry_count=mission.retry_count + 1)
+            return await self.request_approval(
+                mission,
+                reason=f"Bajarish paytida tasdiq talab qilindi: {last_failure}"[:500],
+            )
         if failure_class is not FailureClass.INVALID_PLAN and is_retry_futile(failure_class):
             return await self._transition(
                 mission,
