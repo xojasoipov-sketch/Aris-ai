@@ -193,6 +193,24 @@ class TestApiErrors:
 
         assert not result.success
 
+    @respx.mock
+    async def test_bare_json_string_response_does_not_crash(self) -> None:
+        """JB-16 CASE A regression: model top-darajada dict EMAS, bitta
+        JSON satr qaytarsa (masalan "rasmda matn topilmadi" — sintaktik
+        jihatdan TO'G'RI JSON, lekin obyekt emas), tool ichki
+        `AttributeError: 'str' object has no attribute 'get'` bilan
+        yiqilmasligi, balki tushunarli `ToolError` bilan halol
+        muvaffaqiyatsizlikka uchrashi kerak."""
+        respx.post(_ENDPOINT).mock(return_value=_ok_response('"rasmda matn topilmadi"'))
+
+        tool = VisionOcrTool(api_key="k")
+        result = await tool.execute({"image_bytes_base64": _TINY_IMAGE})
+
+        assert not result.success
+        assert result.error is not None
+        assert "AttributeError" not in result.error
+        assert "dict emas" in result.error or "topilmadi" in result.error
+
 
 class TestRegistry:
     def test_registered_in_default_registry(self, tmp_path: Path) -> None:

@@ -36,8 +36,6 @@ from __future__ import annotations
 
 import base64 as _b64
 import binascii
-import json
-import re
 from typing import Any
 
 import httpx
@@ -45,6 +43,7 @@ import structlog
 
 from zet.domain.enums import PermissionLevel, TrustLevel
 from zet.tools.base import Tool, ToolError, ToolQuotaError
+from zet.tools.json_extract import extract_json_object
 
 log = structlog.get_logger(__name__)
 
@@ -76,27 +75,6 @@ JSON tuzilishi:
   "language": "til kodi",
   "confidence": 0.87
 }"""
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    """Model javobidan JSON ajratib olish (video_learn.py bilan bir xil naqsh)."""
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        parsed: dict[str, Any] = json.loads(cleaned)
-    except json.JSONDecodeError:
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start == -1 or end <= start:
-            msg = "Model JSON qaytarmadi"
-            raise ToolError(msg) from None
-        try:
-            parsed = json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError as exc:
-            msg = f"Model javobini JSON sifatida o'qib bo'lmadi: {exc}"
-            raise ToolError(msg) from exc
-    return parsed
 
 
 class VisionOcrTool(Tool):
@@ -251,7 +229,10 @@ class VisionOcrTool(Tool):
             msg = "Gemini kutilgan javob shaklini qaytarmadi (rasm ochilmagan bo'lishi mumkin)"
             raise ToolError(msg) from exc
 
-        parsed = _extract_json(text)
+        parsed = extract_json_object(text)
+        if parsed is None:
+            msg = "Gemini JSON obyekt qaytarmadi (dict emas yoki topilmadi)"
+            raise ToolError(msg)
 
         # Model ba'zan kutilgan maydonni tashlab yuboradi — normallashtirish.
         ocr_text = str(parsed.get("text") or "")

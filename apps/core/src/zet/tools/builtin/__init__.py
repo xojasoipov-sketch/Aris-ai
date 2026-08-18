@@ -27,6 +27,7 @@ from zet.tools.builtin.business_tools import (
     BusinessListTool,
 )
 from zet.tools.builtin.camera import CameraSnapshotTool
+from zet.tools.builtin.capability_discovery import CapabilityDiscoveryTool
 from zet.tools.builtin.commerce_tools import (
     CommerceScope,
     OrdersListTool,
@@ -291,6 +292,10 @@ def build_default_registry(
     registry.register(DesktopMouseClickTool(provider=desktop_provider))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))
+    # JB-16: "nima qila olasiz" so'roviga HAQIQIY registry'dan javob —
+    # eng OXIRIDA ro'yxatga olinadi (o'zi ISHORA saqlagani uchun tartib
+    # ahamiyatsiz, lekin "hammasidan keyin" logik ravishda to'g'ri).
+    registry.register(CapabilityDiscoveryTool(registry=registry))
     return registry
 
 

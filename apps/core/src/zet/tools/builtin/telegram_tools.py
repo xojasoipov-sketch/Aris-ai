@@ -10,6 +10,16 @@ Chuqur analitika (impressions/reach) faqat rasmiy Telegram Analytics'da
 ko'rinadi (kanal egasi web.telegram.org orqali). Bu tool'lar — real-vaqt
 statistikasi (a'zolar soni, kanal metama'lumoti).
 
+**MUHIM (JB-16 audit):** Bot API'da kanal xabar TARIXINI o'qish uchun
+UMUMAN metod yo'q — bot faqat `getUpdates`/webhook orqali YANGI kelgan
+xabarlarni real-vaqtda ko'radi, eski postlarni "orqaga qaytib" o'qiy
+olmaydi (bu MTProto client — Telethon/Pyrogram — talab qiladi, bu
+kodbaza ATAYLAB ishlatmaydi). "Kanalning oxirgi N ta postini ol" kabi
+so'rov — HECH QANDAY tool bilan bajarilmaydi, `channel_stats` bilan
+ham. Bu ikkala tool ta'rifi ham shuni ANIQ yozadi — LLM Planner
+"channel_post" nomini "kanal posti(ni olish)" bilan chalkashtirib,
+YOZISH tooliga O'QISH so'rovini yo'naltirmasligi uchun.
+
 Fail-open: token yo'q → stub. Boshqa "real-vs-stub" tool'lar bilan bir xil.
 
 Xavfsizlik:
@@ -107,8 +117,11 @@ class TelegramChannelStatsTool(_TelegramHttpMixin, Tool):
     @property
     def description(self) -> str:
         return (
-            "Telegram kanal statistikasi — a'zolar soni, kanal ma'lumoti. "
-            "Bot kanaldan administrator bo'lishi shart."
+            "O'QISH: Telegram kanal HAQIDA ma'lumot — a'zolar soni, sarlavha, "
+            "tavsif, username. Bot kanaldan administrator bo'lishi shart. "
+            "DIQQAT: bu tool eski POST/XABARLARNI qaytarmaydi — Telegram Bot "
+            "API'da kanal xabar tarixini o'qish uchun umuman metod yo'q "
+            "('oxirgi N ta post' kabi so'rovlar bu tool bilan bajarilmaydi)."
         )
 
     @property
@@ -182,7 +195,14 @@ class TelegramChannelPostTool(_TelegramHttpMixin, Tool):
 
     @property
     def description(self) -> str:
-        return "Telegram kanaliga xabar joylash (HTML formatida). Approval kerak."
+        return (
+            "YOZISH: Telegram kanaliga YANGI xabar joylash/nashr qilish "
+            "(HTML formatida). Har doim ega tasdig'i (approval) kerak. "
+            "DIQQAT: bu tool kanaldan ma'lumot O'QIMAYDI — mavjud/eski "
+            "postlarni ko'rish yoki olish uchun EMAS (nom o'xshashligiga "
+            "qaramay: 'kanal posti' so'zi bu yerda 'yangi post YOZISH' "
+            "ma'nosida, 'postni O'QISH' emas)."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:

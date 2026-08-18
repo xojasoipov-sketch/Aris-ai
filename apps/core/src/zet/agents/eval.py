@@ -134,6 +134,8 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "desktop.key_press": PermissionLevel.EXECUTE,
     "desktop.mouse_click": PermissionLevel.EXECUTE,
     "shell.exec": PermissionLevel.EXECUTE,
+    # JB-16: "nima qila olasiz" so'roviga HAQIQIY registry'dan javob.
+    "system.capabilities": PermissionLevel.READ,
 }
 
 

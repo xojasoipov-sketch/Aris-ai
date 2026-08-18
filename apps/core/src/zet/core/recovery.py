@@ -38,6 +38,7 @@ from zet.domain.plan import Plan, PlanStep, PlanValidationError
 from zet.domain.tool import ToolResult, Verification
 from zet.llm.base import ChatMessage, LLMError
 from zet.security.permissions import PermissionDecision
+from zet.tools.json_extract import extract_json_object
 
 if TYPE_CHECKING:
     from zet.core.executor import ExecutionContext, Executor
@@ -572,7 +573,7 @@ class RecoveryEngine:
             return Diagnosis(root_cause="LLM bo'sh javob qaytardi", fix_steps=[])
 
         # JSON ni ajratamiz — LLM ba'zida ```json fences qo'shadi
-        payload = _extract_json(text)
+        payload = extract_json_object(text)
         if payload is None:
             return Diagnosis(
                 root_cause=f"Parse failure: LLM javobida JSON topilmadi ({text[:120]})",
@@ -794,36 +795,6 @@ def _safe_json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False)[:800]
     except (TypeError, ValueError):
         return str(value)[:800]
-
-
-def _extract_json(text: str) -> dict[str, Any] | None:
-    """Matn ichidan birinchi JSON obyektni ajratib oladi.
-
-    LLM ba'zida ```json ... ``` fences yoki qo'shimcha prose qo'shadi;
-    biz sof `{...}` blokini tortib olamiz."""
-    stripped = text.strip()
-    # Fenced code bloklarini olib tashlaymiz
-    if stripped.startswith("```"):
-        # ``` yoki ```json bilan boshlanadi
-        first_nl = stripped.find("\n")
-        if first_nl != -1:
-            stripped = stripped[first_nl + 1 :]
-        if stripped.endswith("```"):
-            stripped = stripped[:-3]
-        stripped = stripped.strip()
-    # Birinchi '{' dan oxirgi '}' gacha
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    blob = stripped[start : end + 1]
-    try:
-        parsed = json.loads(blob)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
 
 
 __all__ = [

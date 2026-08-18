@@ -33,7 +33,6 @@ Bog'liq qarorlar:
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -42,6 +41,7 @@ import structlog
 
 from zet.domain.enums import PermissionLevel, TrustLevel
 from zet.tools.base import Tool, ToolError, ToolQuotaError
+from zet.tools.json_extract import extract_json_object
 
 log = structlog.get_logger(__name__)
 
@@ -95,33 +95,6 @@ JSON tuzilishi:
 
 `gaps` maydonini bo'sh qoldirma — o'rganuvchi nimani qo'shimcha
 izlashi kerakligini bilishi kerak."""
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    """Model javobidan JSON ajratib olish.
-
-    Model ba'zan ```json blokiga o'raydi yoki oldiga izoh qo'shadi —
-    "faqat JSON qaytar" deyilganda ham. Qat'iy `json.loads` bunday
-    javobda yiqilardi, shuning uchun avval blok tozalanadi.
-    """
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-
-    try:
-        parsed: dict[str, Any] = json.loads(cleaned)
-    except json.JSONDecodeError:
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start == -1 or end <= start:
-            msg = "Model JSON qaytarmadi"
-            raise ToolError(msg) from None
-        try:
-            parsed = json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError as exc:
-            msg = f"Model javobini JSON sifatida o'qib bo'lmadi: {exc}"
-            raise ToolError(msg) from exc
-    return parsed
 
 
 class VideoLearnTool(Tool):
@@ -262,7 +235,10 @@ class VideoLearnTool(Tool):
             msg = "Gemini kutilgan javob shaklini qaytarmadi (video ochilmagan bo'lishi mumkin)"
             raise ToolError(msg) from exc
 
-        knowledge = _extract_json(text)
+        knowledge = extract_json_object(text)
+        if knowledge is None:
+            msg = "Model JSON obyekt qaytarmadi (dict emas yoki topilmadi)"
+            raise ToolError(msg)
         knowledge["source_url"] = url
 
         log.info(
