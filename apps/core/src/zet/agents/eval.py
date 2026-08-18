@@ -88,7 +88,9 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "crm.contact_search": PermissionLevel.READ,
     "crm.contact_create": PermissionLevel.WRITE,
     "crm.lead_create": PermissionLevel.WRITE,
+    "crm.lead_list": PermissionLevel.READ,
     "crm.deal_create": PermissionLevel.WRITE,
+    "crm.deal_list": PermissionLevel.READ,
     "crm.stats": PermissionLevel.READ,
     # Business Registry (C2, KONSOLIDATSIYA v2)
     "business.create": PermissionLevel.WRITE,

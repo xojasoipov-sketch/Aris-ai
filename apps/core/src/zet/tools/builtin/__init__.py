@@ -41,7 +41,9 @@ from zet.tools.builtin.crm_tools import (
     CRMContactCreateTool,
     CRMContactSearchTool,
     CRMDealCreateTool,
+    CRMDealListTool,
     CRMLeadCreateTool,
+    CRMLeadListTool,
     CRMScope,
     CRMStatsTool,
 )
@@ -264,7 +266,9 @@ def build_default_registry(
     registry.register(CRMContactSearchTool(scope=crm_scope))
     registry.register(CRMContactCreateTool(scope=crm_scope))
     registry.register(CRMLeadCreateTool(scope=crm_scope))
+    registry.register(CRMLeadListTool(scope=crm_scope))
     registry.register(CRMDealCreateTool(scope=crm_scope))
+    registry.register(CRMDealListTool(scope=crm_scope))
     registry.register(CRMStatsTool(scope=crm_scope))
     # Business Registry (C2, KONSOLIDATSIYA v2) — bir xil `PgCRM` sessiyasi
     # (`crm_scope`) ham kontaktlarni, ham bizneslarni olib yuradi.

@@ -113,7 +113,9 @@ class _StubVerifier:
         self._verdicts = list(verdicts)
         self.calls: list[tuple[PlanStep, ToolResult | None]] = []
 
-    async def verify_step(self, step: PlanStep, tool_result: ToolResult | None) -> Verification:
+    async def verify_step(
+        self, step: PlanStep, tool_result: ToolResult | None, *, chat_output: str | None = None
+    ) -> Verification:
         self.calls.append((step, tool_result))
         if not self._verdicts:
             # Test yozuvchisi navbatni tugatib qo'ymasin — default fail
@@ -478,7 +480,7 @@ class TestOrchestratorTransitionsToRecovering:
         class _FailingVerifier:
             """verify_step: har doim FAIL; verify_run: FAIL umumiy."""
 
-            async def verify_step(self, step, tool_result):  # type: ignore[no-untyped-def]
+            async def verify_step(self, step, tool_result, **_kwargs):  # type: ignore[no-untyped-def]
                 return Verification(ok=False, reason="test FAIL")
 
             def verify_run(self, verifications):  # type: ignore[no-untyped-def]
@@ -907,7 +909,7 @@ class TestD1OrchestratorLevel:
         class _FailingVerifier:
             """verify_step/verify_run — har doim FAIL (recovery majburan ishga tushsin)."""
 
-            async def verify_step(self, step, tool_result):  # type: ignore[no-untyped-def]
+            async def verify_step(self, step, tool_result, **_kwargs):  # type: ignore[no-untyped-def]
                 return Verification(ok=False, reason="test FAIL")
 
             def verify_run(self, verifications):  # type: ignore[no-untyped-def]

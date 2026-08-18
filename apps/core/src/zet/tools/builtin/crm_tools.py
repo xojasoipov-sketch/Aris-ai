@@ -128,7 +128,11 @@ class CRMLeadCreateTool(_CRMTool):
 
     @property
     def description(self) -> str:
-        return "CRM'ga lead qo'shish (contact_id + source + optional score)."
+        return (
+            "YOZISH: CRM'ga YANGI lead (potensial mijoz) yozuvi qo'shadi "
+            "(contact_id + source + ixtiyoriy score). Mavjud lidlarni "
+            "ko'rish/ro'yxatlash uchun EMAS — buning uchun crm.lead_list."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -159,6 +163,44 @@ class CRMLeadCreateTool(_CRMTool):
         return {"lead": _lead_dict(lead)}
 
 
+class CRMLeadListTool(_CRMTool):
+    """Lidlar ro'yxati — ixtiyoriy holat bo'yicha filtr."""
+
+    @property
+    def name(self) -> str:
+        return "crm.lead_list"
+
+    @property
+    def description(self) -> str:
+        return (
+            "O'QISH: CRM'dagi mavjud lidlar (potensial mijozlar) ro'yxati, "
+            "ixtiyoriy `status` bilan filtrlanadi (new/contacted/qualified/"
+            "unqualified). Yangi lead YARATMAYDI — buning uchun crm.lead_create."
+        )
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [s.value for s in LeadStatus],
+                    "description": "Ixtiyoriy: shu holatdagilarni ko'rsatish",
+                },
+            },
+            "additionalProperties": False,
+        }
+
+    async def _execute(self, params: dict[str, Any]) -> dict[str, Any]:
+        scope = self._require_scope()
+        status_raw = params.get("status")
+        status = LeadStatus(status_raw) if status_raw else None
+        async with scope() as crm:
+            leads = await crm.list_leads(status)
+        return {"leads": [_lead_dict(lead) for lead in leads]}
+
+
 class CRMDealCreateTool(_CRMTool):
     """Lead ustiga deal qo'shish."""
 
@@ -168,7 +210,11 @@ class CRMDealCreateTool(_CRMTool):
 
     @property
     def description(self) -> str:
-        return "CRM'ga deal qo'shish (lead_id + title + optional amount)."
+        return (
+            "YOZISH: CRM'ga YANGI deal (bitim) yozuvi qo'shadi (lead_id + "
+            "title + ixtiyoriy amount). Mavjud deallarni ko'rish uchun "
+            "EMAS — buning uchun crm.deal_list."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -196,6 +242,44 @@ class CRMDealCreateTool(_CRMTool):
         async with scope() as crm:
             deal = await crm.add_deal(**params)
         return {"deal": _deal_dict(deal)}
+
+
+class CRMDealListTool(_CRMTool):
+    """Deallar ro'yxati — ixtiyoriy bosqich bo'yicha filtr."""
+
+    @property
+    def name(self) -> str:
+        return "crm.deal_list"
+
+    @property
+    def description(self) -> str:
+        return (
+            "O'QISH: CRM'dagi mavjud deallar (bitimlar) ro'yxati, ixtiyoriy "
+            "`stage` bilan filtrlanadi (proposal/negotiation/won/lost). "
+            "Yangi deal YARATMAYDI — buning uchun crm.deal_create."
+        )
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "stage": {
+                    "type": "string",
+                    "enum": [s.value for s in DealStage],
+                    "description": "Ixtiyoriy: shu bosqichdagilarni ko'rsatish",
+                },
+            },
+            "additionalProperties": False,
+        }
+
+    async def _execute(self, params: dict[str, Any]) -> dict[str, Any]:
+        scope = self._require_scope()
+        stage_raw = params.get("stage")
+        stage = DealStage(stage_raw) if stage_raw else None
+        async with scope() as crm:
+            deals = await crm.list_deals(stage)
+        return {"deals": [_deal_dict(deal) for deal in deals]}
 
 
 class CRMStatsTool(_CRMTool):
@@ -262,7 +346,9 @@ __all__ = [
     "CRMContactCreateTool",
     "CRMContactSearchTool",
     "CRMDealCreateTool",
+    "CRMDealListTool",
     "CRMLeadCreateTool",
+    "CRMLeadListTool",
     "CRMScope",
     "CRMStatsTool",
 ]

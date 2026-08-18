@@ -686,7 +686,12 @@ class Orchestrator:
         # kam holatda ishlaydi, parallelism kerak emas.
         record.status = RunStatus.VERIFYING
         step_verifications = [
-            (res.step, await self._verifier.verify_step(res.step, res.tool_result))
+            (
+                res.step,
+                await self._verifier.verify_step(
+                    res.step, res.tool_result, chat_output=res.output
+                ),
+            )
             for res in ctx.results.values()
         ]
         verifications = [v for _, v in step_verifications]

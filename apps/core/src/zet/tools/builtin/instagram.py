@@ -225,7 +225,12 @@ class InstagramRecentMediaTool(_InstagramHttpMixin, Tool):
 
     @property
     def description(self) -> str:
-        return "Instagram akkauntning oxirgi N ta posti — caption, like, comment."
+        return (
+            "O'QISH: Instagram akkauntning oxirgi N ta posti — caption, "
+            "like, comment soni. DIQQAT: bu YANGI post JOYLAMAYDI — nashr "
+            "qilish uchun instagram.publish_photo kerak ('media'/'photo' "
+            "so'zlari o'xshab ko'rinsa ham, bu ikkisi teskari operatsiya)."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:

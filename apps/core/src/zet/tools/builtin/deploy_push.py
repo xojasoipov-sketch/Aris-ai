@@ -78,10 +78,10 @@ class DeployPushTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Sayt fayllarini (HTML/CSS/JS) lokal diskka yozadi va lokal preview "
-            "ko'rsatmasini qaytaradi. DIQQAT: bu HALI haqiqiy hosting/domain'ga "
-            "chiqarmaydi — faqat fayl generatsiya + lokal ko'rish. Real deploy "
-            "keyingi bosqich."
+            "YOZISH (faqat LOKAL disk): Sayt fayllarini (HTML/CSS/JS) lokal "
+            "diskka yozadi va lokal preview ko'rsatmasini qaytaradi. DIQQAT: "
+            "nomi 'push' bo'lsa ham git/hosting push emas — bu HALI haqiqiy "
+            "internetga/domain'ga chiqarmaydi. Real deploy keyingi bosqich."
         )
 
     @property

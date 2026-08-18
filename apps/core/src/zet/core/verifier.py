@@ -151,24 +151,24 @@ class Verifier:
         self,
         step: PlanStep,
         tool_result: ToolResult | None,
+        *,
+        chat_output: str | None = None,
     ) -> Verification:
         """Qadam natijasini tekshiradi.
 
         Args:
             step: bajarilgan qadam
             tool_result: tool natijasi (None bo'lsa — fikrlash qadami)
+            chat_output: fikrlash/chat qadamining matnli chiqishi (JB-17).
+                Faqat `step.tool_name is None and tool_result is None`
+                holatida ishlatiladi — boshqa hollarda e'tiborsiz.
 
         Returns:
             Verification
         """
         # Fikrlash qadami — tool yo'q
         if step.tool_name is None and tool_result is None:
-            return Verification(
-                ok=True,
-                reason="Fikrlash qadami — tekshiruv kerak emas",
-                auto=True,
-                confidence=1.0,
-            )
+            return await self._verify_chat_step(step, chat_output)
 
         # Tool natijasi yo'q lekin tool kerak edi
         if tool_result is None:
@@ -202,6 +202,47 @@ class Verifier:
             auto=True,
             confidence=0.8,  # expected_outcome yo'q → pastroq ishonch
         )
+
+    async def _verify_chat_step(
+        self, step: PlanStep, chat_output: str | None
+    ) -> Verification:
+        """Fikrlash/chat qadami — ixtiyoriy, shartli LLM-judge tekshiruvi (JB-17).
+
+        ILGARI bu holat SHARTSIZ `ok=True, confidence=1.0` qaytarardi —
+        chat javobining MAZMUNI hech qachon tekshirilmasdi (JB-16 audit
+        topilmasi). Endi, FAQAT quyidagi UCHTA shart BIRGALIKDA
+        bajarilsa, mavjud `_llm_judge_verify()` (tool natijalari uchun
+        allaqachon bor, o'zgarishsiz) chat matniga ham qo'llaniladi:
+            1. LLM-judge provayder ulangan (`self._llm_judge is not None`)
+            2. Chiqish matni bor (`chat_output` bo'sh emas)
+            3. Planner haqiqatan tekshiriladigan, JONLI TILDAGI
+               `expected_outcome` bergan (`MAX_LITERAL_WORDS`dan uzun —
+               qisqa shablon EMAS)
+
+        Qisqa shablon (`MAX_LITERAL_WORDS` va past)ga LITERAL/REGEX
+        qat'iy moslik TALAB QILINMAYDI (tool JSON'dan farqli, erkin
+        tabiiy til matnida so'zma-so'z moslik kutish yolg'on-FAIL
+        manbai bo'lardi) — bunday holatda ham eski, o'zgarishsiz
+        xatti-harakat qaytadi.
+
+        FAIL-OPEN: judge chaqiruvi yiqilsa/format buzilsa — eski
+        `ok=True, confidence=1.0` qaytadi, HECH QACHON yangi yolg'on
+        FAIL yaratmaydi (Verifier'ning umumiy fail-open shartnomasi).
+        """
+        default = Verification(
+            ok=True,
+            reason="Fikrlash qadami — tekshiruv kerak emas",
+            auto=True,
+            confidence=1.0,
+        )
+        if self._llm_judge is None or not chat_output or not step.expected_outcome:
+            return default
+        if len(step.expected_outcome.split()) <= MAX_LITERAL_WORDS:
+            return default
+        judged = await self._llm_judge_verify(step.expected_outcome, chat_output)
+        if judged is not None:
+            return judged
+        return default
 
     def verify_run(
         self,

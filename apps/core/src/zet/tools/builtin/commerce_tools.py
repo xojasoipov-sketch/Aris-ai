@@ -150,7 +150,12 @@ class OrdersListTool(_CommerceTool):
 
     @property
     def description(self) -> str:
-        return "Buyurtmalar ro'yxati (yangi birinchi). Status bo'yicha filtr mumkin."
+        return (
+            "O'QISH: Buyurtmalar ro'yxati (yangi birinchi), holat bo'yicha "
+            "filtr bilan — har bir buyurtmaning JORIY holatini shu yerdan "
+            "bilib olasiz. Holatni O'ZGARTIRISH uchun EMAS — buning uchun "
+            "order.set_status."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -184,7 +189,14 @@ class OrderStatusUpdateTool(_CommerceTool):
 
     @property
     def description(self) -> str:
-        return "Buyurtma holatini yangilash. SHIPPED holatiga o'tsa mijozga avtomatik xabar boradi."
+        return (
+            "YOZISH: Buyurtma HOLATINI O'ZGARTIRADI (yangi→tasdiq→"
+            "jo'natildi→yetkazildi). SHIPPED holatiga o'tsa mijozga "
+            "avtomatik xabar boradi. DIQQAT: nomida 'status' so'zi bor, "
+            "lekin bu YOZISH tool'i — buyurtma holatini shunchaki BILISH/"
+            "KO'RISH uchun EMAS (buning uchun order.list). order_id VA "
+            "yangi status ikkalasi ham majburiy."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:

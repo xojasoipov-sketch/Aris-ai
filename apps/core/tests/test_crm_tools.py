@@ -20,7 +20,9 @@ from zet.tools.builtin.crm_tools import (
     CRMContactCreateTool,
     CRMContactSearchTool,
     CRMDealCreateTool,
+    CRMDealListTool,
     CRMLeadCreateTool,
+    CRMLeadListTool,
     CRMScope,
     CRMStatsTool,
 )
@@ -78,6 +80,75 @@ async def test_stats_reflects_created(crm_scope: CRMScope) -> None:
     assert stats.output["deals"] == 1
 
 
+async def test_lead_list_and_deal_list(crm_scope: CRMScope) -> None:
+    """JB-17 audit topilmasi tuzatishi — o'qish tool'i endi mavjud."""
+    contact = await CRMContactCreateTool(scope=crm_scope).execute({"name": "Dilnoza"})
+    lead = await CRMLeadCreateTool(scope=crm_scope).execute(
+        {"contact_id": contact.output["contact"]["id"], "source": "web", "score": 40}
+    )
+    await CRMDealCreateTool(scope=crm_scope).execute(
+        {"lead_id": lead.output["lead"]["id"], "title": "Test bitim", "amount": 250_000}
+    )
+
+    leads = await CRMLeadListTool(scope=crm_scope).execute({})
+    assert leads.success
+    assert len(leads.output["leads"]) == 1
+    assert leads.output["leads"][0]["source"] == "web"
+
+    deals = await CRMDealListTool(scope=crm_scope).execute({})
+    assert deals.success
+    assert len(deals.output["deals"]) == 1
+    assert deals.output["deals"][0]["title"] == "Test bitim"
+
+
+async def test_lead_list_filters_by_status(crm_scope: CRMScope) -> None:
+    contact = await CRMContactCreateTool(scope=crm_scope).execute({"name": "Eldor"})
+    await CRMLeadCreateTool(scope=crm_scope).execute(
+        {"contact_id": contact.output["contact"]["id"]}
+    )
+
+    matched = await CRMLeadListTool(scope=crm_scope).execute({"status": "new"})
+    assert matched.success
+    assert len(matched.output["leads"]) == 1
+
+    unmatched = await CRMLeadListTool(scope=crm_scope).execute({"status": "qualified"})
+    assert unmatched.success
+    assert unmatched.output["leads"] == []
+
+
+async def test_lead_list_and_deal_list_no_scope_returns_clear_error() -> None:
+    lead_tool = CRMLeadListTool(scope=None)
+    result = await lead_tool.execute({})
+    assert result.success is False
+    assert "ulanmagan" in (result.error or "").lower()
+
+    deal_tool = CRMDealListTool(scope=None)
+    result = await deal_tool.execute({})
+    assert result.success is False
+    assert "ulanmagan" in (result.error or "").lower()
+
+
+class TestReadWriteDescriptionsDisambiguate:
+    """JB-17: crm.lead_create/deal_create O'ZI HAM 'bu YARATADI, RO'YXATLASH
+    uchun EMAS' deb aytadi — LLM Planner nomga qarab chalkashmasin."""
+
+    def test_lead_create_points_to_lead_list(self) -> None:
+        desc = CRMLeadCreateTool(scope=None).description
+        assert "YOZISH" in desc
+        assert "crm.lead_list" in desc
+
+    def test_deal_create_points_to_deal_list(self) -> None:
+        desc = CRMDealCreateTool(scope=None).description
+        assert "YOZISH" in desc
+        assert "crm.deal_list" in desc
+
+    def test_lead_list_description_says_read(self) -> None:
+        assert "O'QISH" in CRMLeadListTool(scope=None).description
+
+    def test_deal_list_description_says_read(self) -> None:
+        assert "O'QISH" in CRMDealListTool(scope=None).description
+
+
 async def test_no_scope_returns_clear_error() -> None:
     """Scope berilmasa — jimgina bo'sh emas, aniq xato."""
     tool = CRMContactSearchTool(scope=None)
@@ -97,5 +168,7 @@ async def test_registered_in_default_registry(tmp_path) -> None:
     assert "crm.contact_search" in names
     assert "crm.contact_create" in names
     assert "crm.lead_create" in names
+    assert "crm.lead_list" in names
     assert "crm.deal_create" in names
+    assert "crm.deal_list" in names
     assert "crm.stats" in names

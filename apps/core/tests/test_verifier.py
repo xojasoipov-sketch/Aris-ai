@@ -338,3 +338,121 @@ class TestLLMJudgeTier:
         await v.verify_step(step, _result(output="natija muvaffaqiyatli tayyor boldi"))
 
         assert not judge.calls
+
+
+class TestChatStepVerification:
+    """Fikrlash/chat qadami — JB-17 (ilgari SHARTSIZ ok=True/1.0 edi).
+
+    Shartlarning BIRI yo'q bo'lsa (judge ulanmagan, chiqish yo'q,
+    expected_outcome yo'q/qisqa) — eski xatti-harakat o'zgarishsiz."""
+
+    class _FakeJudge:
+        def __init__(self, verdict: str) -> None:
+            self.verdict = verdict
+            self.calls: list[dict[str, object]] = []
+
+        async def complete(self, *, messages, system=None, max_tokens=None, **_):  # type: ignore[no-untyped-def]
+            self.calls.append({"messages": messages, "system": system})
+
+            class _R:
+                text = self.verdict
+
+            return _R()
+
+    async def test_no_judge_configured_stays_old_behavior(self) -> None:
+        v = Verifier()
+        step = _step(
+            tool_name=None,
+            expected_outcome="Foydalanuvchining aniq savoliga to'liq va aniq javob berish",
+        )
+        result = await v.verify_step(step, None, chat_output="qandaydir javob matni")
+
+        assert result.ok is True
+        assert result.confidence == 1.0
+        assert "Fikrlash qadami" in result.reason
+
+    async def test_no_chat_output_stays_old_behavior(self) -> None:
+        judge = self._FakeJudge("FAIL: yo'q")
+        v = Verifier(llm_judge_provider=judge)
+        step = _step(
+            tool_name=None,
+            expected_outcome="Foydalanuvchining aniq savoliga to'liq va aniq javob berish",
+        )
+        result = await v.verify_step(step, None, chat_output=None)
+
+        assert result.ok is True
+        assert result.confidence == 1.0
+        assert not judge.calls
+
+    async def test_no_expected_outcome_stays_old_behavior(self) -> None:
+        judge = self._FakeJudge("FAIL: yo'q")
+        v = Verifier(llm_judge_provider=judge)
+        step = _step(tool_name=None, expected_outcome=None)
+        result = await v.verify_step(step, None, chat_output="javob matni")
+
+        assert result.ok is True
+        assert result.confidence == 1.0
+        assert not judge.calls
+
+    async def test_short_expected_outcome_skips_judge(self) -> None:
+        """Qisqa shablon chat matniga ham qo'llanmaydi — judge chaqirilmaydi."""
+        judge = self._FakeJudge("FAIL: yo'q")
+        v = Verifier(llm_judge_provider=judge)
+        step = _step(tool_name=None, expected_outcome="qisqa")
+        result = await v.verify_step(step, None, chat_output="butunlay boshqa matn")
+
+        assert result.ok is True
+        assert not judge.calls
+
+    async def test_long_expected_outcome_with_judge_ok(self) -> None:
+        judge = self._FakeJudge("OK: savolga aniq javob berilgan")
+        v = Verifier(llm_judge_provider=judge)
+        step = _step(
+            tool_name=None,
+            expected_outcome="Foydalanuvchining kanal statistikasi haqidagi savoliga aniq javob",
+        )
+        result = await v.verify_step(
+            step, None, chat_output="Kanalingizda 1200 ta a'zo bor, sarlavha: Mening Kanalim."
+        )
+
+        assert result.ok is True
+        assert "LLM-judge" in result.reason
+        assert judge.calls, "judge chaqirilishi kerak edi"
+
+    async def test_long_expected_outcome_with_judge_fail(self) -> None:
+        judge = self._FakeJudge("FAIL: savolga umuman javob berilmagan")
+        v = Verifier(llm_judge_provider=judge)
+        step = _step(
+            tool_name=None,
+            expected_outcome="Foydalanuvchining kanal statistikasi haqidagi savoliga aniq javob",
+        )
+        result = await v.verify_step(step, None, chat_output="Salom, qalaysiz?")
+
+        assert result.ok is False
+        assert "LLM-judge" in result.reason
+
+    async def test_judge_exception_fails_open_to_old_behavior(self) -> None:
+        """JB-17'ning fail-open shartnomasi: judge yiqilsa — hech qachon
+        YANGI yolg'on FAIL yaratmaydi, eski ok=True/1.0 qaytadi."""
+
+        class _ExplodingJudge:
+            async def complete(self, **_):  # type: ignore[no-untyped-def]
+                raise RuntimeError("timeout")
+
+        v = Verifier(llm_judge_provider=_ExplodingJudge())
+        step = _step(
+            tool_name=None,
+            expected_outcome="Foydalanuvchining kanal statistikasi haqidagi savoliga aniq javob",
+        )
+        result = await v.verify_step(step, None, chat_output="qandaydir javob")
+
+        assert result.ok is True
+        assert result.confidence == 1.0
+
+    async def test_tool_step_unaffected_by_chat_output_param(self) -> None:
+        """chat_output berilsa ham — tool qadami o'z yo'lidan ishlaydi."""
+        v = Verifier()
+        result = await v.verify_step(_step(), _result(), chat_output="ignore me")
+
+        assert result.ok is True
+        assert result.confidence == 0.8

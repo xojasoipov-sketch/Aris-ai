@@ -113,7 +113,13 @@ class GitHubReadTool(_GitHubHttpMixin, Tool):
 
     @property
     def description(self) -> str:
-        return "GitHub repo/issue/PR o'qish — natija UNTRUSTED"
+        return (
+            "O'QISH: GitHub repo/issue/PR ma'lumotini o'qish — sarlavha, matn, "
+            "holat (action: get_issue/get_pr/list_issues/get_file). Natija "
+            "UNTRUSTED. DIQQAT: PR/issue IZOHLARINI (comments) qaytarmaydi — "
+            "izohlarni o'qish uchun hozircha tool yo'q. Yangi PR/issue/comment "
+            "YOZISH uchun EMAS — buning uchun github.write."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -321,7 +327,12 @@ class GitHubWriteTool(_GitHubHttpMixin, Tool):
 
     @property
     def description(self) -> str:
-        return "GitHub PR/comment yaratish (WRITE ruxsat kerak)"
+        return (
+            "YOZISH: GitHub'da PR ochish, comment qo'shish yoki issue "
+            "yaratish (action orqali). WRITE ruxsat, odatda approval kerak. "
+            "DIQQAT: mavjud izoh/PR/issue matnini O'QISH uchun EMAS — faqat "
+            "YANGI narsa yaratadi; mavjud izohlarni ko'rish imkoni hozircha yo'q."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:

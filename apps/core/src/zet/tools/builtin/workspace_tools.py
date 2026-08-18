@@ -300,9 +300,10 @@ class TaskUpdateTool(_WorkspaceTool):
     @property
     def description(self) -> str:
         return (
-            "Mavjud vazifani yangilaydi — holatini o'zgartirish (bajarildi, "
-            "jarayonda, to'sildi), muhimligini yoki muddatini qayta belgilash. "
-            "AVVAL `task.list` bilan ID'ni top."
+            "YOZISH: Mavjud vazifani yangilaydi — holatini o'zgartirish "
+            "(bajarildi, jarayonda, to'sildi), muhimligini yoki muddatini "
+            "qayta belgilash. AVVAL `task.list` bilan ID'ni top. DIQQAT: "
+            "yangi vazifa YOZISH uchun EMAS — buning uchun task.create."
         )
 
     @property
