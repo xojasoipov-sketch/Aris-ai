@@ -21,6 +21,13 @@ from zet.devices.camera import CameraProvider
 if TYPE_CHECKING:
     from zet.agents.registry import AgentRegistry
 from zet.devices.desktop import DesktopProvider
+from zet.integrations.public_apis.adapters import (
+    GeocodeForwardTool,
+    GeocodeReverseTool,
+    IpLookupTool,
+)
+from zet.integrations.public_apis.catalog.repository import CatalogRepository
+from zet.integrations.public_apis.health import ProviderHealthTracker
 from zet.tools.builtin.business_tools import (
     BusinessContactLinkTool,
     BusinessCreateTool,
@@ -78,6 +85,7 @@ from zet.tools.builtin.memory_write import MemoryWriteTool, WriteFn
 from zet.tools.builtin.note_list import NoteListTool
 from zet.tools.builtin.note_read import NoteReadTool
 from zet.tools.builtin.note_write import NoteMemoryShadowFn, NoteWriteTool
+from zet.tools.builtin.public_apis_search import PublicAPISearchTool
 from zet.tools.builtin.shell_exec import ShellExecTool
 from zet.tools.builtin.telegram_tools import (
     TelegramChannelPostTool,
@@ -126,6 +134,8 @@ def build_default_registry(
     crm_scope: CRMScope | None = None,
     commerce_scope: CommerceScope | None = None,
     agent_registry: AgentRegistry | None = None,
+    public_apis_health_tracker: ProviderHealthTracker | None = None,
+    public_apis_catalog_repository: CatalogRepository | None = None,
     timezone: str = "Asia/Tashkent",
     feed_latitude: float = 41.3111,
     feed_longitude: float = 69.2797,
@@ -185,6 +195,21 @@ def build_default_registry(
             `StubDesktop(available=False)` — headless server muhitida). ZET
             foydalanuvchining mahalliy Mac/Win kompyuterida ishga tushirilsa,
             `PyAutoGUIDesktop` bilan almashtiriladi.
+        public_apis_health_tracker: `location.geocode`/`.reverse_geocode`/
+            `ip.lookup` (public-apis integratsiyasi, `integrations/
+            public_apis/`) ulashadigan sog'liq kuzatuvchisi. Berilmasa —
+            har biri o'z, izolyatsiyalangan nusxasini oladi (test/lean
+            xatti-harakat); production'da `api/deps.py`
+            `get_public_apis_health_tracker()` orqali BITTA, jarayon
+            umriga teng nusxani beradi (barcha so'rovlar bir xil
+            statistikani ko'radi).
+        public_apis_catalog_repository: `public_apis.search` tooli o'qiydigan
+            katalog (`integrations/public_apis/catalog/`). Berilmasa — bo'sh,
+            izolyatsiyalangan nusxa (test/lean xatti-harakat; tool honestligicha
+            "hali sinxronlanmagan" javob beradi). Production'da `api/deps.py`
+            `get_public_apis_catalog_repository()` orqali operator REST
+            endpoint'lari (`api/routes/public_apis.py`) bilan BITTA, BIR XIL
+            nusxa ulashiladi — ikkinchi mustaqil katalog YARATILMAYDI.
 
     Returns:
         Ro'yxatga olingan `ToolRegistry`.
@@ -296,6 +321,22 @@ def build_default_registry(
     registry.register(DesktopMouseClickTool(provider=desktop_provider))
     if enable_shell:
         registry.register(ShellExecTool(enabled=True))
+    # public-apis integratsiyasi (JB-18) — keyless, HTTPS, bu sessiyada
+    # jonli tekshirilgan adapterlar (`docs/audits/
+    # PUBLIC_APIS_INTEGRATION_AUDIT.md` §6). Hech qanday kalit talab
+    # qilmagani uchun "real-vs-stub" naqshi kerak emas — har doim real.
+    health_tracker = public_apis_health_tracker or ProviderHealthTracker()
+    registry.register(GeocodeForwardTool(health_tracker=health_tracker))
+    registry.register(GeocodeReverseTool(health_tracker=health_tracker))
+    registry.register(IpLookupTool(health_tracker=health_tracker))
+    # `public_apis.search` — Brain'ga ENABLED bo'lmagan (hali adapter
+    # yozilmagan) yozuvlarni ham KASHFIYOT sifatida ko'rsatadi (Bo'lim
+    # 4/9). Katalog (yuqoridagi 3 ta ijro etuvchi adapterdan FARQLI
+    # ravishda) faqat operator `POST /public-apis/refresh` chaqirganda
+    # to'ladi — shuning uchun bo'sh bo'lishi kutilgan holat (tool o'zi
+    # buni honestligicha aytadi, "hech narsa yo'q" deb taxmin qilmaydi).
+    catalog_repository = public_apis_catalog_repository or CatalogRepository()
+    registry.register(PublicAPISearchTool(repository=catalog_repository))
     # JB-16: "nima qila olasiz" so'roviga HAQIQIY registry'dan javob —
     # eng OXIRIDA ro'yxatga olinadi (o'zi ISHORA saqlagani uchun tartib
     # ahamiyatsiz, lekin "hammasidan keyin" logik ravishda to'g'ri).

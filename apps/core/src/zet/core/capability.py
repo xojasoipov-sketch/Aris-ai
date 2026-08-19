@@ -595,6 +595,22 @@ def builtin_capabilities() -> list[Capability]:
             integration_status="REAL",
         ),
         Capability(
+            name="location",
+            description=(
+                "Joy nomidan koordinata, koordinatadan joy nomi, IP manzildan "
+                "taxminiy geolokatsiya topadi (public-apis integratsiyasi, "
+                "JB-18)."
+            ),
+            supported_outcomes=["geocode_place", "reverse_geocode_coords", "locate_ip"],
+            actions=["lookup", "resolve"],
+            default_agents=["research"],
+            default_tools=["location.geocode", "location.reverse_geocode", "ip.lookup"],
+            permission_level=PermissionLevel.READ,
+            risk_level=RiskLevel.LOW,
+            tags=["utility", "location"],
+            integration_status="REAL",
+        ),
+        Capability(
             name="analytics",
             description="Trafik, KPI va anomaliyalarni o'lchaydi va hisobot beradi.",
             supported_outcomes=["measure_traffic", "report_kpis", "detect_anomaly"],

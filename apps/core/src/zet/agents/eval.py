@@ -138,6 +138,11 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "shell.exec": PermissionLevel.EXECUTE,
     # JB-16: "nima qila olasiz" so'roviga HAQIQIY registry'dan javob.
     "system.capabilities": PermissionLevel.READ,
+    # JB-18: public-apis integratsiyasi — keyless, o'qish-faqat lookup'lar.
+    "location.geocode": PermissionLevel.READ,
+    "location.reverse_geocode": PermissionLevel.READ,
+    "ip.lookup": PermissionLevel.READ,
+    "public_apis.search": PermissionLevel.READ,
 }
 
 

@@ -468,6 +468,32 @@ class Settings(BaseSettings):
     qarang. Xizmat o'chiq/erishib bo'lmasa — fail-open bilan MmsTTS'ga
     tushadi, hech narsa qulamaydi."""
 
+    public_apis_source_url: str = (
+        "https://raw.githubusercontent.com/public-apis/public-apis/{branch}/README.md"
+    )
+    """`public-apis/public-apis` katalogi manbai — `{branch}` o'rniga
+    `public_apis_branch` qo'yiladi. To'liq URL bilan almashtirilsa
+    (masalan fork/oyna) — `{branch}` shart emas, aynan shu qatordan
+    o'qiladi (`integrations/public_apis/catalog/source.py`)."""
+
+    public_apis_branch: str = "master"
+    """`public_apis_source_url`dagi `{branch}` o'rniga qo'yiladigan tarmoq."""
+
+    public_apis_sync_interval_hours: int = 24
+    """Katalog necha soatda bir marta qayta sinxronlanishi kerak
+    (kelajakdagi rejalashtirilgan sync uchun konfiguratsiya — hozircha
+    faqat qo'lda/CLI orqali chaqiriladi, `docs/integrations/PUBLIC_APIS.md`
+    'Bilingan cheklovlar' bo'limiga qarang)."""
+
+    public_apis_auto_enable: bool = False
+    """`False` (default) — katalog HECH QACHON o'zi avtomatik sync
+    qilmaydi, faqat operator `z api refresh`/`/api/v1/public-apis/refresh`
+    orqali qo'lda chaqirganda. `True` bo'lsa ham, hech qanday DISCOVERED
+    yozuv o'zi ENABLED tool'ga aylanmaydi — bu bayroq FAQAT "katalog
+    o'zi-o'zidan tarmoqqa chiqsinmi" degan savolga javob beradi (Bo'lim 22:
+    public-apis ishonch ildizi emas, avtomatik ishga tushish ham
+    ATAYLAB yo'q)."""
+
     mms_tts_model_path: str | None = "/data/voice-models/mms-tts-uz"
     """LOKAL, self-hosted TTS (`zet.voice.mms_tts.MmsTTS`) uchun
     HuggingFace `facebook/mms-tts-uzb-script_cyrillic` og'irligi saqlangan

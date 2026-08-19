@@ -872,6 +872,138 @@ def approvals_list() -> None:
     out.print(table)
 
 
+# ── z api ─────────────────────────────────────────────────────────
+# public-apis katalogi — operator/admin buyruqlari (JB-18, Bo'lim 17).
+# HTTP orqali (`_api_call`, `approve`/`reject` bilan bir xil sabab):
+# `CatalogRepository`/`ProviderHealthTracker` jarayon-xotirasida
+# (Redis/DB emas) — CLI ALBATTA ishga tushgan API serveriga chiqishi
+# kerak, aks holda o'zining bo'sh, izolyatsiyalangan nusxasini ko'rardi.
+
+api_app = typer.Typer(
+    name="api",
+    help="Tashqi API katalogi (public-apis integratsiyasi)",
+    no_args_is_help=True,
+)
+app.add_typer(api_app, name="api")
+
+
+@api_app.command("search")
+def api_search(
+    query: str = typer.Argument(..., help="Qidiruv so'zi/iborasi (masalan 'valyuta')"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Nechta nomzod (max 50)"),
+) -> None:
+    """Katalogni qidiradi — reytinglangan nomzodlar ro'yxati (kashfiyot, ijro emas)."""
+    from urllib.parse import urlencode
+
+    _setup()
+    qs = urlencode({"q": query, "limit": limit})
+    status_code, body = _api_call("GET", f"/api/v1/public-apis/search?{qs}")
+    if status_code != 200:
+        detail = body.get("detail") if isinstance(body, dict) else body
+        out.print(f"[red]✗ HTTP {status_code}:[/red] {detail}")
+        raise SystemExit(1)
+
+    candidates = body.get("candidates", [])
+    if not candidates:
+        out.print(f"[dim]'{query}' bo'yicha hech narsa topilmadi.[/dim]")
+        return
+
+    table = Table(title=f"public-apis qidiruv: '{query}'", border_style="cyan")
+    table.add_column("Nom")
+    table.add_column("Provider", style="dim")
+    table.add_column("Auth")
+    table.add_column("Holat")
+    table.add_column("Ball", justify="right")
+    for c in candidates:
+        status = str(c.get("status", "?"))
+        status_style = "green" if status == "enabled" else "dim"
+        table.add_row(
+            str(c.get("name", "?")),
+            str(c.get("provider", "?")),
+            str(c.get("auth_type", "?")),
+            f"[{status_style}]{status}[/{status_style}]",
+            f"{c.get('composite_score', 0):.2f}",
+        )
+    out.print(table)
+
+
+@api_app.command("refresh")
+def api_refresh() -> None:
+    """Katalogni `public-apis/public-apis`dan HAQIQIY qayta sinxronlaydi."""
+    _setup()
+    out.print("[dim]Sinxronlanmoqda...[/dim]")
+    status_code, body = _api_call("POST", "/api/v1/public-apis/refresh")
+    if status_code != 200:
+        detail = body.get("detail") if isinstance(body, dict) else body
+        out.print(f"[red]✗ HTTP {status_code}:[/red] {detail}")
+        raise SystemExit(1)
+
+    if not body.get("ok"):
+        out.print(f"[red]✗ Sync muvaffaqiyatsiz:[/red] {body.get('error')}")
+        raise SystemExit(1)
+
+    out.print(
+        f"[green]✓ Sinxronlandi[/green] — jami {body.get('total_entries')} yozuv "
+        f"({body.get('categories')} kategoriya): "
+        f"+{body.get('added')} yangi, {body.get('changed')} o'zgardi, "
+        f"-{body.get('removed')} o'chdi"
+    )
+
+
+@api_app.command("health")
+def api_health() -> None:
+    """ENABLED adapterlarning HAQIQIY chaqiruv statistikasi."""
+    _setup()
+    status_code, body = _api_call("GET", "/api/v1/public-apis/health")
+    if status_code != 200:
+        detail = body.get("detail") if isinstance(body, dict) else body
+        out.print(f"[red]✗ HTTP {status_code}:[/red] {detail}")
+        raise SystemExit(1)
+
+    if not body:
+        out.print("[dim]Hali hech qanday adapter chaqirilmagan (sog'liq ma'lumoti yo'q).[/dim]")
+        return
+
+    table = Table(title="public-apis adapter sog'ligi", border_style="cyan")
+    table.add_column("Provider")
+    table.add_column("Chaqiruv", justify="right")
+    table.add_column("Muvaffaqiyat", justify="right")
+    table.add_column("Xato", justify="right")
+    table.add_column("O'rtacha (ms)", justify="right")
+    table.add_column("Muvaffaqiyat %", justify="right")
+    for s in body:
+        rate = s.get("success_rate")
+        rate_text = f"{rate:.0%}" if rate is not None else "—"
+        table.add_row(
+            str(s.get("provider", "?")),
+            str(s.get("total_calls", 0)),
+            str(s.get("successes", 0)),
+            str(s.get("failures", 0)),
+            f"{s.get('avg_latency_ms', 0):.0f}",
+            rate_text,
+        )
+    out.print(table)
+
+
+@api_app.command("stats")
+def api_stats() -> None:
+    """Katalog holati — jami yozuv, kategoriya, oxirgi sync."""
+    _setup()
+    status_code, body = _api_call("GET", "/api/v1/public-apis/stats")
+    if status_code != 200:
+        detail = body.get("detail") if isinstance(body, dict) else body
+        out.print(f"[red]✗ HTTP {status_code}:[/red] {detail}")
+        raise SystemExit(1)
+
+    last_sync_at = body.get("last_sync_at") or "hali sinxronlanmagan"
+    out.print(
+        f"Jami yozuv: [bold]{body.get('total_entries')}[/bold]  "
+        f"Kategoriya: [bold]{body.get('categories')}[/bold]  "
+        f"ENABLED: [bold]{body.get('enabled')}[/bold]\n"
+        f"Oxirgi sync: [dim]{last_sync_at}[/dim]"
+    )
+
+
 # ── z daemon ──────────────────────────────────────────────────────
 
 

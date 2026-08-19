@@ -62,6 +62,7 @@ from zet.api.routes import (
     killswitch,
     memory,
     missions,
+    public_apis,
     run,
     state,
     system,
@@ -488,5 +489,6 @@ def create_app() -> FastAPI:
     app.include_router(feeds.router, prefix="/api/v1")
     app.include_router(commerce.router, prefix="/api/v1")
     app.include_router(device.router, prefix="/api/v1")
+    app.include_router(public_apis.router, prefix="/api/v1")
 
     return app

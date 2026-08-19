@@ -1,23 +1,23 @@
 """Secret Manager — maxfiy kalitlar boshqaruvi (Bo'lim 11).
 
-.. deprecated::
-    `SecretManager`/`SecretMetadata`/`SecretStatus` sinflari orqaga
-    moslik uchun saqlanmoqda, lekin produksiyada ISHLATILMAYDI. Ilgari
-    rotatsiya/expiry lifecycle rejalashtirilgan edi, lekin hech qanday
-    kod yo'liga ulanmagan.
+.. note:: ikki xil ishlatilish holati, ikkalasi ham HAQIQIY
 
-    NEGA saqlaymiz: `mask_value()` yordamchisi va tegishli testlar
-    (`tests/test_security_bolim11.py`) uni ishlatadi; sinflarning o'zi
-    ham unit test qamrovida — kelajakda `.env` yuklash yo'liga ulash
-    uchun tayyor.
+    1. **Belgilangan, operator-oldindan-biladigan xizmatlar** (Anthropic,
+       Telegram, GitHub va h.k.) — bular hamon `zet.config.Settings`
+       orqali (`.env`dan, pydantic-settings) yuklanadi. `SecretManager`ni
+       BU maqsad uchun ISHLATMANG — ikkita alohida sir manbasini
+       saqlash sinxronsizlikka olib keladi.
 
-    Ilgari sirlar bu klass orqali yuklanadi deb rejalashtirilgan edi,
-    lekin haqiqiy sirlar `zet.config.Settings` (pydantic-settings orqali
-    `.env` dan) yuklanadi — REPLACEMENT: **zet/config.py**.
-
-    Bu modulni ishlatishdan oldin `SecretManager`ni `Settings.load()`
-    yo'liga ulash kerak, aks holda ikkita alohida sir manbasini
-    saqlash sinxronsizlikka olib keladi.
+    2. **Dinamik, ishga tushirilgandan keyin qo'shiladigan provayder
+       kredensiallari** (masalan `integrations/public_apis/credentials/`
+       — public-apis katalogidan topilgan tashqi API provayderlari,
+       oldindan qancha bo'lishi noma'lum) — `Settings`ning FIKSATLANGAN
+       pydantic maydonlari BU holatga mos EMAS (har yangi provayder kod
+       o'zgarishi+qayta deploy talab qilardi). Aynan shu holat uchun
+       `SecretManager` ILGARI QURILGAN EDI — `register()`/`get_value()`/
+       `rotate()`/`revoke()`/`list_secrets()` allaqachon bor va sinovdan
+       o'tgan (`tests/test_security_bolim11.py`). Bu modul hozir aynan
+       shu (2) maqsad uchun ishlatiladi.
 
 Xavfsizlik:
     - Kalitlar hech qachon logga yozilmaydi
@@ -85,6 +85,12 @@ class SecretMetadata(BaseModel, frozen=True):
 
     rotation_count: int = 0
     """Necha marta rotatsiya qilingan."""
+
+    last_used_at: datetime | None = None
+    """Oxirgi marta `get_value()` orqali HAQIQATAN o'qilgan vaqt (`None`
+    — hali hech qachon ishlatilmagan). `integrations/public_apis`
+    sog'liq/audit ko'rinishida "bu kalit ishlatilyaptimi" savoliga
+    javob berish uchun (Phase 8/17)."""
 
     masked_value: str = ""
     """Maskalangan qiymat (oxirgi 4 ta belgi). Masalan: '****abcd'."""
@@ -186,7 +192,15 @@ class SecretManager:
             return None
         if meta.status in (SecretStatus.REVOKED, SecretStatus.EXPIRED):
             return None
-        return self._values.get(secret_id)
+        value = self._values.get(secret_id)
+        if value is not None:
+            # Har HAQIQIY o'qish `last_used_at`ni yangilaydi — chaqiruvchi
+            # buni alohida eslab qolishi shart emas (unutilishi mumkin
+            # bo'lgan qadam emas, `get_value()`ning o'zi kafolatlaydi).
+            self._metadata[secret_id] = meta.model_copy(
+                update={"last_used_at": datetime.now(UTC)}
+            )
+        return value
 
     def get_metadata(self, name: str) -> SecretMetadata | None:
         """Kalit metadatasini olish (qiymatsiz).

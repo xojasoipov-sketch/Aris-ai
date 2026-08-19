@@ -40,6 +40,9 @@ from zet.devices.repository import DeviceDBRepository
 from zet.domain.command import Command, ConversationTurn
 from zet.domain.enums import MessageRole, TaskClass
 from zet.domain.memory import MemoryQuery, MemorySearchResult
+from zet.integrations.public_apis.catalog.repository import CatalogRepository
+from zet.integrations.public_apis.credentials.manager import PublicAPICredentialManager
+from zet.integrations.public_apis.health.scoring import ProviderHealthTracker
 from zet.llm.base import ChatMessage, LLMError, LLMProvider
 from zet.llm.factory import build_providers
 from zet.llm.routed_provider import RoutedLLMProvider
@@ -226,6 +229,29 @@ async def _commerce_scope() -> AsyncIterator[CommerceRepository]:
 
 
 @lru_cache(maxsize=1)
+def get_public_apis_health_tracker() -> ProviderHealthTracker:
+    """public-apis adapterlari (`location.geocode`/`ip.lookup` va h.k.)
+    ulashadigan sog'liq kuzatuvchisi (singleton) — barcha so'rovlar BIR
+    XIL muvaffaqiyat/kechikish statistikasini ko'radi va yozadi."""
+    return ProviderHealthTracker()
+
+
+@lru_cache(maxsize=1)
+def get_public_apis_catalog_repository() -> CatalogRepository:
+    """public-apis katalogi (singleton, jarayon-xotirasida) — `z api
+    refresh`/`/api/v1/public-apis/refresh` orqali qo'lda to'ldiriladi
+    (avtomatik sync YO'Q, `config.py::public_apis_auto_enable`ga qarang)."""
+    return CatalogRepository()
+
+
+@lru_cache(maxsize=1)
+def get_public_apis_credential_manager() -> PublicAPICredentialManager:
+    """Dinamik public-API provayder kredensiallari (singleton) —
+    `zet.security.secrets.SecretManager` ustida (Bo'lim 8)."""
+    return PublicAPICredentialManager()
+
+
+@lru_cache(maxsize=1)
 def get_tool_registry() -> ToolRegistry:
     """Global tool registry (singleton) — barcha builtin toollar bilan.
 
@@ -306,6 +332,8 @@ def get_tool_registry() -> ToolRegistry:
         # HR workforce management uchun (yangi talab): agent.list/pause/
         # resume/disable/stats tool'lari registry orqali ishlaydi.
         agent_registry=get_agent_registry(),
+        public_apis_health_tracker=get_public_apis_health_tracker(),
+        public_apis_catalog_repository=get_public_apis_catalog_repository(),
         timezone=settings.timezone,
         feed_latitude=settings.feed_latitude,
         feed_longitude=settings.feed_longitude,

@@ -256,10 +256,14 @@ class TestIndices:
 
 
 class TestBuiltins:
-    def test_builtin_capabilities_ships_20_and_passes_registry(self) -> None:
-        """T9 — 20 seed capability barcha kutilgan nomlar bilan, launch business scenario resolve."""
+    def test_builtin_capabilities_ships_21_and_passes_registry(self) -> None:
+        """T9 — 21 seed capability barcha kutilgan nomlar bilan, launch business scenario resolve.
+
+        20 → 21 (JB-18, public-apis integratsiyasi): `location` qo'shildi —
+        `location.geocode`/`.reverse_geocode`/`ip.lookup` (barchasi
+        keyless, READ, LOW risk)."""
         caps = builtin_capabilities()
-        assert len(caps) == 20
+        assert len(caps) == 21
         expected = {
             "business",
             "branding",
@@ -281,12 +285,13 @@ class TestBuiltins:
             "security",
             "finance",
             "communication",
+            "location",
         }
         assert {c.name for c in caps} == expected
 
         reg = CapabilityRegistry()
         reg.register_many(caps)  # istisno bo'lmasligi kerak
-        assert reg.count == 20
+        assert reg.count == 21
 
         res = reg.resolve(
             [

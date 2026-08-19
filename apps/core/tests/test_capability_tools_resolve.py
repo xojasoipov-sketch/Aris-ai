@@ -53,6 +53,10 @@ class TestBuiltinCapabilityToolsResolve:
         assert not empty, f"Bo'sh default_tools'li capability'lar: {empty}"
 
     def test_builtin_capability_count_unchanged(self) -> None:
-        """Regressiya qulfi — reconciliation capability SONI emas, faqat
-        `default_tools` MAZMUNIni o'zgartirishi kerak edi."""
-        assert len(builtin_capabilities()) == 20
+        """Regressiya qulfi — JB-13 reconciliation capability SONI emas,
+        faqat `default_tools` MAZMUNIni o'zgartirishi kerak edi.
+
+        20 → 21 (JB-18, public-apis integratsiyasi): bu safar SON
+        ATAYLAB o'zgardi — `location` capability'si YANGI, haqiqiy
+        capability sifatida qo'shildi (reconciling emas, kengaytirish)."""
+        assert len(builtin_capabilities()) == 21
