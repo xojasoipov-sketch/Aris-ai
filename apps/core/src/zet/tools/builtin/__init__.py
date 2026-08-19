@@ -68,6 +68,11 @@ from zet.tools.builtin.feed_tools import (
     WeatherNowTool,
 )
 from zet.tools.builtin.github import GitHubReadTool, GitHubWriteTool
+from zet.tools.builtin.github_intel_tools import (
+    GitHubAnalyzeRepositoryTool,
+    GitHubCompareRepositoriesTool,
+    GitHubSearchRepositoryTool,
+)
 from zet.tools.builtin.hr_tools import (
     AgentDisableTool,
     AgentListTool,
@@ -231,6 +236,13 @@ def build_default_registry(
     registry.register(WebReaderTool(stub=web_reader_stub))
     registry.register(GitHubReadTool(token=github_token))
     registry.register(GitHubWriteTool(token=github_token))
+    # GitHub Intelligence (JB-19) — bitta MA'LUM repo'ning issue/PR bilan
+    # ISHLASHDAN (yuqoridagi ikkitasi) farqli, YANGI repo QIDIRISH/TAHLIL
+    # qilish uchun — bir xil token/HTTP infratuzilmasini ishlatadi
+    # (`_GitHubHttpMixin`), ikkinchi mustaqil klient QURILMAYDI.
+    registry.register(GitHubSearchRepositoryTool(token=github_token))
+    registry.register(GitHubAnalyzeRepositoryTool(token=github_token))
+    registry.register(GitHubCompareRepositoriesTool(token=github_token))
     registry.register(
         VideoLearnTool(api_key=gemini_api_key, model=gemini_video_model or DEFAULT_VIDEO_MODEL)
     )

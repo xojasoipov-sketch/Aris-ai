@@ -143,6 +143,11 @@ TOOL_PERMISSIONS: dict[str, PermissionLevel] = {
     "location.reverse_geocode": PermissionLevel.READ,
     "ip.lookup": PermissionLevel.READ,
     "public_apis.search": PermissionLevel.READ,
+    # JB-19: GitHub Intelligence — repo qidirish/tahlil, hech narsani
+    # o'zgartirmaydi (metadata o'qiladi, kod ijro etilmaydi).
+    "github.search_repository": PermissionLevel.READ,
+    "github.analyze_repository": PermissionLevel.READ,
+    "github.compare_repositories": PermissionLevel.READ,
 }
 
 
