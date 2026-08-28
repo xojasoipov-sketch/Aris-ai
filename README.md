@@ -40,7 +40,9 @@ Postgres+Redis ko'taradi, `.env` va `.env.local` ni sozlaydi (token
 avtomatik), dependency o'rnatadi, migratsiya qiladi va ikkala serverni
 ishga tushiradi. So'ng brauzerda **http://localhost:3000**.
 
-Talab: Docker, Node 20+, [uv](https://astral.sh/uv). To'xtatish — Ctrl+C.
+Talab: **Node 20+** (majburiy). `uv` va `pnpm` yo'q bo'lsa skript o'zi
+o'rnatadi. **Docker ixtiyoriy** — bo'lsa Postgres+Redis, bo'lmasa SQLite
+(dev rejim, `apps/core/data/zet.db`). To'xtatish — Ctrl+C.
 
 > ZET javob berishi uchun `apps/core/.env` ichiga kamida bitta LLM kaliti
 > kerak (masalan bepul `ZET_GOOGLE_API_KEY` yoki `ZET_GROQ_API_KEY`).

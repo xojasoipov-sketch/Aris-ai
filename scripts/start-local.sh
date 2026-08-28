@@ -6,8 +6,11 @@
 #     bash scripts/start-local.sh
 #
 # Nima qiladi:
-#     1. Kerakli dasturlarni tekshiradi (docker, uv, node)
-#     2. Postgres + Redis ko'taradi
+#     1. Kerakli dasturlarni tekshiradi (node majburiy; uv yo'q bo'lsa
+#        o'zi o'rnatadi; docker ixtiyoriy)
+#     2. Docker bo'lsa — Postgres + Redis ko'taradi.
+#        Docker bo'lmasa — SQLite'ga tushadi (dev rejim, hech narsa
+#        o'rnatish shart emas)
 #     3. apps/core/.env yaratadi (yo'q bo'lsa) — ZET_API_TOKEN avtomatik
 #     4. Python dependency + migratsiya
 #     5. apps/web/.env.local yaratadi (token backend bilan bir xil)
@@ -49,22 +52,44 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "'$1' topilmadi. O'rnating: $2"
 }
 
-need docker "https://docs.docker.com/get-docker/"
-need node   "https://nodejs.org (20+ versiya)"
-need npm    "Node.js bilan birga keladi"
+# Node — MAJBURIY (frontend'siz ishlab bo'lmaydi).
+need node "https://nodejs.org (20+ versiya)"
+need npm  "Node.js bilan birga keladi (pnpm o'rnatish uchun kerak)"
 
+# uv — yo'q bo'lsa o'zimiz o'rnatamiz (~/.local/bin ichiga, tizimga tegmaydi).
 if ! command -v uv >/dev/null 2>&1; then
-  die "'uv' topilmadi. O'rnating: curl -LsSf https://astral.sh/uv/install.sh | sh"
+  warn "'uv' topilmadi — o'rnatilmoqda..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 \
+    || die "uv o'rnatilmadi. Qo'lda: curl -LsSf https://astral.sh/uv/install.sh | sh"
+  # O'rnatuvchi shu ikki joydan biriga qo'yadi — PATH'ga qo'shamiz.
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  command -v uv >/dev/null 2>&1 || die "uv o'rnatildi, lekin PATH'da topilmadi. Terminalni qayta oching."
+  ok "uv o'rnatildi"
 fi
 
-docker info >/dev/null 2>&1 || die "Docker ishlamayapti. Docker Desktop'ni ishga tushiring."
-
-ok "docker · uv · node $(node --version)"
+# Docker — IXTIYORIY. Bo'lmasa SQLite'ga tushamiz.
+DB_MODE="postgres"
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  ok "docker · uv · node $(node --version)"
+else
+  DB_MODE="sqlite"
+  if command -v docker >/dev/null 2>&1; then
+    warn "Docker o'rnatilgan, lekin ishlamayapti (Docker Desktop yopiq?)."
+  else
+    warn "Docker topilmadi."
+  fi
+  warn "SQLite rejimiga o'tildi — hech narsa o'rnatish shart emas."
+  warn "Bu DEV rejim: ma'lumot ./apps/core/data/zet.db faylida saqlanadi."
+  warn "Postgres rejimi uchun Docker Desktop'ni o'rnatib skriptni qayta ishga tushiring."
+  ok "uv · node $(node --version)"
+fi
 
 # ── 2. Postgres + Redis ────────────────────────────────────────────
-step "Postgres + Redis ko'tarilmoqda"
-docker compose -f infra/docker-compose.yml up -d --wait
-ok "postgres:5432 · redis:6379"
+if [ "$DB_MODE" = "postgres" ]; then
+  step "Postgres + Redis ko'tarilmoqda"
+  docker compose -f infra/docker-compose.yml up -d --wait
+  ok "postgres:5432 · redis:6379"
+fi
 
 # ── 3. Backend konfiguratsiyasi ────────────────────────────────────
 step "Backend konfiguratsiyasi (.env)"
@@ -74,8 +99,17 @@ if [ ! -f "$CORE/.env" ]; then
   ok ".env yaratildi (.env.example dan)"
 fi
 
-# ZET_API_TOKEN bo'sh bo'lsa — tasodifiy qiymat yozamiz.
-CURRENT_TOKEN="$(grep -E '^ZET_API_TOKEN=' "$CORE/.env" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+# .env qatoridan qiymat ajratish.
+# MUHIM: `.env.example` da qiymatlardan keyin satr-ichi izoh bor
+#   ZET_API_TOKEN=                   # prod'da MAJBURIY
+# `sed 's/#.*//'` bo'lmasa, o'sha izoh TOKEN deb o'qiladi va frontend'ga
+# axlat qiymat yoziladi (dotenv esa backend tomonda izohni tashlab,
+# tokenni bo'sh deb ko'radi) — natijada hamma so'rov 401 bo'lardi.
+env_value() {
+  grep -E "^$1=" "$CORE/.env" | head -1 | cut -d= -f2- | sed 's/#.*//' | tr -d '[:space:]'
+}
+
+CURRENT_TOKEN="$(env_value ZET_API_TOKEN)"
 
 if [ -z "$CURRENT_TOKEN" ]; then
   if command -v openssl >/dev/null 2>&1; then
@@ -91,6 +125,27 @@ if [ -z "$CURRENT_TOKEN" ]; then
   ok "ZET_API_TOKEN avtomatik yaratildi"
 else
   ok "ZET_API_TOKEN allaqachon o'rnatilgan"
+fi
+
+# SQLite rejimida — DB manzilini almashtiramiz.
+# DIQQAT: faqat manzil hali lokal Postgres'ga qaragan bo'lsa tegamiz.
+# Foydalanuvchi o'zi boshqa DB yozgan bo'lsa — tegmaymiz.
+if [ "$DB_MODE" = "sqlite" ]; then
+  mkdir -p "$CORE/data"
+  CURRENT_DB="$(env_value ZET_DATABASE_URL)"
+  case "$CURRENT_DB" in
+    *localhost:5432*|*127.0.0.1:5432*|"")
+      tmp="$(mktemp)"
+      sed "s|^ZET_DATABASE_URL=.*|ZET_DATABASE_URL=sqlite+aiosqlite:///./data/zet.db|" \
+        "$CORE/.env" > "$tmp"
+      mv "$tmp" "$CORE/.env"
+      ok "ZET_DATABASE_URL → SQLite (apps/core/data/zet.db)"
+      ;;
+    *)
+      warn "ZET_DATABASE_URL o'zgartirilmadi (siz o'zingiz sozlagansiz):"
+      warn "  $CURRENT_DB"
+      ;;
+  esac
 fi
 
 # LLM kaliti bormi — ogohlantirish (majburiy emas, lekin ZET aqlsiz bo'ladi)
@@ -119,8 +174,32 @@ EOF
 ok ".env.local yozildi (token backend bilan bir xil)"
 
 # ── 6. npm dependency ──────────────────────────────────────────────
-step "Frontend dependency o'rnatilmoqda"
-(cd "$WEB" && npm install --no-audit --no-fund)
+# Loyiha pnpm ishlatadi — `apps/web/pnpm-lock.yaml` commit qilingan va
+# `apps/web/Dockerfile` ham `pnpm install --frozen-lockfile` qiladi.
+# `npm install` bu yerda XATO: lockfile'ni e'tiborsiz qoldiradi va
+# pnpm yaratgan node_modules ustida "Cannot read properties of null"
+# bilan yiqiladi (mahalliy sinovda tasdiqlangan).
+step "Frontend dependency o'rnatilmoqda (pnpm)"
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  if command -v corepack >/dev/null 2>&1; then
+    warn "pnpm topilmadi — corepack orqali o'rnatilmoqda..."
+    corepack enable >/dev/null 2>&1 || true
+    corepack prepare pnpm@9 --activate >/dev/null 2>&1 || true
+  fi
+fi
+if ! command -v pnpm >/dev/null 2>&1; then
+  warn "pnpm hali yo'q — npm orqali global o'rnatilmoqda..."
+  npm install -g pnpm@9 >/dev/null 2>&1 \
+    || die "pnpm o'rnatilmadi. Qo'lda: npm install -g pnpm@9"
+fi
+
+# Avval lockfile'ga qat'iy rioya qilamiz (Dockerfile bilan bir xil).
+# Lockfile package.json'dan orqada qolgan bo'lsa — yumshoqroq rejim.
+if ! (cd "$WEB" && pnpm install --frozen-lockfile 2>/dev/null); then
+  warn "Lockfile package.json bilan mos emas — oddiy o'rnatishga o'tildi."
+  (cd "$WEB" && pnpm install)
+fi
 ok "node_modules tayyor"
 
 # ── 7. Ishga tushirish ─────────────────────────────────────────────
@@ -134,7 +213,9 @@ cleanup() {
   [ -n "${BACKEND_PID:-}" ] && kill "$BACKEND_PID" 2>/dev/null || true
   [ -n "${WEB_PID:-}" ]     && kill "$WEB_PID" 2>/dev/null || true
   wait 2>/dev/null || true
-  printf "  Postgres/Redis konteynerlari ishlab turibdi. To'xtatish: make down\n"
+  if [ "${DB_MODE:-}" = "postgres" ]; then
+    printf "  Postgres/Redis konteynerlari ishlab turibdi. To'xtatish: make down\n"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -160,7 +241,7 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-(cd "$WEB" && npm run dev) > "$LOG_DIR/web.log" 2>&1 &
+(cd "$WEB" && pnpm dev) > "$LOG_DIR/web.log" 2>&1 &
 WEB_PID=$!
 
 printf "  frontend kutilmoqda"
@@ -179,6 +260,12 @@ for i in $(seq 1 90); do
   sleep 1
 done
 
+if [ "$DB_MODE" = "postgres" ]; then
+  DB_LABEL="Postgres (docker)"
+else
+  DB_LABEL="SQLite — apps/core/data/zet.db (dev rejim)"
+fi
+
 cat <<EOF
 
 ${G}${B}════════════════════════════════════════════${N}
@@ -189,6 +276,8 @@ ${G}${B}════════════════════════
 
   Backend API:       http://localhost:8000
   API hujjatlari:    http://localhost:8000/docs
+
+  Ma'lumotlar bazasi: ${DB_LABEL}
 
   Loglar:            .local-logs/backend.log
                      .local-logs/web.log
