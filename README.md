@@ -30,6 +30,21 @@ Hozirgi holat: **P0 — Repository Audit yakunlandi.** Kod hali yozilmagan.
 
 **Bo'lim 1 → 2 → 3 → 4 (Telegram)** ≈ 8–9 hafta → telefondan to'liq boshqariladigan ZET.
 
+## Lokal ishga tushirish (bitta buyruq)
+
+```bash
+bash scripts/start-local.sh
+```
+
+Postgres+Redis ko'taradi, `.env` va `.env.local` ni sozlaydi (token
+avtomatik), dependency o'rnatadi, migratsiya qiladi va ikkala serverni
+ishga tushiradi. So'ng brauzerda **http://localhost:3000**.
+
+Talab: Docker, Node 20+, [uv](https://astral.sh/uv). To'xtatish — Ctrl+C.
+
+> ZET javob berishi uchun `apps/core/.env` ichiga kamida bitta LLM kaliti
+> kerak (masalan bepul `ZET_GOOGLE_API_KEY` yoki `ZET_GROQ_API_KEY`).
+
 ## Rivojlanish prinsipi
 
 Hammasini birdan qurma. Har bir bo'lim oxirida 4 ta artefakt majburiy:
