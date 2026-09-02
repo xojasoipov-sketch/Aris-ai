@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* ════════════════════════════════════════════════════════════════
+   ZET design token'lari v2 — ega master prompti (ADR-0008).
+   Yagona amaldagi manba: apps/web/CLAUDE.md. O'zgartirish faqat ADR orqali.
+   ════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Fon qatlamlari — hech qachon sof #000 emas, doim ko'k-qora tint */
+  --bg-base: #050608;
+  --bg-elevated: #0b0e14;
+  --surface-hover: #14161c;
+
+  /* Chegaralar */
+  --border-hairline: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(90, 160, 255, 0.45);
+
+  /* Matn */
+  --text-primary: #f2f4f8;
+  --text-secondary: #8a8f9c;
+  --text-muted: #4b4f58;
+
+  /* Akцent */
+  --accent-blue: #4c8dff;
+  --accent-glow: #7dd3fc;
+
+  /* Semantik status */
+  --status-online: #22c55e;
+  --status-working: #f59e0b;
+  --status-thinking: #f59e0b; /* working bilan bir rang — animatsiya farqlaydi */
+  --status-offline: #4b4f58;
+  --status-alert: #ef4444;
+
+  /* Shakl */
+  --radius-card: 15px;
+  --radius-pill: 999px;
+}
+
+/* Tailwind v4 theme mapping */
+@theme inline {
+  --color-base: var(--bg-base);
+  --color-elevated: var(--bg-elevated);
+  --color-hover: var(--surface-hover);
+  --color-hairline: var(--border-hairline);
+  --color-active: var(--border-active);
+  --color-ink: var(--text-primary);
+  --color-ink-2: var(--text-secondary);
+  --color-ink-3: var(--text-muted);
+  --color-accent: var(--accent-blue);
+  --color-glow: var(--accent-glow);
+  --color-online: var(--status-online);
+  --color-working: var(--status-working);
+  --color-offline: var(--status-offline);
+  --color-alert: var(--status-alert);
+  --radius-card: var(--radius-card);
+}
+
+/* ── Baza ─────────────────────────────────────────────────────── */
+
+html,
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  min-height: 100%;
+}
+
+body {
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: rgba(76, 141, 255, 0.3);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-hover) transparent;
+}
+
+/* ── Panel — asosiy karta uslubi (CLAUDE.md: hairline + inset, blur YO'Q) ── */
+
+.panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  /* Yuqori qirrada past-opacity ichki yorug'lik chizig'i */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 180ms ease-out;
+}
+
+.panel:hover {
+  border-color: var(--border-active);
+}
+
+/* Floating widget / modal uchun ALOHIDA uslub — faqat shu yerda blur */
+.floating {
+  background: rgba(11, 14, 20, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+}
+
+/* Bo'lim sarlavhasi — sentence-case, HUD-uslub UPPERCASE emas
+ * (sifat standarti: Linear/Stripe panellari oddiy sarlavha ishlatadi) */
+.eyebrow {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* Data raqamlari — yangilanishda sakramaydi */
+.data {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Keyframes (faqat mayda ambient) ──────────────────────────── */
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

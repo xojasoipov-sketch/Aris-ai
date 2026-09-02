@@ -1,0 +1,70 @@
+# ── Sirlar (HECH QACHON commit qilinmaydi) ─────────────────────────
+.env
+.env.*
+!.env.example
+# `.env.*` naqshi `!.env.example`dan tashqari HAR narsani yutadi —
+# `.env.web.example` xuddi shu sabab jim tashlab ketilgan edi (Hetzner
+# bootstrap skripti uni topa olmay yiqilgani orqali topildi). Boshqa
+# `*.example` shablon qo'shilsa, shu yerga ham qo'shilishi kerak.
+!infra/hetzner/.env.web.example
+*.key
+*.pem
+*.p12
+secrets/
+*.sops.yaml
+
+# ── Python ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+ENV/
+
+# ── Test / sifat ───────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+
+# ── Node / frontend (Bo'lim 12) ────────────────────────────────────
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# ── ZET runtime ma'lumotlari ───────────────────────────────────────
+data/
+vault/
+sites/
+logs/
+*.db
+*.sqlite3
+/models/
+.ollama/
+
+# ── Hetzner deploy (server-mahalliy, .env sirlar) ───────────────────
+infra/hetzner/.env
+infra/hetzner/.env.web
+infra/hetzner/Caddyfile.active
+
+# ── IDE / OS ───────────────────────────────────────────────────────
+.idea/
+.vscode/
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.swp
+
+# scripts/start-local.sh runtime loglari — sirlar bo'lmasa ham, source emas
+.local-logs/

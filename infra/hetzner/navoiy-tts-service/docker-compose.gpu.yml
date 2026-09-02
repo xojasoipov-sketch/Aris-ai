@@ -1,0 +1,48 @@
+# Navoiy TTS inference mikroservisi — ALOHIDA GPU serverida ishga
+# tushiriladi (asosiy `infra/hetzner/docker-compose.prod.yml`dan
+# MUSTAQIL — ular faqat HTTP orqali gaplashadi, bitta serverda
+# bo'lishlari shart emas).
+#
+# Ishga tushirish: README.md'ga qarang (avval model/checkpoint'larni
+# yuklab olish kerak, keyin shu compose).
+
+name: navoiy-tts
+
+services:
+  navoiy-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: navoiy-tts-service
+    environment:
+      COSYVOICE_DIR: /opt/CosyVoice
+      BASE_MODEL_DIR: /opt/CosyVoice/pretrained_models/CosyVoice2-0.5B
+      CHECKPOINT_PATH: /opt/navoiy-tts/emotion_600h_joint.pt
+      INFERENCE_SCRIPT: /opt/navoiy-tts/inference.py
+      # TAXMINIY — README.md 3-qadamiga qarang, haqiqiy fayl nomini
+      # SIZ tekshirib to'g'rilashingiz kerak.
+      NAVOIY_REFERENCE_PATH: ${NAVOIY_REFERENCE_PATH:-/opt/navoiy-tts/reference.wav}
+      NAVOIY_DEFAULT_EMOTION: ${NAVOIY_DEFAULT_EMOTION:-neutral}
+      NAVOIY_TIMEOUT_S: ${NAVOIY_TIMEOUT_S:-120}
+    volumes:
+      # Model/checkpoint og'irliklari (huggingface-cli download bilan
+      # bir martalik to'ldiriladi, README.md 2-qadam) — image build'iga
+      # KIRMAYDI, deploy vaqtida host yo'liga bog'lanadi.
+      - ${COSYVOICE_MODELS_DIR:-./models/CosyVoice2-0.5B}:/opt/CosyVoice/pretrained_models/CosyVoice2-0.5B:ro
+      - ${NAVOIY_TTS_DIR:-./models/navoiy-tts}:/opt/navoiy-tts:ro
+    ports:
+      - "8100:8100"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

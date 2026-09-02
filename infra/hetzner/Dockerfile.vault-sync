@@ -1,0 +1,20 @@
+# ZET vault-sync konteyner — Alpine + git + dcron.
+#
+# `Dockerfile.backup`ning namunasi bo'yicha: kichik, alohida konteyner,
+# `vault_data` volume'ni backend bilan BIRGA (bir xil mount nuqtasida)
+# ko'radi va uni tashqi git repo bilan sinxronlaydi.
+
+FROM alpine:3.20
+
+RUN apk add --no-cache git dcron tini bash coreutils \
+    && mkdir -p /data/vault /var/log
+
+COPY vault-sync.sh /vault-sync.sh
+COPY vault-sync-cron /etc/crontabs/root
+RUN chmod +x /vault-sync.sh \
+    && chmod 0600 /etc/crontabs/root
+
+# Konteyner startida bir marta sinxronlash — birinchi ishga tushishda
+# 10 daqiqa kutmasin. Keyin cron foreground rejimda ishlaydi.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["sh", "-c", "/vault-sync.sh >> /var/log/vault-sync.log 2>&1 || true; crond -f -l 2"]

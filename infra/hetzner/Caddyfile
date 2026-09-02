@@ -1,0 +1,16 @@
+# ZET — Caddy reverse-proxy sozlamasi.
+#
+# `${ZET_DOMAIN}` va `${ZET_API_DOMAIN}` bootstrap skript orqali
+# `.env`dan almashtiriladi (`envsubst`). Domen berilmasa (faqat IP
+# bilan sinov), `setup.sh` buni avtomatik `:80`ga tushiradi — Let's
+# Encrypt domensiz ishlamaydi.
+
+{$ZET_DOMAIN} {
+	reverse_proxy web:3000
+	encode gzip
+}
+
+{$ZET_API_DOMAIN} {
+	reverse_proxy backend:8000
+	encode gzip
+}

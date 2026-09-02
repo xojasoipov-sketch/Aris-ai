@@ -1,0 +1,376 @@
+"""Approval Gate — tasdiq so'rash va kutish (Z1.12).
+
+Fail-closed: TTL tugasa → EXPIRED → run CANCELLED.
+Tasdiqni chetlab o'tish mumkin emas (kod + test bilan isbot).
+
+Bog'liq qarorlar:
+    V-32 — majburiy tasdiq
+    A-01 — AWAITING_APPROVAL holati
+    AR-01 — restart-safe (session_factory berilsa DB'ga write-through)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
+
+import structlog
+
+from zet.domain.enums import ApprovalStatus, PermissionLevel, RiskLevel
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+log = structlog.get_logger(__name__)
+
+
+class ApprovalError(Exception):
+    """Tasdiq jarayonida xato."""
+
+
+class ApprovalExpiredError(ApprovalError):
+    """Tasdiq muddati tugadi (TTL)."""
+
+
+class ApprovalRejectedError(ApprovalError):
+    """Ega tasdiqni rad etdi."""
+
+
+class ApprovalRequest:
+    """Tasdiq so'rovi — yaratilganidan boshlab TTL bilan chegaralangan.
+
+    Attributes:
+        id: unikal identifikator
+        run_id: bog'liq run
+        step_position: qadam pozitsiyasi
+        reason: nima uchun tasdiq kerak
+        requested_permission: talab qilingan ruxsat
+        tool_name: tool nomi
+        preview: bajarilishi kutilayotgan amalning qisqa tavsifi
+        status: hozirgi holat
+        created_at: yaratilgan vaqt
+        expires_at: muddati tugash vaqti
+        decided_at: qaror qilingan vaqt
+        decision_note: qaror izohi
+    """
+
+    def __init__(
+        self,
+        *,
+        run_id: uuid.UUID,
+        step_position: int | None = None,
+        reason: str,
+        requested_permission: PermissionLevel,
+        tool_name: str | None = None,
+        preview: dict[str, Any] | None = None,
+        ttl_minutes: int = 30,
+        now: datetime | None = None,
+        mission_id: uuid.UUID | None = None,
+        risk_level: RiskLevel | None = None,
+    ) -> None:
+        _now = now or datetime.now(tz=UTC)
+        self.id: uuid.UUID = uuid.uuid4()
+        self.run_id = run_id
+        # Mission-level approval (Bo'lim 2, §2.2). Ega "sayt qur" desa
+        # butun mission ega tomonidan tasdiqlanishi kerak — bitta step
+        # emas. Bu maydon step-darajali approval'ga TA'SIR QILMAYDI:
+        # step approval'lar `step_position` bilan keladi, mission
+        # approval'lar esa `mission_id` bilan; ikkalasi ham bir vaqtda
+        # bo'lishi mumkin.
+        self.mission_id = mission_id
+        self.step_position = step_position
+        self.reason = reason
+        self.requested_permission = requested_permission
+        self.tool_name = tool_name
+        self.preview: dict[str, Any] = preview or {}
+        self.status: ApprovalStatus = ApprovalStatus.PENDING
+        self.created_at: datetime = _now
+        self.expires_at: datetime = _now + timedelta(minutes=ttl_minutes)
+        self.decided_at: datetime | None = None
+        self.decision_note: str | None = None
+        # NEGA risk_level ochiq maydon: CLI (`z approvals`) va Telegram
+        # bildirishnomasi "nima uchun tasdiq kerak?" degan savolga
+        # darhol javob bera olsin va HIGH ni ustuvor ko'rsatsin. None
+        # bo'lsa — eski chaqiruvchi (risk axis'ni bilmagan) yozgan.
+        self.risk_level: RiskLevel | None = risk_level
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        """Muddati tugaganmi."""
+        return (now or datetime.now(tz=UTC)) >= self.expires_at
+
+    def approve(
+        self,
+        *,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Tasdiqni qabul qilish.
+
+        Raises:
+            ApprovalError: holat PENDING emas
+            ApprovalExpiredError: muddati tugagan
+        """
+        _now = now or datetime.now(tz=UTC)
+        if self.is_expired(_now):
+            self.status = ApprovalStatus.EXPIRED
+            raise ApprovalExpiredError("Tasdiq muddati tugadi")
+        if self.status != ApprovalStatus.PENDING:
+            raise ApprovalError(f"Tasdiq {self.status.value} holatda — o'zgartirib bo'lmaydi")
+        self.status = ApprovalStatus.APPROVED
+        self.decided_at = _now
+        self.decision_note = note
+        log.info("approval.approved", approval_id=str(self.id), run_id=str(self.run_id))
+
+    def reject(
+        self,
+        *,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Tasdiqni rad etish.
+
+        Raises:
+            ApprovalError: holat PENDING emas
+            ApprovalExpiredError: muddati tugagan
+        """
+        _now = now or datetime.now(tz=UTC)
+        if self.is_expired(_now):
+            self.status = ApprovalStatus.EXPIRED
+            raise ApprovalExpiredError("Tasdiq muddati tugadi")
+        if self.status != ApprovalStatus.PENDING:
+            raise ApprovalError(f"Tasdiq {self.status.value} holatda — o'zgartirib bo'lmaydi")
+        self.status = ApprovalStatus.REJECTED
+        self.decided_at = _now
+        self.decision_note = note
+        log.info("approval.rejected", approval_id=str(self.id), run_id=str(self.run_id))
+
+    def check_expired(self, now: datetime | None = None) -> bool:
+        """Muddatni tekshiradi va agar tugagan bo'lsa statusni yangilaydi.
+
+        Returns:
+            True agar tugagan bo'lsa
+        """
+        if self.status == ApprovalStatus.PENDING and self.is_expired(now):
+            self.status = ApprovalStatus.EXPIRED
+            log.warning(
+                "approval.expired",
+                approval_id=str(self.id),
+                run_id=str(self.run_id),
+            )
+            return True
+        return False
+
+
+class ApprovalService:
+    """Tasdiq so'rovlarini boshqarish.
+
+    In-memory store — Bo'lim 1 uchun yetarli.
+    Z1.11 (Executor) shu orqali tasdiq so'raydi.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_minutes: int = 30,
+        session_factory: "async_sessionmaker[AsyncSession] | None" = None,
+    ) -> None:
+        self._ttl_minutes = ttl_minutes
+        self._requests: dict[uuid.UUID, ApprovalRequest] = {}
+        self._by_run: dict[uuid.UUID, list[uuid.UUID]] = {}
+        self._by_mission: dict[uuid.UUID, list[uuid.UUID]] = {}
+        # AR-01: None bo'lsa persist no-op; berilsa DB write-through.
+        self._session_factory = session_factory
+
+    def _persist(self, req: ApprovalRequest) -> None:
+        """Approval'ni DB'ga yozib qo'yadi — fail-open, background task.
+
+        Sync interfeys API bilan mos (request_approval/approve/reject
+        sync); async persist background task sifatida rejalashtiriladi.
+        Event loop bo'lmasa (test) — silent skip.
+
+        DIQQAT (A1 audit, real Postgres'da topilgan race): bu fire-and-
+        forget yo'l `request_approval()` chaqirilgan zahoti hali `run`
+        qatori DB'ga yozilmagan bo'lsa `ForeignKeyViolationError` xavfini
+        tug'diradi. Shu sabab `Orchestrator._run_plan()` bu background
+        yo'lga tayanmaydi — buning o'rniga `persist_pending()` ni
+        to'g'ridan-to'g'ri KUTADI (deterministik tartib). `_persist()`
+        faqat `approve()`/`reject()` uchun qoladi — ular chaqirilganda
+        run+approval allaqachon uzoq vaqtdan beri DB'da, race xavfi yo'q.
+        """
+        if self._session_factory is None:
+            return
+        from zet.core.run_checkpoint import persist_approval
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Event loop yo'q — sync context, background task
+            # yaratib bo'lmaydi. Test'lar bunday chaqirmaydi.
+            return
+        loop.create_task(persist_approval(self._session_factory, req))
+
+    async def persist_pending(self, req: ApprovalRequest) -> None:
+        """`req`ni DB'ga DETERMINISTIK yozadi — chaqiruvchi to'g'ridan-to'g'ri
+        kutadi (A1 audit fix).
+
+        `request_approval()` yaratgan so'rovni fire-and-forget'ga
+        tashlamasdan, aynan shu chaqiruv paytida yozib qo'yish kerak
+        bo'lgan joylar (masalan `Orchestrator._run_plan()`, run qatori
+        endigina yozilgan, keyingi qadam approval FK'siga bog'liq) uchun.
+        Fail-open — `session_factory=None` bo'lsa yoki DB xato bersa run
+        oqimi baribir davom etadi (persist_approval o'zi ichida yutadi).
+        """
+        if self._session_factory is None:
+            return
+        from zet.core.run_checkpoint import persist_approval
+
+        await persist_approval(self._session_factory, req)
+
+    def request_approval(
+        self,
+        *,
+        run_id: uuid.UUID,
+        step_position: int | None = None,
+        reason: str,
+        requested_permission: PermissionLevel,
+        tool_name: str | None = None,
+        preview: dict[str, Any] | None = None,
+        now: datetime | None = None,
+        mission_id: uuid.UUID | None = None,
+        risk_level: RiskLevel | None = None,
+    ) -> ApprovalRequest:
+        """Yangi tasdiq so'rovi yaratadi.
+
+        Returns:
+            ApprovalRequest
+        """
+        req = ApprovalRequest(
+            run_id=run_id,
+            step_position=step_position,
+            reason=reason,
+            requested_permission=requested_permission,
+            tool_name=tool_name,
+            preview=preview,
+            ttl_minutes=self._ttl_minutes,
+            now=now,
+            mission_id=mission_id,
+            risk_level=risk_level,
+        )
+        self._requests[req.id] = req
+        self._by_run.setdefault(run_id, []).append(req.id)
+        if mission_id is not None:
+            self._by_mission.setdefault(mission_id, []).append(req.id)
+
+        log.info(
+            "approval.requested",
+            approval_id=str(req.id),
+            run_id=str(run_id),
+            permission=requested_permission.value,
+            tool=tool_name,
+        )
+        # AR-01: restart'da approval yo'qolmasin — LEKIN bu yerda avtomatik
+        # fire-and-forget YO'Q (A1 audit fix, KONSOLIDATSIYA v2). Sabab:
+        # `request_approval()`ni chaqirgan kod (masalan `Orchestrator.
+        # _run_plan()`) odatda `run` qatorini AYNAN shu payt yozib
+        # bo'lgan — agar bu yerda ham fon vazifasi ishga tushirilsa, u
+        # chaqiruvchining o'z ochiq `persist_pending()` chaqiruvi bilan
+        # BIR XIL `id`ga INSERT urinib, `UNIQUE constraint failed`
+        # (yoki Postgres'da shunga mos xato) berardi — ikkalasi ham
+        # "existing yo'q" deb topib, ikkalasi ham INSERT qilishga
+        # urinardi. Chaqiruvchi durability kerak bo'lsa `persist_pending()`
+        # ni ochiq kutishi kerak (`Orchestrator` shunday qiladi).
+        # `approve()`/`reject()` esa hali ham o'z fon vazifasini saqlaydi
+        # — ular chaqirilganda approval allaqachon uzoq vaqtdan beri
+        # DB'da (yoki umuman yo'q — mission-level holatda), race xavfi yo'q.
+        return req
+
+    def get(self, approval_id: uuid.UUID) -> ApprovalRequest:
+        """Tasdiq so'rovini topadi.
+
+        Raises:
+            KeyError: topilmadi
+        """
+        return self._requests[approval_id]
+
+    def pending_for_run(self, run_id: uuid.UUID) -> list[ApprovalRequest]:
+        """Run uchun kutilayotgan tasdiqlar."""
+        ids = self._by_run.get(run_id, [])
+        return [
+            self._requests[aid]
+            for aid in ids
+            if self._requests[aid].status == ApprovalStatus.PENDING
+        ]
+
+    def pending_for_mission(self, mission_id: uuid.UUID) -> list[ApprovalRequest]:
+        """Mission uchun kutilayotgan tasdiqlar (Bo'lim 2, §2.2)."""
+        ids = self._by_mission.get(mission_id, [])
+        return [
+            self._requests[aid]
+            for aid in ids
+            if self._requests[aid].status == ApprovalStatus.PENDING
+        ]
+
+    def all_pending(self) -> list[ApprovalRequest]:
+        """Barcha kutilayotgan tasdiqlar (run bo'yicha filtrsiz).
+
+        `z approvals` CLI orqali "hozir nimalar tasdiq kutmoqda?" savoliga
+        javob berish uchun kerak — GAP_ANALYSIS BROKEN #1 yopishning bir
+        qismi. Cross-process approve/reject ish beradi, lekin ID'ni
+        boshqa joydan (Telegram bildirishnomasi, log) topish kerak edi;
+        endi CLI o'zi ro'yxatlab beradi.
+        """
+        return [r for r in self._requests.values() if r.status == ApprovalStatus.PENDING]
+
+    def approve(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalRequest:
+        """Tasdiqni qabul qilish.
+
+        Raises:
+            KeyError: topilmadi
+            ApprovalExpiredError: muddati tugagan
+            ApprovalError: holat PENDING emas
+        """
+        req = self._requests[approval_id]
+        req.approve(note=note, now=now)
+        # AR-01: decided_at yangilanishi DB'ga tushsin
+        self._persist(req)
+        return req
+
+    def reject(
+        self,
+        approval_id: uuid.UUID,
+        *,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalRequest:
+        """Tasdiqni rad etish.
+
+        Raises:
+            KeyError: topilmadi
+            ApprovalExpiredError: muddati tugagan
+            ApprovalError: holat PENDING emas
+        """
+        req = self._requests[approval_id]
+        req.reject(note=note, now=now)
+        # AR-01: rad etilgan holat DB'ga tushsin
+        self._persist(req)
+        return req
+
+    def expire_all_pending(self, now: datetime | None = None) -> list[ApprovalRequest]:
+        """Muddati tugagan barcha so'rovlarni EXPIRED ga o'tkazadi.
+
+        Returns:
+            Muddati tugagan so'rovlar ro'yxati
+        """
+        expired: list[ApprovalRequest] = []
+        for req in self._requests.values():
+            if req.check_expired(now):
+                expired.append(req)
+        return expired

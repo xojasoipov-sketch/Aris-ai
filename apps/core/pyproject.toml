@@ -1,0 +1,190 @@
+[project]
+name = "zet"
+version = "0.1.0"
+description = "ZET — shaxsiy AI operatsion tizim (yadro)"
+requires-python = ">=3.12"
+# Proprietary — to'liq matn repo ildizidagi LICENSE faylida.
+# Yo'l bilan ko'rsatilmaydi: build konteksti apps/core bo'lganda
+# (Docker/Railway) ../../LICENSE mavjud bo'lmaydi va build yiqiladi.
+license = "LicenseRef-Proprietary"
+
+dependencies = [
+    # Web / API
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    # Konfiguratsiya va domen
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # Ma'lumotlar bazasi
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3.6",
+    # Navbat / kesh
+    "redis>=5.2",
+    # LLM provayderlar (ADR-0006: 4 tier)
+    "anthropic>=0.40",
+    "openai>=1.57",
+    "httpx>=0.28",
+    # Tool validatsiya
+    "jsonschema>=4.23",
+    # Tizim o'lchovlari — `/system` endpoint'i uchun.
+    # Bungacha terminal sahifasi CPU/RAM/GPU foizlarini QOTIRILGAN
+    # matndan ko'rsatardi ("CPU: 24% · RAM: 41%"), ya'ni ega hech
+    # qachon o'lchanmagan sonni haqiqiy deb o'qirdi.
+    "psutil>=6.0",
+    # Yordamchi
+    "structlog>=24.4",
+    "tenacity>=9.0",
+    "typer>=0.15",
+    "rich>=13.9",
+    "defusedxml>=0.7.1",
+    "python-multipart>=0.0.32",
+    # Lokal ovoz (STT/TTS) — ADR-0007 lokal birinchi. `torch` faqat CPU
+    # wheel'dan olinadi ([tool.uv.sources]/[tool.uv.index]ga qarang) —
+    # aks holda PyPI'ning standart Linux wheel'i CUDA'ni ham tortadi va
+    # image hajmini keraksiz ~1-2GB shishiradi (Railway'da GPU yo'q).
+    "faster-whisper>=1.0",
+    "transformers>=4.40",
+    "torch>=2.2",
+    "av>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx2>=2.10",
+    "respx>=0.22",
+    "freezegun>=1.5",
+    "aiosqlite>=0.20",
+]
+
+[project.scripts]
+z = "zet.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# ── uv: torch faqat CPU wheel'dan (Railway'da GPU yo'q) ──────────────
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zet"]
+
+# ── Ruff ───────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "C4",        # comprehensions
+    "SIM",       # simplify
+    "TID",       # tidy-imports
+    "RUF",       # ruff
+    "ASYNC",     # async xatolari
+    "S",         # bandit (xavfsizlik)
+    "DTZ",       # naive datetime taqiqi
+    "PTH",       # pathlib
+    "RET",       # return
+    "ARG",       # ishlatilmagan argument
+]
+ignore = [
+    "E501",    # satr uzunligi — formatter hal qiladi
+    "B008",    # FastAPI Depends() default'da ishlatiladi
+]
+
+[tool.ruff.lint.per-file-ignores]
+# S101 assert · S105/S106 testdagi soxta sirlar · ARG fixture argumentlari
+"tests/**" = ["S101", "S105", "S106", "ARG001", "ARG002"]
+# RUF001: o'zbekcha (gʻ, oʻ) va kirill nomlar shu testlarning MAQSADI —
+# vault Unicode fayl nomlarini qabul qilishini tekshiradi (Obsidian kabi)
+"tests/test_vault.py" = ["S101", "S105", "S106", "ARG001", "ARG002", "RUF001", "RUF002"]
+# RUF001/002/003: transliteratsiya testlari kirill kutilgan natijalarni
+# ATAYLAB o'z ichiga oladi (modul docstring'idagi izohga qarang).
+"tests/test_transliterate.py" = ["RUF001", "RUF002", "RUF003"]
+"alembic/**" = ["ARG001", "N999"]
+# RUF001/002/003: bu modulning BUTUN vazifasi lotin↔kirill xaritalash —
+# kirill harflari docstring/kod/kommentariyda ATAYLAB, "aniqlik" emas
+# "chalkashtiruvchi belgi" (xuddi `test_vault.py`dagi kabi).
+"src/zet/voice/transliterate.py" = ["RUF001", "RUF002", "RUF003"]
+# RUF001/002: kirill→lotin xaritalash va uning testi — kirill harflari
+# ATAYLAB (transliterate.py bilan bir xil sabab).
+"src/zet/voice/text_normalize.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_text_normalize.py" = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# ── mypy (strict) ──────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+show_error_codes = true
+pretty = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["pgvector.*", "alembic.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Lokal ovoz (STT/TTS) — faster-whisper/transformers/torch/av'da to'liq
+# stub yo'q (yoki juda keng/noaniq). Import `voice/whisper_stt.py` va
+# `voice/mms_tts.py` ICHIDA, funksiya darajasida — chaqiruvchi kod
+# (`api/deps.py`) bu modullarni faqat Protocol interfeyslar orqali
+# ko'radi, shuning uchun bu ignore ISH MANTIG'iga ta'sir qilmaydi.
+module = ["faster_whisper.*", "transformers.*", "torch.*", "av.*"]
+ignore_missing_imports = true
+
+# ── pytest ─────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "integration: haqiqiy Postgres/Redis talab qiladi",
+    "live: haqiqiy LLM API chaqiradi (pul sarflaydi) — default o'chirilgan",
+    "no_auto_auth: TestClient'ga avtomatik Authorization header QO'SHILMAYDI (auth testlari)",
+]
+filterwarnings = ["error"]
+
+# ── coverage ───────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["src/zet"]
+branch = true
+omit = ["*/alembic/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
+
+[dependency-groups]
+dev = [
+    "types-defusedxml>=0.7.0.20260504",
+    "types-pyyaml>=6.0.12.20260724",
+]

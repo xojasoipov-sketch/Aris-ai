@@ -1,0 +1,167 @@
+# ZET — Hetzner (yoki istalgan Docker VPS) uchun produksiya compose.
+#
+# `infra/docker-compose.yml`dan farqi: bu yerda Postgres/Redis TASHQI
+# portga ochilmaydi (faqat ichki tarmoq), Ollama va ZET backend/web
+# ham shu tarmoqda, Caddy esa 80/443'ni ochib ikkalasiga reverse-proxy
+# qiladi va domen berilsa avtomatik Let's Encrypt TLS oladi.
+#
+# Ishga tushirish: infra/hetzner/README.md ga qarang.
+
+name: zet-prod
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: zet-postgres
+    environment:
+      POSTGRES_USER: zet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env'da kerak}
+      POSTGRES_DB: zet
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zet -d zet"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks: [zet]
+
+  redis:
+    image: redis:7-alpine
+    container_name: zet-redis
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [zet]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: zet-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks: [zet]
+    # GPU bo'lmasa ham CPU'da ishlaydi (sekinroq). Hetzner GPU
+    # serverida `deploy.resources.reservations.devices` qo'shiladi —
+    # standart CPU VPS uchun shart emas.
+
+  backend:
+    build:
+      context: ../../apps/core
+      dockerfile: Dockerfile
+    container_name: zet-backend
+    env_file: .env
+    environment:
+      # Konteynerlar orasi — DNS nomi bilan, `localhost` EMAS.
+      ZET_DATABASE_URL: postgresql+asyncpg://zet:${POSTGRES_PASSWORD}@postgres:5432/zet
+      ZET_REDIS_URL: redis://redis:6379/0
+      ZET_OLLAMA_BASE_URL: http://ollama:11434
+      ZET_ENV: prod
+    volumes:
+      # Obsidian vault — nomlangan volume, konteyner qayta qurilganda
+      # (har `update.sh`) YO'QOLMASIN. `.env`dagi `ZET_VAULT_DIR` shu
+      # yo'lga (`/data/vault`) mos kelishi shart — boshqa yo'lga
+      # o'zgartirsangiz, bu qatordagi mount nuqtasini ham yangilang.
+      - vault_data:/data/vault
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [zet]
+    # Alembic migratsiyasi konteyner ichida ishga tushishidan oldin —
+    # `command` orqali override qilinadi (Railway'dagi
+    # `preDeployCommand` o'rniga, chunki compose'da alohida qadam yo'q).
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn zet.main:app --host 0.0.0.0 --port 8000"
+
+  web:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+    container_name: zet-web
+    env_file: .env.web
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks: [zet]
+
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    container_name: zet-backup
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env'da kerak}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      # Host'dagi /var/backups/zet — konteyner tushib qolsa ham
+      # nusxalar host FS'ida qoladi. `update.sh` katalogni yaratadi.
+      - /var/backups/zet:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [zet]
+
+  vault-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile.vault-sync
+    container_name: zet-vault-sync
+    environment:
+      ZET_VAULT_GIT_REMOTE: ${ZET_VAULT_GIT_REMOTE:-}
+      ZET_VAULT_GIT_BRANCH: ${ZET_VAULT_GIT_BRANCH:-main}
+    volumes:
+      # Backend'dagi bilan AYNAN bir xil volume/yo'l — ikkalasi ham
+      # /data/vault'ni ko'radi.
+      - vault_data:/data/vault
+    restart: unless-stopped
+    networks: [zet]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: zet-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      # 8000 — faqat domensiz (ZET_DOMAIN bo'sh) rejimda Caddy shu
+      # yerda tinglaydi (Caddyfile.no-domain). Domen bilan ishlatilsa
+      # bu port bo'sh qoladi, zarar yo'q.
+      - "8000:8000"
+    volumes:
+      # `Caddyfile.active` — `setup.sh` tomonidan yaratiladi (domen
+      # bor/yo'qligiga qarab `Caddyfile` yoki `Caddyfile.no-domain`dan
+      # nusxa). Repo'da kuzatilmaydi (.gitignore) — shu bilan har
+      # serverning o'ziga xos holati tracked fayllarga aralashmaydi.
+      - ./Caddyfile.active:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - web
+    restart: unless-stopped
+    networks: [zet]
+
+networks:
+  zet:
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  caddy_data:
+  caddy_config:
+  vault_data:

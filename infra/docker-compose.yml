@@ -1,0 +1,43 @@
+name: zet
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: zet-postgres
+    environment:
+      POSTGRES_USER: zet
+      POSTGRES_PASSWORD: zet
+      POSTGRES_DB: zet
+      # Lokal dev; prod'da ADR-0007 bo'yicha egasining mashinasida, tarmoqqa ochilmaydi
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zet -d zet"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: zet-redis
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
