@@ -65,3 +65,6 @@ infra/hetzner/Caddyfile.active
 .DS_Store
 Thumbs.db
 *.swp
+
+# scripts/start-local.sh runtime loglari — sirlar bo'lmasa ham, source emas
+.local-logs/
